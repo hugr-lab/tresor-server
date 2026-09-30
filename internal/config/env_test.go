@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // setenv sets the environment for one test (t.Setenv restores it) and clears every other TRESOR_ variable.
@@ -238,5 +239,15 @@ func TestValidationQuotesNoValue(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), "hunter2") {
 			t.Errorf("%v: %v", env, err)
 		}
+	}
+}
+
+// durations from the environment
+func TestEnvDurations(t *testing.T) {
+	setenv(t, "TRESOR_STATE__KIND=sqlite", "TRESOR_STATE__PATH=/data/t.db", "TRESOR_KEYS__KIND=local",
+		"TRESOR_KEYS__KEY_ENV=TRESOR_TEST_KEK", "TRESOR_KEYS__CACHE_TTL=90s")
+	cfg, _, err := loadEnv(good)
+	if err != nil || cfg.Keys.CacheTTL != 90*time.Second || cfg.State.Path != "/data/t.db" {
+		t.Fatalf("%v %+v", err, cfg)
 	}
 }

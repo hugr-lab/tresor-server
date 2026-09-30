@@ -42,14 +42,21 @@ var (
 	ErrConflict = errors.New("the secret changed concurrently")
 	// ErrVersion: fn returned a secret whose version does not move on from the current one.
 	ErrVersion = errors.New("a write must move the version on")
+	// ErrUnavailable: this replica may not use the store now (SQLite: another replica holds the lease).
+	ErrUnavailable = errors.New("the store is held by another replica")
 )
 
 // Store keeps the secrets. Implementations are safe for concurrent use, across replicas where the store
 // allows several.
 type Store interface {
-	// List returns every secret, sorted by name.
+	// List returns every secret, sorted by name, without its params: a list opens no material (spec 002),
+	// so one value that does not open never fails a whole list.
 	List(ctx context.Context) ([]*Secret, error)
-	// Get returns one secret, or ErrNotFound.
+	// Describe returns one secret without its params, or ErrNotFound: what a descriptor or a permission
+	// needs opens no material.
+	Describe(ctx context.Context, name string) (*Secret, error)
+	// Get returns one secret with its params, or ErrNotFound. Params that do not open are an error, never
+	// an empty value (keys.ErrSealed).
 	Get(ctx context.Context, name string) (*Secret, error)
 	// Update is the one write path. fn gets a copy of the current secret (nil when absent) and returns the
 	// next one (nil: delete; ErrNotFound when there is nothing to delete) or an error that aborts the

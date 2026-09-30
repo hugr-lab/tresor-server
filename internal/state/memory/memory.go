@@ -24,7 +24,9 @@ func (s *Store) List(context.Context) ([]*state.Secret, error) {
 	defer s.mu.Unlock()
 	out := make([]*state.Secret, 0, len(s.secrets))
 	for _, sec := range s.secrets {
-		out = append(out, state.Clone(sec))
+		listed := state.Clone(sec)
+		listed.Params = nil // a list carries no material (state.Store)
+		out = append(out, listed)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -38,6 +40,15 @@ func (s *Store) Get(_ context.Context, name string) (*state.Secret, error) {
 		return nil, state.ErrNotFound
 	}
 	return state.Clone(sec), nil
+}
+
+func (s *Store) Describe(ctx context.Context, name string) (*state.Secret, error) {
+	sec, err := s.Get(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	sec.Params = nil
+	return sec, nil
 }
 
 func (s *Store) Update(ctx context.Context, name string,

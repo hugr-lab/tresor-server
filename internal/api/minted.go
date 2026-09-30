@@ -194,8 +194,13 @@ func (s *Server) mintAtGrant(ctx context.Context, gr *grant, subject string, act
 		return // minted lazily from the subject token, while it lives
 	}
 	targets := map[string][2]string{}
-	for _, sec := range secrets {
-		if isMinted(sec) && usable(sec, actor.Principals) {
+	for _, listed := range secrets {
+		if isMinted(listed) && usable(listed, actor.Principals) {
+			sec, err := s.store.Get(ctx, listed.Name) // a list carries no params: the audience is in them
+			if err != nil {
+				s.log.Error("store read failed", "secret", listed.Name, "error", err.Error())
+				continue // minted lazily, or refused at the read with the reason
+			}
 			audience, scope := mintTarget(sec.Params)
 			targets[mintKey(audience, scope)] = [2]string{audience, scope}
 		}

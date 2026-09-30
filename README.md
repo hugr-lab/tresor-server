@@ -28,12 +28,20 @@ TRESOR_LISTEN=127.0.0.1:8443 TRESOR_STATE__KIND=memory ... ./tresor-server   # o
 Every setting can come from the environment, over the file: `TRESOR_CONFIG` (a whole YAML document) or
 `TRESOR_<PATH>` per setting, `__` between levels, the value read as YAML (`TRESOR_POLICY__ADMINS=[role:admins]`).
 
-- `/healthz`: the process is up. `/readyz`: the state store and every issuer answer.
+- State: `memory`, or `sqlite` (one replica), its params sealed under a KEK (AES-256-GCM, data keys wrapped by
+  the KEK):
+
+  ```yaml
+  state: {kind: sqlite, path: /data/tresor.db}
+  keys: {kind: local, key_env: TRESOR_KEK}      # 32 bytes, base64: openssl rand -base64 32
+  ```
+
+- `/healthz`: the process is up. `/readyz`: the state store, the KEK and every issuer answer.
 - tresor's conformance suite runs against this service through tresor's `scripts/ci/test_keycloak.sh`:
 
   ```bash
   scripts/ci/tresor_checkout.sh ../tresor-pin --submodules   # tresor at the pinned commit; build it (make)
-  scripts/ci/conformance.sh ../tresor-pin memory             # needs docker: Keycloak
+  scripts/ci/conformance.sh ../tresor-pin sqlite             # memory | sqlite; needs docker: Keycloak
   ```
 
   Any tresor checkout at the pinned commit with its `build/release` works.
