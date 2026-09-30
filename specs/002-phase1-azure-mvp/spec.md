@@ -355,9 +355,16 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
 - **`go`**: `go vet`, `go test ./...`, `govulncheck`. PostgreSQL and SQL Server as service
   containers, so the StateStore suite runs on all four stores.
 - **`conformance`**: tresor's suite against this service.
-  - **In tresor, first** (tresor PR #22, not a protocol change): `scripts/ci/test_keycloak.sh`
-    takes `TRESOR_SERVER_CMD` instead of building `ref-server`. One script for both servers.
-    - The command starts the server in the foreground (`exec`).
+  - **In tresor** (tresor PR #22, merged as `1a043ad`; not a protocol change):
+    `scripts/ci/test_keycloak.sh` takes `TRESOR_SERVER_CMD` instead of building `ref-server`. One
+    script for both servers. Its header is the contract; in short:
+    - The command is one simple command that is the server (`exec`): a built binary, no `&&`, no
+      `VAR=value` prefix (exported before the script), no `go run` or `docker run`.
+    - `TRESOR_SERVER_WAIT` (seconds, default 10) is raised for the database stores: migrations and
+      the first connection come before the discovery answers.
+    - The service matches tresor's test `server.yaml`: plain http on `127.0.0.1`, the issuer, the
+      roles claim, the admins, the actor `client:acl-node`, the exchange client. Only the literal
+      `127.0.0.1:18480` and `127.0.0.1:18443` are rewritten, never `localhost:`.
     - Its environment: `TRESOR_TEST_SERVER_CONFIG` (the config on this run's ports), `KEYCLOAK_PORT`,
       `TRESOR_SERVER_PORT`, `TRESOR_EXCHANGE_SECRET`.
     - `TRESOR_SERVER_CONFIG` names our config template (`testdata/keycloak/server.yaml`, with a
@@ -369,12 +376,14 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
   - One job builds tresor's `build/release` (the `unittest` runner and the extension) and passes it
     to the others as an artifact. The build is cached by the pinned commit, so it is built once per
     pin. ccache helps when the pin moves.
-  - `TRESOR_COMMIT` is pinned once tresor PR #22 has merged.
+  - `TRESOR_COMMIT` = `1a043ad4cb361c3af9709ae847ae8bd696b82f82`.
   - A matrix over the state store: `memory`, `sqlite`, `postgres`, `sqlserver`; a local KEK.
   - It runs `test/sql/conformance/*` and tresor's `test/sql/reference_server/*`: the ported API must
     pass the reference server's own tests too.
-  - On `postgres`, two replicas of the service behind a round-robin proxy (a small Go proxy in
-    `scripts/ci`, started with them by one foreground command): a grant made on one is honoured by
+  - On `postgres`, two replicas of the service behind a round-robin proxy. The hook takes one
+    command that is the server, so a small built Go binary (`internal/ci/replicas`, not shipped) is
+    that command: it starts the two replicas, proxies to them, and stops them when it is stopped.
+    Their logs are passed through, so the acl part still finds its request lines. a grant made on one is honoured by
     the other. A Go test covers what that run cannot: a grant's minted token renewed on another
     replica after its subject token has expired.
   - The duckdb-acl part (`TRESOR_ACL_EXTENSION`) is not run here: it needs acl built too.
