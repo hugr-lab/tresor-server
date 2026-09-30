@@ -30,8 +30,9 @@ fixes the scope and the concrete choices of phase 1, so it can be built in small
 
 ### The code taken over
 
-- From tresor at **6133d0d** (main after PR #21): `server/internal/{api,auth,config,mint,testidp}`
-  and `cmd/ref-server`, with their tests.
+- From tresor at **6133d0d** (main after PR #21): `server/internal/{api,auth,config,mint,store,testidp}`
+  and `cmd/ref-server`, with their tests. The first commit builds and passes as it is; later commits
+  in the same PR replace `internal/store` by `internal/state`.
 - The commit says so: MIT, from `hugr-lab/tresor`, the same owner; the files keep a note of their
   origin.
 - Taken over as they are, then changed in later commits. The first diff against tresor stays small
@@ -73,8 +74,8 @@ type StateStore interface {
 	List(ctx context.Context) ([]*Secret, error)
 	Get(ctx context.Context, name string) (*Secret, error) // ErrNotFound
 	// Update is the one write path: fn gets the current secret (nil when absent) and returns the next
-	// one (nil: delete) or an error that aborts. The write is compare-and-set on the row's revision;
-	// on a conflict fn runs again on the fresh row, a bounded number of times, then ErrConflict.
+	// one (nil: delete) or an error that aborts. The write is compare-and-set on the version; on a
+	// conflict fn runs again on the fresh row, a bounded number of times, then ErrConflict.
 	Update(ctx context.Context, name string, fn func(current *Secret) (*Secret, error)) (*Secret, error)
 	Delegations() DelegationStore
 	DataKeys() DataKeyStore
@@ -84,14 +85,20 @@ type StateStore interface {
 ```
 
 - **Why `Update(fn)`**: it is the reference server's own write path. The API's checks (permissions,
-  `If-Match`) stay atomic with the write, with no change to the ported handlers.
-- **Revision and version are two numbers.**
-  - `version` is the protocol's (the ETag). A grant change does not move it.
-  - `revision` is the store's: every write moves it, and the compare-and-set is on it.
-  - `UPDATE … WHERE name = ? AND revision = ?`, then the rows affected. The same in all three
-    dialects; it is what makes several replicas safe.
-- **`Secret`** holds what the API needs: the descriptor fields, the grants, and the material.
-  In the store, the material is sealed (see *Envelope*); the API sees it open.
+  `If-Match`) stay atomic with the write.
+- **Compare-and-set on `version`**, the protocol's ETag. Every write moves it: the ported handlers
+  bump it on a put, a patch and a grant change alike.
+  - An update or a delete: `… WHERE name = ? AND version = ?`, then the rows affected.
+  - A create: `INSERT`; a unique violation is a conflict too (another replica created it first).
+  - The secret's row and its `grants` rows change in one transaction.
+  - The same in all three dialects; it is what makes several replicas safe.
+- **fn may run more than once.** The ported handlers capture state in their closures (`created`,
+  `refused`, `missing`). The port resets it at the top of each run, so a retry never answers from a
+  former one (a create that lost the race gives 412, not 201).
+- **`ErrConflict`** (still conflicting after the retries): `503 service_unavailable`.
+- **`Secret`** holds the descriptor fields, the grants, and the params **still sealed**. The API
+  opens the params only where it needs them: a fetch with `use`, and the minted secrets a grant's
+  exchange looks at. A list opens nothing, so one bad row never fails a whole list.
 - Every replica reads the store on each request. There is no cache of secrets, so a write on one
   replica is seen by the next request on any other.
 
@@ -102,22 +109,39 @@ grants move from the reference server's memory into the store.
 
 ```go
 type DelegationStore interface {
-	Put(ctx context.Context, d Delegation, max int) error    // ErrTooMany at max live grants
-	Get(ctx context.Context, idHash []byte) (Delegation, error) // ErrNotFound; an expired one too
+	Put(ctx context.Context, d Delegation, maxPerActor int) error // ErrTooMany
+	Count(ctx context.Context, actorOwner string) (int, error)    // the pre-check before minting
+	Get(ctx context.Context, idHash []byte) (Delegation, error)   // ErrNotFound; an expired one too
 	Delete(ctx context.Context, idHash []byte) error
-	DeleteWhere(ctx context.Context, actor, subject string) (int, error) // DELETE /v1/delegations
+	DeleteWhere(ctx context.Context, actor, userOwner string) (int, error) // DELETE /v1/delegations
+	// the grant's minted tokens (tresor specs/010), one row per audience and scope
+	Tokens(ctx context.Context, idHash []byte) ([]MintedToken, error)
+	PutToken(ctx context.Context, idHash []byte, t MintedToken) error // compare-and-set on its version
 	Purge(ctx context.Context, now time.Time) (int, error)
 }
 ```
 
 - **The id is never stored.** A row is keyed by SHA-256 of the grant id. A leaked table does not
   give usable grants.
-- **A row holds**: the actor (owner, client, issuer), the user (the verified caller, as JSON), the
-  expiry, and the user's **subject token, sealed** (see *Envelope*; the AAD is the id hash).
-- **Minted tokens** (tresor specs/010) stay a per-replica cache, as today. A replica that has none
-  mints them lazily from the sealed subject token, while it lives.
-- Rows are written once and deleted: no update, so no compare-and-set is needed.
-- Expired rows are purged in the background; a read never returns one.
+- **A grant row holds**: the actor (owner, client, issuer), the user's owner (for revocation by
+  subject), the user (the verified caller, as JSON), the expiry, and the user's subject token.
+- **The subject token** is a bearer token for this service. So:
+  - it is stored only when the actor may `use` minted secrets (otherwise it is not needed);
+  - sealed (see *Envelope*), with its own expiry; never unsealed after it.
+- **Minted tokens move into the store too.** A grant lives up to 8 hours; its subject token lives
+  minutes to an hour. After that, only the refresh tokens minted at the exchange can renew. With
+  several replicas, every replica must see them.
+  - One row per grant, audience and scope: the access token and the refresh token, sealed, their
+    expiries, a version.
+  - A renewal is compare-and-set on that version: refresh tokens rotate, and a replica that loses
+    the race takes the winner's tokens instead of spending a refresh token twice.
+  - Each replica keeps a short cache of access tokens, keyed by the id hash. A grant the store no
+    longer has (revoked, expired) drops its cache entries.
+- **The limit** is per actor (`maxPerActor`, default 10000), not global: one actor cannot use up
+  every other's. `Put` counts and inserts under a lock: the transaction on SQLite, an advisory lock
+  on PostgreSQL, `sp_getapplock` on SQL Server.
+- Grant rows are written once and deleted. Expired rows and their tokens are purged in the
+  background; a read never returns one.
 
 ### SQL: three dialects
 
@@ -133,10 +157,12 @@ The schema (migration `0001`, one SQL file per dialect, applied in `schema_migra
 
 | Table | Columns |
 | --- | --- |
-| `secrets` | name (PK), type, provider, scope (JSON text), redact_keys (JSON text), comment, owner, version, revision, created_at, updated_at, data_key_id, sealed |
+| `secrets` | name (PK), row_id (random, per create), type, provider, scope (JSON text), redact_keys (JSON text), comment, owner, version, created_at, updated_at, data_key_id, sealed |
 | `grants` | secret (FK, cascade), id, principal, verbs (JSON text); PK (secret, id) |
-| `delegations` | id_hash (PK), actor_owner, actor_client, actor_issuer, user_json, expires_at, data_key_id, sealed_subject |
+| `delegations` | id_hash (PK), actor_owner, actor_client, actor_issuer, user_owner, user_json, expires_at, subject_expires_at, data_key_id, sealed_subject; indexes on (actor_owner, expires_at), (user_owner) |
+| `delegation_tokens` | id_hash (FK, cascade), mint_key (audience and scope), version, expires_at, data_key_id, sealed; PK (id_hash, mint_key) |
 | `data_keys` | id (PK), kek_id, wrapped, created_at, retired_at |
+| `active_data_key` | one row: data_key_id, version (compare-and-set) |
 | `lease` | SQLite only: one row, holder, expires_at |
 
 - **Migrations**: at start, under a lock (SQLite: the transaction; PostgreSQL: an advisory lock;
@@ -148,7 +174,9 @@ The schema (migration `0001`, one SQL file per dialect, applied in `schema_migra
 - one replica: development, a laptop, a VM or docker compose;
 - WAL, `foreign_keys=ON`, `busy_timeout`;
 - **one writer**: at start the service takes the `lease` row (holder, expiry) and renews it. While
-  another holder's lease is fresh, it waits, and `/readyz` says not ready.
+  another holder's lease is fresh, it waits: it serves no request, and `/readyz` says not ready.
+  - This changes spec 001 ("refuses to start"): waiting lets a new revision start next to the old one
+    and take over when it stops, with no restart loop.
 
 **PostgreSQL** (`pgx`, through `database/sql`):
 - several replicas;
@@ -173,36 +201,43 @@ Entra on Azure.
 
 - `internal/state/statetest.Run(t, func() StateStore)`: one suite, every store.
 - It covers: create, get, list order, update, delete, `ErrNotFound`, grants, delegations (expiry,
-  the limit, delete by actor and subject), data keys, reopening a store, and the revision
+  the limit, delete by actor and subject), data keys, reopening a store, and the version
   compare-and-set under concurrent writers - two store handles on one database, as two replicas are.
 - Run on `memory` and SQLite in process; on PostgreSQL and SQL Server in containers in CI
-  (`postgres:17`, `mcr.microsoft.com/mssql/server:2022-latest`; `azure-sql-edge` for arm64
-  developers). Locally, the database tests skip when no DSN is given.
+  (`postgres:17`, `mcr.microsoft.com/mssql/server:2022-latest`). Azure SQL Edge is retired: on an
+  arm64 laptop, SQL Server runs under emulation, or its tests run in CI only.
+- Locally, the database tests skip when no DSN is given.
 
 ### Envelope encryption
 
 - **What is sealed**:
   - a secret's `params` (literals and references alike), as one JSON document. AAD =
-    `tresor-server/params/1`, the secret's name and its version. A sealed row copied to another
-    name, or to another version, does not open. (Params change only with the version: a grant
-    change does not reseal them.)
-  - a delegation's subject token. AAD = `tresor-server/delegation/1` and the id hash.
+    `tresor-server/params/1`, the row's random id, the secret's name and its version. A sealed
+    value copied to another row, name or version does not open; nor does one from a dropped and
+    recreated secret of the same name. Every write reseals.
+  - a delegation's subject token: AAD = `tresor-server/delegation/1` and the id hash.
+  - a grant's minted tokens: AAD = `tresor-server/minted/1`, the id hash, the mint key and the version.
   - AES-256-GCM, a random 96-bit nonce.
 - **Data keys**:
   - one active data key; new writes use it;
   - it is wrapped by the KeyWrapper and kept in `data_keys` with the KEK's id (for Key Vault, the key's
     version);
   - a new data key is made when the KEK's version changes, or when the active one is older than
-    `keys.data_key_max_age` (default 30 days). Replicas that race to make one: the loser takes the
-    winner's (the insert is compare-and-set too);
+    `keys.data_key_max_age` (default 30 days);
+  - the active one is named in the `active_data_key` row, changed by compare-and-set on its version.
+    Replicas that race to make a new one: the loser drops its own and takes the winner's;
   - unwrapped data keys are cached in memory for `keys.cache_ttl` (default 5 minutes), never written
     or logged.
 - **KeyWrapper**:
   - `local`: a 32-byte key, base64, from a file or an environment variable. AES key wrap (RFC 3394).
     For development, tests and small installs.
-  - `azurekeyvault`: a key URL (with no version: wrap with the current one; unwrap with the version
-    recorded). `RSA-OAEP-256` for a Key Vault RSA key, `A256KW` on Managed HSM. The service's
-    identity needs `Key Vault Crypto User` on the key.
+  - `azurekeyvault`: a key URL, in a Key Vault or a Managed HSM (with no version: wrap with the
+    current one; unwrap with the version recorded).
+    - The algorithm follows the key's type: `RSA-OAEP-256` for an RSA key (either service);
+      `A256KW` for an AES key (Managed HSM only).
+    - Key Vault with the RBAC permission model: the service's identity needs
+      `Key Vault Crypto Service Encryption User` on the key (get, wrap, unwrap; nothing more).
+    - Managed HSM: its local RBAC, `Managed HSM Crypto Service Encryption User` on the key.
 - **Rotation**: a new KEK version gives a new data key for new writes. Old data keys are rewrapped
   under the new version by `tresor-server rewrap` (a command of the binary). Material is never
   re-encrypted for it.
@@ -213,6 +248,10 @@ Entra on Azure.
 - **Syntax**: a VARCHAR parameter whose whole value is `ref+azkv://<vault>/<secret>[/<version>]`.
   - `<vault>` is the vault's name: `https://<vault>.vault.azure.net` (another cloud's suffix from
     the config).
+  - Strict: vault and secret names `[0-9A-Za-z-]`, a version 32 hex digits. No escapes, no `%`, no
+    other path segment, no query. The URL to Key Vault is built from the parsed parts, never from
+    the text.
+  - Key Vault names are case-insensitive: vaults and prefixes are compared without case.
   - No version: the current one, read at each fetch. A rotation in the vault reaches DuckDB at its
     next fetch.
 - **Allowlist** (`material.azkv.allow`): vaults, each with secret-name prefixes. Nothing else is
@@ -220,6 +259,9 @@ Entra on Azure.
 - **At write** (`PUT`), for every parameter that starts with `ref+`:
   - an unknown scheme, a malformed reference, or one outside the allowlist: `422 invalid_secret`.
     Never stored as a literal.
+  - a reference in a value that is not VARCHAR, or in a `token_exchange` secret: `422`.
+  - a parameter holding a reference is added to `redact_keys`, if the caller left it out: the
+    resolved value must never show in `duckdb_secrets()`.
   - the write is an administrator's anyway (tresor specs/009); the check does not depend on it.
   - the reference is not resolved at write: a secret may be written before its vault value exists.
 - **At fetch** (`GET /v1/secrets/{name}` with `use`):
@@ -256,6 +298,8 @@ material:
       - vault: corp-vault
         prefixes: [duckdb-, lake-]
     cache_ttl: 0s
+tls:
+  offload: true                  # TLS ends at the platform's ingress (Container Apps); see below
 azure:
   identity: managed              # managed | default (DefaultAzureCredential: az CLI for development)
   client_id: ""                  # a user-assigned managed identity
@@ -264,6 +308,12 @@ azure:
 - `state.kind: memory` needs no `keys:`; every other kind refuses to start without it.
 - A DSN never carries a password: one there is refused. The password comes from `auth`.
 - A `store:` section (the reference server's) is refused with a word on `state:`.
+- **`tls.offload`**: the reference server refuses plain http on a non-loopback address. Container
+  Apps ends TLS at its ingress and forwards plain http to the container. With `offload: true`:
+  - the service listens with plain http on any address;
+  - `public_url` must be `https`;
+  - the README says the port must be reachable only through the ingress (Container Apps: no
+    external port but the ingress's).
 
 ### Health
 
@@ -271,7 +321,9 @@ azure:
 - `GET /readyz`: 200 only when all of these answer:
   - the state store (`Ping`); on SQLite, this replica holds the lease;
   - the KEK: a wrap and an unwrap of a test key;
-  - every issuer's JWKS.
+  - every issuer's JWKS, **once**: at start, until each has been fetched. After that an issuer's
+    outage is reported in the answer but does not make the replica unready (keys it has cached keep
+    working). Otherwise one IdP's outage would take every replica out. (A change to spec 001.)
 - Checks run in the background every 30 s, so a probe never calls Key Vault itself. The answer names
   the failing check, never a value.
 - Neither route needs a token. Both are outside the protocol's `/v1`.
@@ -288,7 +340,7 @@ azure:
 Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter picks the database:
 `postgres` (Azure Database for PostgreSQL Flexible Server) or `sqlserver` (Azure SQL Database).
 - A user-assigned managed identity:
-  - `Key Vault Crypto User` on the KEK;
+  - `Key Vault Crypto Service Encryption User` on the KEK (the vault on the RBAC permission model);
   - `Key Vault Secrets User` on each vault in the allowlist;
   - the database's Entra administrator makes it a database user (a one-time step, in the README and
     a script: Bicep cannot create database users).
@@ -303,18 +355,28 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
 - **`go`**: `go vet`, `go test ./...`, `govulncheck`. PostgreSQL and SQL Server as service
   containers, so the StateStore suite runs on all four stores.
 - **`conformance`**: tresor's suite against this service.
-  - **In tresor, first** (a small tresor PR, not a protocol change): `scripts/ci/test_keycloak.sh`
-    takes `TRESOR_SERVER_CMD` (a built server and its config) instead of building `ref-server`.
-    One script for both servers.
+  - **In tresor, first** (tresor PR #22, not a protocol change): `scripts/ci/test_keycloak.sh`
+    takes `TRESOR_SERVER_CMD` instead of building `ref-server`. One script for both servers.
+    - The command starts the server in the foreground (`exec`).
+    - Its environment: `TRESOR_TEST_SERVER_CONFIG` (the config on this run's ports), `KEYCLOAK_PORT`,
+      `TRESOR_SERVER_PORT`, `TRESOR_EXCHANGE_SECRET`.
+    - `TRESOR_SERVER_CONFIG` names our config template (`testdata/keycloak/server.yaml`, with a
+      `state:` and `keys:` per store).
+    - The duckdb-acl part greps the server's log for the request lines (`method=… path=… status=…`,
+      slog text). The port keeps that log line as it is.
   - `scripts/ci/tresor_checkout.sh` here checks out tresor at a pinned commit (`TRESOR_COMMIT`),
     with its submodules, as tresor's `acl_checkout.sh` does for duckdb-acl.
-  - It builds tresor's `build/release` (the `unittest` runner and the extension). The build directory
-    is cached by the pinned commit, so it is built once per pin. ccache helps when the pin moves.
+  - One job builds tresor's `build/release` (the `unittest` runner and the extension) and passes it
+    to the others as an artifact. The build is cached by the pinned commit, so it is built once per
+    pin. ccache helps when the pin moves.
+  - `TRESOR_COMMIT` is pinned once tresor PR #22 has merged.
   - A matrix over the state store: `memory`, `sqlite`, `postgres`, `sqlserver`; a local KEK.
   - It runs `test/sql/conformance/*` and tresor's `test/sql/reference_server/*`: the ported API must
     pass the reference server's own tests too.
-  - On `postgres`, two replicas of the service behind a round-robin proxy: a grant made on one is
-    honoured by the other.
+  - On `postgres`, two replicas of the service behind a round-robin proxy (a small Go proxy in
+    `scripts/ci`, started with them by one foreground command): a grant made on one is honoured by
+    the other. A Go test covers what that run cannot: a grant's minted token renewed on another
+    replica after its subject token has expired.
   - The duckdb-acl part (`TRESOR_ACL_EXTENSION`) is not run here: it needs acl built too.
 - **`image`**: the Docker build on every PR; the push only from main and tags.
 
@@ -322,13 +384,13 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
 
 1. **(a) skeleton**: the module, the port from tresor, `state/memory`, `/healthz` `/readyz`, CI with
    conformance on memory (with the tresor hook).
-2. **(b) SQL and SQLite**: `sqlstore`, the dialect type, the migrations, the lease, delegations in
-   the store, the StateStore suite; conformance on SQLite.
+2. **(b) SQL and SQLite**: `sqlstore`, the dialect type, the migrations, the lease, delegations and
+   their minted tokens in the store, the StateStore suite; conformance on SQLite.
 3. **(c) the KEK and the envelope**: `keys`, `local`, `azurekeyvault`, data keys, `rewrap`.
 4. **(d) PostgreSQL and SQL Server**: the two dialects, Entra logins, the suite and conformance on
    both, two replicas in CI.
 5. **(e) references**: `material`, `azkv`, the allowlist.
-6. **(f) the container and Container Apps**: Dockerfile, image CI, the Bicep recipe; the live run.
+6. **(f) the container and Container Apps**: `tls.offload`, Dockerfile, image CI, the Bicep recipe; the live run.
 
 The docs site (Docusaurus, as tresor's `website/`) comes with or after (f).
 
@@ -344,12 +406,17 @@ The docs site (Docusaurus, as tresor's `website/`) comes with or after (f).
 - **Nothing sensitive in a log or an error**: no material, no token, no data key, no delegation id,
   no resolved value. Errors name the secret, the vault or the key, never a value. A driver's error
   is logged only after the DSN is stripped from it.
-- **Delegation grants at rest**: keyed by a hash, the subject token sealed. The store alone does not
-  give a usable grant or token.
+- **Delegation grants at rest**: keyed by a hash; the subject token and the minted tokens sealed.
+  The store alone does not give a usable grant or token.
+- **Revocation** reaches every replica at its next request: a grant is read from the store each
+  time, and a replica's token cache is dropped with it.
 - **References**: written only in a `PUT`, which only an administrator makes; checked against the
   allowlist at write and again at each resolution.
-- **Identity**: Key Vault and the database through a managed identity. The only static secrets are a
-  local KEK and a database password, for development and small installs.
+- **Identity**: Key Vault and the database through a managed identity. Static secrets:
+  - a local KEK and a database password, for development and small installs;
+  - the token-exchange client secret (`issuers[].exchange.client_secret_env`, tresor specs/010),
+    when minted secrets are used. Replacing it by a federated credential of the managed identity is
+    a follow-up.
 - **Replicas**: only on PostgreSQL and SQL Server. SQLite holds one replica by the lease row.
 - **Across versions**: the schema carries its migration number; a binary refuses a database newer
   than it knows. The sealed formats carry their version in the AAD.
@@ -373,7 +440,8 @@ The docs site (Docusaurus, as tresor's `website/`) comes with or after (f).
   share. A database from the start gives replicas and no file share.
 - **Delegations kept in memory.** Wrong with several replicas: a grant made on one replica would be
   unknown to the others.
-- **Minted tokens in the store.** Not needed: the sealed subject token lets any replica mint them.
+- **Minted tokens per replica only** (as the reference server). A grant would stop minting on the
+  other replicas once its subject token expired. Session affinity would hide it, not fix it.
 - **Sealing each parameter apart** (spec 001's wording). One sealed document per secret is simpler
   and hides which parameters there are. No property is lost.
 - **Resolving references at write.** It would copy material, or fail a write before the vault is
@@ -389,13 +457,16 @@ The docs site (Docusaurus, as tresor's `website/`) comes with or after (f).
 - **Container Apps runs on a database**: PostgreSQL and SQL Server both move into phase 1.
 - **The image registry**: `ghcr.io/hugr-lab/tresor-server`.
 
+- **The region** for live runs: `westeurope`.
+
 ## Open questions
 
-- The region for the live runs: `westeurope`, unless said otherwise.
+- None.
 
 ## Follow-ups
 
 - `internal/policy` out of `internal/api`.
 - OpenTelemetry traces and the audit (spec 001).
 - A database password as a `ref+azkv://` reference.
+- The token-exchange client as a federated credential of the managed identity: no client secret.
 - The Kubernetes phase (spec 001's phase 3), then AWS and GCP.
