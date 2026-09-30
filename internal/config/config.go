@@ -104,7 +104,29 @@ type ActorRule struct {
 	Verbs     []string `yaml:"verbs"`
 }
 
-var quoted = regexp.MustCompile("`[^`]*`")
+// typeError is one entry of a yaml.TypeError: its line, what was found and what was wanted - the value it
+// quotes in between is dropped (a secret put in the wrong place must not reach the log).
+var typeError = regexp.MustCompile(`(?s)^(line \d+): cannot unmarshal (\S+) .* into (\S+)$`)
+
+func decodeError(err error) error {
+	var te *yaml.TypeError
+	if !errors.As(err, &te) {
+		return redact(err)
+	}
+	out := make([]string, 0, len(te.Errors))
+	for _, e := range te.Errors {
+		switch m := typeError.FindStringSubmatch(e); {
+		case m != nil:
+			out = append(out, fmt.Sprintf("%s: a %s where a %s belongs", m[1], m[2], m[3]))
+		case strings.Contains(e, ": field ") && strings.Contains(e, " not found in type "):
+			out = append(out, e) // an unknown key: the key's name, which the file's author wrote
+		default:
+			line, _, _ := strings.Cut(e, ":")
+			out = append(out, line+": invalid")
+		}
+	}
+	return errors.New(strings.Join(out, "; "))
+}
 
 // Parse validates a YAML document; unknown keys are an error, not ignored.
 func Parse(data []byte) (*Config, error) {
@@ -112,8 +134,7 @@ func Parse(data []byte) (*Config, error) {
 	dec := yaml.NewDecoder(strings.NewReader(string(data)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
-		// a type error quotes the value (`...`): it may be a secret put in the wrong place
-		return nil, fmt.Errorf("config: %s", quoted.ReplaceAllString(err.Error(), "`…`"))
+		return nil, fmt.Errorf("config: %w", decodeError(err))
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
@@ -164,7 +185,7 @@ func (c *Config) validate() error {
 		return errors.New("state.kind is required: " + strings.Join(StateKinds, " | "))
 	}
 	if !slices.Contains(StateKinds, c.State.Kind) {
-		return fmt.Errorf("state.kind %q: %s expected", c.State.Kind, strings.Join(StateKinds, " | "))
+		return fmt.Errorf("state.kind is none of %s", strings.Join(StateKinds, " | ")) // the value unquoted: config values stay out of logs
 	}
 	if len(c.Issuers) == 0 {
 		return errors.New("at least one issuer is required")
@@ -201,6 +222,10 @@ func (c *Config) validate() error {
 		if ex := is.Exchange; ex != nil {
 			if ex.ClientID == "" || ex.ClientSecretEnv == "" {
 				return fmt.Errorf("issuer %q: exchange needs client_id and client_secret_env", is.Issuer)
+			}
+			if IsSettingVariable(ex.ClientSecretEnv) {
+				return fmt.Errorf("issuer %q: exchange.client_secret_env names %s, which is read as configuration - "+
+					"give the secret a variable of its own", is.Issuer, ex.ClientSecretEnv)
 			}
 			if ex.ClientSecret = os.Getenv(ex.ClientSecretEnv); ex.ClientSecret == "" {
 				return fmt.Errorf("issuer %q: exchange: the environment variable %s is empty", is.Issuer, ex.ClientSecretEnv)

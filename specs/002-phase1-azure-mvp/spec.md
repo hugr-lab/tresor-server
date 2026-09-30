@@ -327,22 +327,30 @@ variables, not a file. Every setting can be given there. The sources, in order, 
    - `TRESOR_LISTEN=0.0.0.0:8080`, `TRESOR_PUBLIC_URL=https://secrets.corp.example`
    - `TRESOR_STATE__KIND=postgres`, `TRESOR_STATE__DSN=host=… dbname=tresor`, `TRESOR_STATE__AUTH=entra`
    - `TRESOR_KEYS__KIND=azurekeyvault`, `TRESOR_KEYS__KEY=https://corp-kv.vault.azure.net/keys/tresor-kek`
-   - A value is read as YAML, so a list or a section fits in one variable:
+   - A text setting takes the value as it is (a URL with `#`, a DSN, `null`: all text).
+   - A list, a section or a number is read as YAML, so it fits in one variable:
      `TRESOR_POLICY__ADMINS=[role:secrets_admin]`,
      `TRESOR_ISSUERS=[{issuer: https://login.microsoftonline.com/<tenant>/v2.0, audience: api://tresor}]`.
-   - A variable replaces the whole value at its path (a list is not merged).
+   - A variable replaces the whole value at its path. A list is given whole: its items cannot be set
+     one by one (`TRESOR_ISSUERS__0__…` is an error).
+   - A section's variable comes before its keys' (`TRESOR_STATE`, then `TRESOR_STATE__KIND` over it).
 
 Rules:
 - The result is validated as a file is: unknown keys are errors.
-  - Only a variable named after a top-level setting is read as configuration (`TRESOR_LISTEN`,
+  - Only a variable named after a setting is read as configuration (`TRESOR_LISTEN`,
     `TRESOR_STATE__…`, …; `TRESOR_CONFIG`).
-  - `TRESOR_STATE__KNID` (a known section, an unknown key) is an error.
+  - A typo is an error, not ignored: a name with `__`, or a top-level setting's name and `_`, that
+    names no setting (`TRESOR_STATE__KNID`, `TRESOR_STATE_KIND`, `TRESOR_POLICIES__ADMINS`).
+  - Two variables for one setting (`TRESOR_STATE__KIND`, `TRESOR_state__kind`) are an error.
   - Other `TRESOR_` variables are left alone: the ones a setting names (`client_secret_env`,
     `key_env`), and tresor's test variables.
+  - A `*_env` setting may not name a variable that is read as configuration: its secret would be
+    configuration too.
 - **No secret in the configuration**, from a file or from the environment. Secrets stay where
   their settings name them (`client_secret_env`, `password_env`, `key_env`): a Kubernetes Secret or a
   Container Apps secret, as an environment variable of its own.
-- At start, the log names the settings that came from the environment, never their values.
+- At start, the log names the settings that came from the environment, never their values. A
+  configuration error quotes no value either: a secret put in the wrong place stays out of the log.
 - No `${VAR}` expansion inside the YAML: one way to use the environment, not two.
 
 ### Health
