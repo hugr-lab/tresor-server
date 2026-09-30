@@ -19,6 +19,8 @@ type Dialect struct {
 	Rebind func(query string) string
 	// Unique says whether err is a unique (or primary key) violation: another writer created the row first.
 	Unique func(err error) bool
+	// ForeignKey says whether err is a foreign key violation: the row it names is gone.
+	ForeignKey func(err error) bool
 	// SingleWriter: one replica only, held by the lease row (SQLite).
 	SingleWriter bool
 }
@@ -33,6 +35,10 @@ var SQLite = Dialect{
 			return false
 		}
 		return se.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || se.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
+	},
+	ForeignKey: func(err error) bool {
+		var se *sqlite.Error
+		return errors.As(err, &se) && se.Code() == sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY
 	},
 	SingleWriter: true,
 }

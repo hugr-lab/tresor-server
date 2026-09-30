@@ -37,13 +37,13 @@ var (
 
 // Server serves the protocol.
 type Server struct {
-	cfg      *config.Config
-	verifier *auth.Verifier
-	store    state.Store
-	log      *slog.Logger
-	now      func() time.Time
-	grants   grants
-	direct   directCache // tokens minted for callers reading directly (specs/010)
+	cfg       *config.Config
+	verifier  *auth.Verifier
+	store     state.Store
+	log       *slog.Logger
+	now       func() time.Time
+	direct    directCache
+	mintLocks mintLocks // one replica's renewals of a grant's token, per grant and audience // tokens minted for callers reading directly (specs/010)
 }
 
 // New wires a server; the verifier and the store are the caller's. It reads the store once, to report
@@ -186,6 +186,10 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 		if r.Header.Get("Delegation") != "" {
 			// a server acting for a user: its own token proved who it is, the grant says for whom
 			user, gr, err := s.delegated(r, caller)
+			if errors.Is(err, errGrantStore) {
+				problem(w, http.StatusServiceUnavailable, "service_unavailable", "the delegation grant could not be read")
+				return
+			}
 			if err != nil {
 				s.log.Warn("delegation refused", "actor", caller.Owner(), "reason", err.Error())
 				problem(w, http.StatusUnauthorized, "unauthenticated", "the delegation grant is not valid for this caller")

@@ -63,6 +63,23 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger) (state
 	return nil, nil, fmt.Errorf("state.kind %s is not built in", cfg.State.Kind)
 }
 
+// purgeGrants removes expired delegation grants, with their sealed tokens, every minute: nothing of a grant
+// stays at rest past its expiry.
+func purgeGrants(ctx context.Context, st state.Store, log *slog.Logger) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := st.Delegations().Purge(ctx, time.Now()); err != nil && !errors.Is(err, state.ErrUnavailable) {
+				log.Warn("expired delegation grants were not purged", "error", err.Error())
+			}
+		}
+	}
+}
+
 // keyWrapper is the configured KEK.
 func keyWrapper(cfg config.Keys) (keys.KeyWrapper, error) {
 	switch {
@@ -105,6 +122,7 @@ func run(configPath string, log *slog.Logger) error {
 	}
 	checker := health.New(log, readyInterval, checks...)
 	checker.Start(ctx)
+	go purgeGrants(ctx, st, log)
 
 	mux := http.NewServeMux()
 	checker.Register(mux) // outside the protocol's routes, and outside public_url's path
