@@ -1,9 +1,11 @@
 -- spec 002: secrets with their grants, and the data keys that seal their params (SQL Server, Azure SQL).
 -- Times are microseconds since the epoch, UTC. JSON is kept as text. Material is only ever sealed. A key or an
--- indexed text is NVARCHAR(450): an index key holds 900 bytes at most.
+-- indexed text is NVARCHAR(450): an index key holds 900 bytes at most. A compared text is COLLATE
+-- Latin1_General_100_BIN2: names are compared exactly (the protocol), not as the server's default collation
+-- would (case-insensitive).
 CREATE TABLE secrets (
-    name        NVARCHAR(450)  NOT NULL PRIMARY KEY,
-    row_id      NVARCHAR(64)   NOT NULL,
+    name        NVARCHAR(450)  COLLATE Latin1_General_100_BIN2 NOT NULL PRIMARY KEY,
+    row_id      NVARCHAR(64)   COLLATE Latin1_General_100_BIN2 NOT NULL,
     type        NVARCHAR(MAX)  NOT NULL,
     provider    NVARCHAR(MAX)  NOT NULL,
     scope       NVARCHAR(MAX)  NOT NULL,
@@ -13,13 +15,13 @@ CREATE TABLE secrets (
     version     BIGINT         NOT NULL,
     created_at  BIGINT         NOT NULL,
     updated_at  BIGINT         NOT NULL,
-    data_key_id NVARCHAR(64)   NOT NULL,
+    data_key_id NVARCHAR(64)   COLLATE Latin1_General_100_BIN2 NOT NULL,
     sealed      VARBINARY(MAX) NOT NULL
 );
 
 CREATE TABLE grants (
-    secret    NVARCHAR(450) NOT NULL REFERENCES secrets (name) ON DELETE CASCADE,
-    id        NVARCHAR(400) NOT NULL,
+    secret    NVARCHAR(450) COLLATE Latin1_General_100_BIN2 NOT NULL REFERENCES secrets (name) ON DELETE CASCADE,
+    id        NVARCHAR(400) COLLATE Latin1_General_100_BIN2 NOT NULL,
     position  BIGINT        NOT NULL,
     principal NVARCHAR(MAX) NOT NULL,
     verbs     NVARCHAR(MAX) NOT NULL,
@@ -27,7 +29,7 @@ CREATE TABLE grants (
 );
 
 CREATE TABLE data_keys (
-    id         NVARCHAR(64)   NOT NULL PRIMARY KEY,
+    id         NVARCHAR(64)   COLLATE Latin1_General_100_BIN2 NOT NULL PRIMARY KEY,
     kek_id     NVARCHAR(MAX)  NOT NULL,
     wrapped    VARBINARY(MAX) NOT NULL,
     created_at BIGINT         NOT NULL,
@@ -36,6 +38,6 @@ CREATE TABLE data_keys (
 
 CREATE TABLE active_data_key (
     id          BIGINT       NOT NULL PRIMARY KEY CHECK (id = 1),
-    data_key_id NVARCHAR(64) NOT NULL REFERENCES data_keys (id),
+    data_key_id NVARCHAR(64) COLLATE Latin1_General_100_BIN2 NOT NULL REFERENCES data_keys (id),
     version     BIGINT       NOT NULL
 );

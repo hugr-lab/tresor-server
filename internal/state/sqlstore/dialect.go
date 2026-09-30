@@ -84,10 +84,11 @@ var SQLServer = Dialect{
 	Rebind:     numbered("@p"),
 	Unique:     msNumber(2627, 2601, 2714), // a unique constraint, a unique index; an object that exists (the bootstrap)
 	ForeignKey: msNumber(547),
-	Retryable:  msNumber(1205), // a deadlock victim
+	Retryable:  msNumber(1205, 51205), // a deadlock victim; sp_getapplock's own (below)
 	Lock: func(ctx context.Context, tx *sql.Tx, key string) error {
 		_, err := tx.ExecContext(ctx, `DECLARE @r INT;
 			EXEC @r = sp_getapplock @Resource = @p1, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 30000;
+			IF @r = -3 THROW 51205, 'sp_getapplock: chosen as a deadlock victim', 1;
 			IF @r < 0 THROW 50000, 'sp_getapplock did not give the lock', 1;`, key)
 		return err
 	},

@@ -33,6 +33,16 @@ func tokenAAD(idHash, key string, version int64) []byte {
 }
 
 func (d delegations) Put(ctx context.Context, g state.Delegation, maxPerActor int) error {
+	var err error
+	for range maxAttempts {
+		if err = d.put(ctx, g, maxPerActor); err == nil || !d.s.d.Retryable(err) {
+			return err
+		}
+	}
+	return err // a deadlock victim, again and again
+}
+
+func (d delegations) put(ctx context.Context, g state.Delegation, maxPerActor int) error {
 	s := d.s
 	if err := s.ready(); err != nil {
 		return err
@@ -224,6 +234,9 @@ func (d delegations) PutToken(ctx context.Context, idHash []byte, t state.Minted
 	res, err := s.db.ExecContext(ctx, s.q(`UPDATE delegation_tokens SET version = ?, failed = ?, data_key_id = ?,
 		sealed = ? WHERE id_hash = ? AND mint_key = ? AND version = ?`), t.Version, t.Failed, keyID, sealed, id,
 		mintKeyColumn(t.Key), t.Version-1)
+	if s.d.Retryable(err) {
+		return state.ErrConflict // nothing written: the caller reads what is there, and tries again
+	}
 	if err != nil {
 		return err
 	}

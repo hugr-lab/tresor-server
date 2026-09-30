@@ -180,6 +180,10 @@ The schema (migration `0001`, one SQL file per dialect, applied in `schema_migra
   SQL Server: `sp_getapplock`), so several replicas starting at once apply them once. A binary
   refuses a database whose migration is newer than it knows.
 - No upsert, no JSON functions: portable SQL only.
+- **Names as written, in every store**: the API refuses (`422 invalid_secret`) a secret's name or a
+  grant's id that is empty, longer than 200 characters, begins or ends with a space, or holds a
+  control character. Every store keeps what passes as it came; the refusal names the rule, never
+  the name. No protocol change: the protocol lets a service refuse what does not validate.
 - A minted token's key (its audience and scope, NUL between) is stored as its SHA-256, hex: a
   PostgreSQL text holds no NUL, and a SQL Server index key is short. The AAD names the key itself.
 - What differs per dialect beyond the DDL: how a transaction locks a name (the migrations; an actor's
@@ -222,8 +226,11 @@ The schema (migration `0001`, one SQL file per dialect, applied in `schema_migra
 - Snapshot isolation is not needed: the compare-and-set is a single `UPDATE`.
 - Off this machine, `encrypt=true` (or `strict`) with the certificate checked is required: the login
   goes over the connection.
-- An index key holds 900 bytes (1700 nonclustered): a secret's name is at most 450 characters, the
-  grants' key is nonclustered, and a minted token's key is stored as its SHA-256 (in every dialect).
+- An index key holds 900 bytes (1700 nonclustered): the grants' key is nonclustered, and a minted
+  token's key is stored as its SHA-256 (in every dialect).
+- Names are compared exactly (the protocol). SQL Server's default collation is case-insensitive, so
+  every compared text is `COLLATE Latin1_General_100_BIN2`. It still compares `'a'` and `'a '` as
+  equal, so the API refuses edge spaces (below).
 
 A database password as a `ref+azkv://` reference (spec 001) is a follow-up; phase 1 logs in with
 Entra on Azure.

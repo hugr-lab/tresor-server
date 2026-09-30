@@ -1,15 +1,16 @@
 -- spec 002: delegation grants and their minted tokens (SQL Server, Azure SQL). A grant's id is never stored:
--- rows are keyed by its SHA-256 (hex). Its subject token and minted tokens are only ever sealed.
+-- rows are keyed by its SHA-256 (hex). Its subject token and minted tokens are only ever sealed. Compared texts
+-- are BIN2 (exact); an owner is at most 800 characters (an index key on it: 1600 bytes, nonclustered).
 CREATE TABLE delegations (
-    id_hash            NVARCHAR(64)   NOT NULL PRIMARY KEY,
-    actor_owner        NVARCHAR(400)  NOT NULL,
-    actor_client       NVARCHAR(400)  NOT NULL,
+    id_hash            NVARCHAR(64)   COLLATE Latin1_General_100_BIN2 NOT NULL PRIMARY KEY,
+    actor_owner        NVARCHAR(800)  COLLATE Latin1_General_100_BIN2 NOT NULL,
+    actor_client       NVARCHAR(800)  COLLATE Latin1_General_100_BIN2 NOT NULL,
     actor_issuer       NVARCHAR(MAX)  NOT NULL,
-    user_owner         NVARCHAR(400)  NOT NULL,
+    user_owner         NVARCHAR(800)  COLLATE Latin1_General_100_BIN2 NOT NULL,
     user_json          NVARCHAR(MAX)  NOT NULL,
     expires_at         BIGINT         NOT NULL,
     subject_expires_at BIGINT         NOT NULL,
-    subject_key_id     NVARCHAR(64)   NOT NULL,
+    subject_key_id     NVARCHAR(64)   COLLATE Latin1_General_100_BIN2 NOT NULL,
     subject_sealed     VARBINARY(MAX)
 );
 CREATE INDEX delegations_actor ON delegations (actor_owner, expires_at);
@@ -18,11 +19,11 @@ CREATE INDEX delegations_client ON delegations (actor_client);
 CREATE INDEX delegations_expiry ON delegations (expires_at);
 
 CREATE TABLE delegation_tokens (
-    id_hash     NVARCHAR(64)   NOT NULL REFERENCES delegations (id_hash) ON DELETE CASCADE,
-    mint_key    NVARCHAR(64)   NOT NULL,     -- the key's SHA-256, hex
+    id_hash     NVARCHAR(64)   COLLATE Latin1_General_100_BIN2 NOT NULL REFERENCES delegations (id_hash) ON DELETE CASCADE,
+    mint_key    NVARCHAR(64)   COLLATE Latin1_General_100_BIN2 NOT NULL,     -- the key's SHA-256, hex
     version     BIGINT         NOT NULL,
     failed      NVARCHAR(MAX)  NOT NULL,
-    data_key_id NVARCHAR(64)   NOT NULL,
+    data_key_id NVARCHAR(64)   COLLATE Latin1_General_100_BIN2 NOT NULL,
     sealed      VARBINARY(MAX),
     PRIMARY KEY (id_hash, mint_key)
 );

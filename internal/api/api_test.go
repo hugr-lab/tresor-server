@@ -463,3 +463,32 @@ func TestTraceIDs(t *testing.T) {
 		}
 	}
 }
+
+// a name or a grant id every store keeps as it came (spec 002): the rule is refused with 422, never a store's
+// 503, and the name is not quoted back
+func TestNamesKeptAsWritten(t *testing.T) {
+	f := newFixture(t, "")
+	for name, path := range map[string]string{
+		"an edge space":        "/v1/secrets/lake%20",
+		"a leading space":      "/v1/secrets/%20lake",
+		"a control character":  "/v1/secrets/la%01ke",
+		"too long":             "/v1/secrets/" + strings.Repeat("n", 201),
+		"a grant's edge space": "/v1/secrets/lake/grants/g%20",
+	} {
+		body := s3Secret
+		if strings.Contains(path, "/grants/") {
+			f.do("PUT", "/v1/secrets/lake", f.admin, s3Secret)
+			body = `{"principal":"role:analysts","verbs":["use"]}`
+		}
+		if r := f.do("PUT", path, f.admin, body); r.status != 422 || r.problemType(t) != "invalid_secret" {
+			t.Errorf("%s: %d %s", name, r.status, r.body)
+		}
+	}
+	if r := f.do("PUT", "/v1/secrets/"+strings.Repeat("n", 200), f.admin, s3Secret); r.status != 201 {
+		t.Fatalf("200 characters: %d", r.status)
+	}
+	// names differ by case: two secrets
+	if r := f.do("PUT", "/v1/secrets/Lake", f.admin, s3Secret); r.status != 201 {
+		t.Fatalf("Lake next to lake: %d %s", r.status, r.body)
+	}
+}
