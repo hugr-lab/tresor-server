@@ -1,0 +1,35 @@
+# The docs site (website/) on a pull request: built, never deployed - broken links fail it (onBrokenLinks:
+# throw). pages.yml deploys from main.
+name: Docs site build
+
+on:
+  pull_request:
+    paths:
+      - "website/**"
+      - ".github/workflows/docs-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build docs site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: npm ci && docusaurus build
+        working-directory: website
+        run: |
+          npm ci
+          npx docusaurus build

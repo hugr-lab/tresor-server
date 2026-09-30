@@ -1,6 +1,6 @@
 # Spec 002: phase 1 - the Azure MVP
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-09-30
 - **Author**: hugr lab
 
@@ -516,7 +516,9 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
 7. **(e) references**: `material`, `azkv`, the allowlist.
 8. **(f) the container and Container Apps**: `tls.offload`, Dockerfile, image CI, the Bicep recipe; the live run.
 
-The docs site (Docusaurus, as tresor's `website/`) comes with or after (f).
+The docs site (Docusaurus, as tresor's `website/`) comes after (f): `website/`, published from main to
+https://hugr-lab.github.io/tresor-server/ (`pages.yml`; `docs-build.yml` gates pull requests, a broken link
+fails it).
 
 ## Enforcement & security
 
