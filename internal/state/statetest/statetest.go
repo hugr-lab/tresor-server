@@ -14,10 +14,17 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
-// Opener returns a fresh, empty store, and - for a store that can have several handles on one database, as
-// replicas have - a function that opens another handle on it. A store that cannot returns nil for it, and
-// the concurrent writers then share one handle.
-type Opener func(t *testing.T) (first state.Store, second func() state.Store)
+// Handles are a fresh, empty store and how to reach its database again.
+type Handles struct {
+	First state.Store
+	// Another opens another handle on First's database, or is nil for a store with no database (memory).
+	Another func() state.Store
+	// Replicas: the handles serve side by side. Otherwise Another is a restart: it closes First first.
+	Replicas bool
+}
+
+// Opener opens a store for one test; the store is closed with the test.
+type Opener func(t *testing.T) Handles
 
 // Run runs the suite.
 func Run(t *testing.T, open Opener) {
@@ -26,6 +33,7 @@ func Run(t *testing.T, open Opener) {
 	t.Run("Refusals", func(t *testing.T) { testRefusals(t, open) })
 	t.Run("Isolation", func(t *testing.T) { testIsolation(t, open) })
 	t.Run("ConcurrentWriters", func(t *testing.T) { testConcurrentWriters(t, open) })
+	t.Run("SecondHandle", func(t *testing.T) { testSecondHandle(t, open) })
 }
 
 var ctx = context.Background()
@@ -56,7 +64,7 @@ func create(t *testing.T, st state.Store, name string) *state.Secret {
 }
 
 func testCreateGetList(t *testing.T, open Opener) {
-	st, _ := open(t)
+	st := open(t).First
 	if _, err := st.Get(ctx, "a"); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("a missing secret: %v", err)
 	}
@@ -81,13 +89,18 @@ func testCreateGetList(t *testing.T, open Opener) {
 	if len(list) != 3 || list[0].Name != "a" || list[1].Name != "b" || list[2].Name != "c" {
 		t.Fatalf("list: %d secrets, not sorted by name", len(list))
 	}
+	listed := state.Clone(want)
+	listed.Params = nil // a list carries no material
+	if a, b := mustJSON(t, list[0]), mustJSON(t, listed); a != b {
+		t.Fatalf("listed\n%s\nwant\n%s", a, b)
+	}
 	if err := st.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func testUpdateAndDelete(t *testing.T, open Opener) {
-	st, _ := open(t)
+	st := open(t).First
 	create(t, st, "a")
 	saved, err := st.Update(ctx, "a", func(cur *state.Secret) (*state.Secret, error) {
 		cur.Comment = "changed"
@@ -118,7 +131,7 @@ func testUpdateAndDelete(t *testing.T, open Opener) {
 }
 
 func testRefusals(t *testing.T, open Opener) {
-	st, _ := open(t)
+	st := open(t).First
 	create(t, st, "a")
 	mine := errors.New("refused by fn")
 	if _, err := st.Update(ctx, "a", func(*state.Secret) (*state.Secret, error) { return nil, mine }); !errors.Is(err, mine) {
@@ -144,7 +157,7 @@ func testRefusals(t *testing.T, open Opener) {
 
 // what a caller holds is its own: changing it changes nothing in the store
 func testIsolation(t *testing.T, open Opener) {
-	st, _ := open(t)
+	st := open(t).First
 	saved := create(t, st, "a")
 	saved.Grants[0].Verbs[0] = "delete"
 	got, _ := st.Get(ctx, "a")
@@ -159,13 +172,12 @@ func testIsolation(t *testing.T, open Opener) {
 // writers racing on one secret, through one handle and (where the store has them) through two, as two
 // replicas: no increment is lost
 func testConcurrentWriters(t *testing.T, open Opener) {
-	first, second := open(t)
+	h := open(t)
+	first := h.First
 	create(t, first, "a")
 	stores := []state.Store{first}
-	if second != nil {
-		if other := second(); other != nil {
-			stores = append(stores, other)
-		}
+	if h.Replicas {
+		stores = append(stores, h.Another())
 	}
 	const writers, each = 8, 5
 	var wg sync.WaitGroup
@@ -208,4 +220,40 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// another handle on the same database - a replica, or the store reopened - sees every write
+func testSecondHandle(t *testing.T, open Opener) {
+	h := open(t)
+	first := h.First
+	if h.Another == nil {
+		t.Skip("no database to reach again")
+	}
+	create(t, first, "a")
+	if _, err := first.Update(ctx, "a", func(cur *state.Secret) (*state.Secret, error) {
+		cur.Grants = nil
+		cur.Version++
+		return cur, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	other := h.Another()
+	got, err := other.Get(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := secret(2)
+	want.Name, want.Grants = "a", nil
+	if a, b := mustJSON(t, got), mustJSON(t, want); a != b {
+		t.Fatalf("through another handle\n%s\nwant\n%s", a, b)
+	}
+	if _, err := other.Update(ctx, "a", func(*state.Secret) (*state.Secret, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !h.Replicas {
+		return // the first handle is closed: a restart
+	}
+	if _, err := first.Get(ctx, "a"); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("a delete through another handle: %v", err)
+	}
 }
