@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
@@ -530,9 +532,36 @@ func validParams(params map[string]json.RawMessage, redact []string) error {
 	return nil
 }
 
+// maxNameLength bounds a secret's name and a grant's id, in characters: every store keeps them, SQL Server in
+// an index key.
+const maxNameLength = 200
+
+// validName checks a secret's name or a grant's id as written (spec 002): names are compared exactly, and a
+// store must keep it as it came - no edge space (SQL Server compares 'a' and 'a ' as equal), no control
+// character, at most maxNameLength characters. The error names the rule, not the name.
+func validName(what, name string) error {
+	switch {
+	case name == "":
+		return fmt.Errorf("%s is empty", what)
+	case utf8.RuneCountInString(name) > maxNameLength:
+		return fmt.Errorf("%s is longer than %d characters", what, maxNameLength)
+	case !utf8.ValidString(name):
+		return fmt.Errorf("%s is not UTF-8", what)
+	case strings.TrimSpace(name) != name:
+		return fmt.Errorf("%s begins or ends with a space", what)
+	case strings.IndexFunc(name, unicode.IsControl) >= 0:
+		return fmt.Errorf("%s holds a control character", what)
+	}
+	return nil
+}
+
 func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 	c := callerOf(r)
 	name := r.PathValue("name")
+	if err := validName("the name", name); err != nil {
+		problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
+		return
+	}
 	var body secretBody
 	if err := readJSON(r, &body); err != nil {
 		problem(w, http.StatusUnprocessableEntity, "invalid_secret", "the body is not a secret: "+err.Error())
@@ -748,6 +777,10 @@ func (s *Server) putGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	if err := validName("the grant's id", id); err != nil {
+		problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
+		return
+	}
 	saved, ok := s.mutate(w, r, "grant", func(current *state.Secret) (*state.Secret, error) {
 		// a grant gives `use` to a role or a group (specs/009): never one user, never a management verb
 		role, isRole := strings.CutPrefix(body.Principal, "role:")

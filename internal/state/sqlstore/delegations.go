@@ -2,6 +2,7 @@ package sqlstore
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -17,9 +18,13 @@ type delegations struct{ s *Store }
 
 func (s *Store) Delegations() state.DelegationStore { return delegations{s} }
 
-// mintKeyColumn is a minted token's key as stored: hex - a key joins its audience and scope with a NUL, which
-// a PostgreSQL text holds not.
-func mintKeyColumn(key string) string { return hex.EncodeToString([]byte(key)) }
+// mintKeyColumn is a minted token's key as stored: its SHA-256, hex - a key joins its audience and scope with
+// a NUL, which a PostgreSQL text holds not, and may be longer than a SQL Server index key. (The AAD names the
+// key itself.)
+func mintKeyColumn(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
+}
 
 func subjectAAD(idHash string) []byte { return []byte("tresor-server/delegation/1\x00" + idHash) }
 
@@ -28,6 +33,16 @@ func tokenAAD(idHash, key string, version int64) []byte {
 }
 
 func (d delegations) Put(ctx context.Context, g state.Delegation, maxPerActor int) error {
+	var err error
+	for range maxAttempts {
+		if err = d.put(ctx, g, maxPerActor); err == nil || !d.s.d.Retryable(err) {
+			return err
+		}
+	}
+	return err // a deadlock victim, again and again
+}
+
+func (d delegations) put(ctx context.Context, g state.Delegation, maxPerActor int) error {
 	s := d.s
 	if err := s.ready(); err != nil {
 		return err
@@ -219,6 +234,9 @@ func (d delegations) PutToken(ctx context.Context, idHash []byte, t state.Minted
 	res, err := s.db.ExecContext(ctx, s.q(`UPDATE delegation_tokens SET version = ?, failed = ?, data_key_id = ?,
 		sealed = ? WHERE id_hash = ? AND mint_key = ? AND version = ?`), t.Version, t.Failed, keyID, sealed, id,
 		mintKeyColumn(t.Key), t.Version-1)
+	if s.d.Retryable(err) {
+		return state.ErrConflict // nothing written: the caller reads what is there, and tries again
+	}
 	if err != nil {
 		return err
 	}

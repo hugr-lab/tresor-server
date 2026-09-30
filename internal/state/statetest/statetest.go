@@ -33,6 +33,7 @@ func Run(t *testing.T, open Opener) {
 	t.Run("UpdateAndDelete", func(t *testing.T) { testUpdateAndDelete(t, open) })
 	t.Run("Refusals", func(t *testing.T) { testRefusals(t, open) })
 	t.Run("Isolation", func(t *testing.T) { testIsolation(t, open) })
+	t.Run("ExactNames", func(t *testing.T) { testExactNames(t, open) })
 	t.Run("ConcurrentWriters", func(t *testing.T) { testConcurrentWriters(t, open) })
 	t.Run("SecondHandle", func(t *testing.T) { testSecondHandle(t, open) })
 	t.Run("Delegations", func(t *testing.T) { testDelegations(t, open) })
@@ -166,6 +167,31 @@ func testRefusals(t *testing.T, open Opener) {
 	}
 	if _, err := st.Get(ctx, "b"); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("a refused create was kept: %v", err)
+	}
+}
+
+// names are compared exactly (the protocol): names that differ only by case are two secrets, whatever the
+// database's default collation
+func testExactNames(t *testing.T, open Opener) {
+	st := open(t).First
+	create(t, st, "lake")
+	create(t, st, "Lake")
+	if _, err := st.Update(ctx, "LAKE", func(cur *state.Secret) (*state.Secret, error) {
+		if cur != nil {
+			t.Fatal("LAKE found another name's secret")
+		}
+		return nil, errors.New("stop")
+	}); err == nil {
+		t.Fatal("no fn run")
+	}
+	if _, err := st.Update(ctx, "Lake", func(*state.Secret) (*state.Secret, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.Get(ctx, "lake"); err != nil || got.Name != "lake" {
+		t.Fatalf("deleting Lake touched lake: %v", err)
+	}
+	if list, _ := st.List(ctx); len(list) != 1 {
+		t.Fatalf("%d secrets after deleting Lake", len(list))
 	}
 }
 

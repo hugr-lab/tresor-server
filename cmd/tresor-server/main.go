@@ -109,16 +109,20 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger) (state
 			return nil, nil, err
 		}
 		return st, []health.Check{{Name: "keys", Run: st.Envelope().Check}}, nil
-	case "postgres":
+	case "postgres", "sqlserver":
 		wrapper, err := keyWrapper(cfg)
 		if err != nil {
 			return nil, nil, err
 		}
-		login, err := databaseLogin(cfg, sqlstore.ScopePostgres)
+		open, scope := sqlstore.OpenPostgres, sqlstore.ScopePostgres
+		if cfg.State.Kind == "sqlserver" {
+			open, scope = sqlstore.OpenSQLServer, sqlstore.ScopeSQLServer
+		}
+		login, err := databaseLogin(cfg, scope)
 		if err != nil {
 			return nil, nil, err
 		}
-		st, err := sqlstore.OpenPostgres(ctx, cfg.State.DSN, login, cfg.State.MaxOpenConns, wrapper, sqlstore.Options{
+		st, err := open(ctx, cfg.State.DSN, login, cfg.State.MaxOpenConns, wrapper, sqlstore.Options{
 			Log: log, Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}})
 		if err != nil {
 			return nil, nil, err

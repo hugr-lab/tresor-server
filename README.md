@@ -36,6 +36,8 @@ Every setting can come from the environment, over the file: `TRESOR_CONFIG` (a w
   keys: {kind: local, key_env: TRESOR_KEK}      # 32 bytes, base64: openssl rand -base64 32
   # or PostgreSQL, several replicas; the password (or an Entra token) is never in the DSN:
   # state: {kind: postgres, dsn: 'host=db user=tresor dbname=tresor sslmode=verify-full', auth: entra}
+  # or SQL Server / Azure SQL, with an Entra access token (no password at all):
+  # state: {kind: sqlserver, dsn: 'sqlserver://corp.database.windows.net?database=tresor&encrypt=true', auth: entra}
   # or a key in Azure Key Vault / Managed HSM, with the service's managed identity:
   # keys: {kind: azurekeyvault, key: https://corp-kv.vault.azure.net/keys/tresor-kek}
   # azure: {identity: managed}                  # default: the az CLI's login, for development

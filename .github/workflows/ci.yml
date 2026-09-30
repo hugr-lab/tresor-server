@@ -27,9 +27,20 @@ jobs:
         ports: ['55432:5432']
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: Tresor-Test-2026!
+        ports: ['51433:1433']
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Tresor-Test-2026!' -Q 'SELECT 1'"
+          --health-interval 5s --health-timeout 5s --health-retries 40
     env:
       TRESOR_TEST_POSTGRES: postgres://postgres@127.0.0.1:55432/postgres?sslmode=disable
       TRESOR_TEST_POSTGRES_PASSWORD: tresor-test
+      TRESOR_TEST_SQLSERVER: sqlserver://sa@127.0.0.1:51433?encrypt=disable
+      TRESOR_TEST_SQLSERVER_PASSWORD: Tresor-Test-2026!
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -63,6 +74,7 @@ jobs:
           - {state: memory, replicas: 1}
           - {state: sqlite, replicas: 1}
           - {state: postgres, replicas: 2}   # two replicas behind a round-robin proxy
+          - {state: sqlserver, replicas: 2}
     services:
       postgres:
         image: postgres:17
@@ -71,9 +83,20 @@ jobs:
         ports: ['55432:5432']
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: Tresor-Test-2026!
+        ports: ['51433:1433']
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Tresor-Test-2026!' -Q 'SELECT 1'"
+          --health-interval 5s --health-timeout 5s --health-retries 40
     env:
       TRESOR_TEST_POSTGRES: postgres://postgres@127.0.0.1:55432/postgres?sslmode=disable
       TRESOR_TEST_POSTGRES_PASSWORD: tresor-test
+      TRESOR_TEST_SQLSERVER: sqlserver://sa@127.0.0.1:51433?encrypt=disable
+      TRESOR_TEST_SQLSERVER_PASSWORD: Tresor-Test-2026!
       TRESOR_CONFORMANCE_REPLICAS: ${{ matrix.replicas }}
     steps:
       - uses: actions/checkout@v7
