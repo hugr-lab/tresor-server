@@ -9,7 +9,7 @@ title: Operations
 | Route | Answers |
 | --- | --- |
 | `GET /healthz` | 200 while the process is up. |
-| `GET /readyz` | 200 when every check passes; 503 otherwise. |
+| `GET /readyz` | 200 unless a check is `unavailable` or `not checked yet` (`degraded` is still ready); 503 then, and while shutting down. |
 
 The checks run in the background every 30 s, so a probe never calls a database, a vault or an identity
 provider itself:

@@ -28,7 +28,7 @@ The configuration is all environment variables (`TRESOR_*`). Nothing is mounted.
 az group create -n tresor -l westeurope
 az deployment group create -g tresor -f main.bicep \
   -p database=postgres \
-  -p issuers="[{issuer: 'https://login.microsoftonline.com/<tenant>/v2.0', audience: 'api://tresor', client_id: '<public client>', human_flows: [authorization_code, device_code], service_flows: [client_credentials], roles_claim: roles, service: {claim: idtyp, equals: app}}]" \
+  -p issuers="[{issuer: 'https://login.microsoftonline.com/<tenant>/v2.0', audience: '<api client id>', client_id: '<public client>', human_flows: [authorization_code, device_code], service_flows: [client_credentials], roles_claim: roles, service: {claim: idtyp, equals: app}}]" \
   -p admins="[role:secrets_admin]"
 ```
 

@@ -18,8 +18,9 @@ Material in it is only ever sealed: see [Encryption](encryption.md).
 
 - **Every write is compare-and-set** on the secret's version and its row. A write read before another
   replica's change is run again on the new secret; it never overwrites it.
-- **Names are compared exactly**, in every store. The service refuses (`422`) a name or a grant id that is
-  empty, longer than 200 characters, begins or ends with a space, or holds a control character.
+- **Names are compared exactly**, in every store. A write (a secret, a grant) is refused (`422`) when its
+  name or grant id is empty, longer than 200 characters, not UTF-8, begins or ends with a space, or holds a
+  control character.
 - **A list or a descriptor opens no material.** Only a read with `use` opens a secret's params. A secret
   whose params do not open fails that read (`503`); an administrator may still delete it.
 - **Delegation grants live in the store**, for every replica to honour. A grant's id is never stored: rows

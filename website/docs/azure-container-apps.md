@@ -25,7 +25,7 @@ flowchart LR
 - **The database**, Entra authentication only, the identity its administrator:
   - `database=postgres`: Azure Database for PostgreSQL Flexible Server, Burstable B1ms;
   - `database=sqlserver`: Azure SQL, a Basic database. Not serverless: the readiness checks reach the
-    database every minute, so a serverless one would never pause.
+    database every 30 s and the purge every minute, so a serverless one would never pause.
 - **Container Apps** with a Log Analytics workspace, and the app:
   - built-in ingress with TLS; the service runs with `tls.offload`;
   - two replicas or more;
@@ -43,8 +43,9 @@ az deployment group create -g tresor -f deploy/azure-container-apps/main.bicep \
   -p admins="[role:secrets_admin]"
 ```
 
-The issuer is tresor's [Entra setup](https://hugr-lab.github.io/tresor/entra/). The outputs are the
-service's URL, the vault's name and the identity's client id. DuckDB attaches the URL:
+The issuer is tresor's [Entra setup](https://hugr-lab.github.io/tresor/entra/): a v2 token's audience is the
+API's client id. The outputs are the service's URL, the vault's name, the identity's client id and the
+database's DSN. DuckDB attaches the URL:
 
 ```sql
 ATTACH 'tresor:tresor-app.<environment>.westeurope.azurecontainerapps.io' AS corp;
@@ -59,6 +60,8 @@ ATTACH 'tresor:tresor-app.<environment>.westeurope.azurecontainerapps.io' AS cor
 | `materialAllow` | this vault, `duckdb-*` | where references may read |
 | `image` | `ghcr.io/hugr-lab/tresor-server:edge` | pin a release tag in production |
 | `minReplicas`, `maxReplicas` | 2, 3 | |
+| `prefix` | `tresor` | the resources' names: lower-case letters and digits, a letter first |
+| `location` | the resource group's | |
 
 ## For production
 
@@ -83,5 +86,5 @@ application:
 - it logs in with client credentials;
 - it creates a secret and one by reference, and grants their use to its role;
 - it finds both through DuckDB's lookup;
-- four fetches through the ingress, across two replicas, each read the reference in Key Vault with the
-  managed identity.
+- four protocol fetches with the application's own token, through the ingress to the two replicas, each
+  read the reference in Key Vault with the managed identity.

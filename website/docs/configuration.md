@@ -26,7 +26,7 @@ TRESOR_STATE__AUTH=entra
 TRESOR_KEYS__KIND=azurekeyvault
 TRESOR_KEYS__KEY=https://corp-kv.vault.azure.net/keys/tresor-kek
 TRESOR_AZURE__IDENTITY=managed
-TRESOR_ISSUERS="[{issuer: 'https://login.microsoftonline.com/<tenant>/v2.0', audience: api://tresor}]"
+TRESOR_ISSUERS="[{issuer: 'https://login.microsoftonline.com/<tenant>/v2.0', audience: '<api client id>'}]"
 TRESOR_POLICY__ADMINS='[role:secrets_admin]'
 ```
 

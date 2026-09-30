@@ -10,8 +10,8 @@ This page runs the service on a laptop, with SQLite and a local key, and attache
 
 The service verifies tokens from any OIDC issuer. Two ways to get one:
 
-- **Keycloak in docker**, as tresor's own tests use it: tresor's `server/docker-compose.yml` and its test
-  realm (`docker compose -p tresor-kc up -d` in the tresor repository). The issuer is then
+- **Keycloak in docker**, as tresor's own tests use it: `docker compose -p tresor-kc up -d` in tresor's
+  `server/` (its `docker-compose.yml` and test realm). The issuer is then
   `http://127.0.0.1:18480/realms/tresor`.
 - **Microsoft Entra ID**: register the service's API and the clients as tresor's
   [Entra guide](https://hugr-lab.github.io/tresor/entra/) says.
@@ -61,7 +61,7 @@ The service answers:
 ## 3. DuckDB
 
 ```sql
-INSTALL tresor FROM community;
+INSTALL tresor;   -- from your organisation's extension repository, or community once published
 LOAD tresor;
 
 ATTACH 'tresor:127.0.0.1:8443' AS corp (INSECURE_HTTP true);   -- a browser login

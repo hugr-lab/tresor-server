@@ -55,6 +55,7 @@ flowchart LR
 
 ## License
 
-Business Source License 1.1. Production use is free, embedding included. Offering it to third parties as a
-hosted or managed service needs a commercial license. Each version becomes Apache-2.0 four years after its
-release.
+Business Source License 1.1. Production use is permitted, provided you do not offer tresor-server - or a
+service whose value derives substantially from it - to third parties as a hosted or managed service. Each
+version becomes Apache-2.0 four years after it is first published. See the
+[LICENSE](https://github.com/hugr-lab/tresor-server/blob/main/LICENSE).
