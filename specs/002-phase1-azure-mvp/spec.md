@@ -456,8 +456,11 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
   database Entra-only (PostgreSQL: password authentication disabled; Azure SQL: Entra-only).
 - Probes: liveness `/healthz`, readiness `/readyz`, a startup probe.
 - Optional: a VNet, with private endpoints to Key Vault and the database.
-- The cheapest tiers for the live run: PostgreSQL Burstable B1ms; Azure SQL serverless with
-  auto-pause.
+- The cheapest tiers for the live run: PostgreSQL Burstable B1ms; Azure SQL Basic. Not serverless:
+  the readiness checks and the purge of expired grants reach the database every minute, so a
+  serverless database would never pause.
+- An Azure SQL administrator of type Application (the managed identity) is named by its client id
+  (`sid`), not its object id.
 
 ### CI
 

@@ -9,14 +9,15 @@
 @description('Where everything goes.')
 param location string = resourceGroup().location
 
-@description('A short prefix of every resource name (letters and digits).')
+@description('A short prefix of every resource name: lower-case letters and digits, a letter first.')
+@minLength(2)
 @maxLength(12)
 param prefix string = 'tresor'
 
 @description('The image: ghcr.io/hugr-lab/tresor-server:<tag>.')
 param image string = 'ghcr.io/hugr-lab/tresor-server:edge'
 
-@description('The state store: postgres (Azure Database for PostgreSQL, Burstable B1ms) or sqlserver (Azure SQL, serverless).')
+@description('The state store: postgres (Azure Database for PostgreSQL, Burstable B1ms) or sqlserver (Azure SQL, Basic).')
 @allowed(['postgres', 'sqlserver'])
 param database string = 'postgres'
 
@@ -37,14 +38,15 @@ param materialAllow string = ''
 param minReplicas int = 2
 param maxReplicas int = 3
 
-var suffix = uniqueString(resourceGroup().id, prefix)
-var vaultName = take('${prefix}kv${suffix}', 24)
+var p = toLower(prefix) // Container Apps, database and vault names are lower-case
+var suffix = uniqueString(resourceGroup().id, p)
+var vaultName = take('${p}kv${suffix}', 24)
 var dbName = 'tresor'
 
 // --- identity ----------------------------------------------------------------------------------------------
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: '${prefix}-id-${suffix}'
+  name: '${p}-id-${suffix}'
   location: location
 }
 
@@ -101,7 +103,7 @@ module pg 'modules/postgres.bicep' = if (database == 'postgres') {
   name: 'postgres'
   params: {
     location: location
-    name: '${prefix}-pg-${suffix}'
+    name: '${p}-pg-${suffix}'
     dbName: dbName
     identityName: identity.name
     principalId: identity.properties.principalId
@@ -112,10 +114,10 @@ module sql 'modules/sqlserver.bicep' = if (database == 'sqlserver') {
   name: 'sqlserver'
   params: {
     location: location
-    name: '${prefix}-sql-${suffix}'
+    name: '${p}-sql-${suffix}'
     dbName: dbName
     identityName: identity.name
-    principalId: identity.properties.principalId
+    clientId: identity.properties.clientId
   }
 }
 
@@ -124,13 +126,13 @@ var dsn = pg.?outputs.dsn ?? sql.?outputs.dsn ?? ''
 // --- Container Apps ----------------------------------------------------------------------------------------
 
 resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
-  name: '${prefix}-logs-${suffix}'
+  name: '${p}-logs-${suffix}'
   location: location
   properties: { sku: { name: 'PerGB2018' }, retentionInDays: 30 }
 }
 
 resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
-  name: '${prefix}-env-${suffix}'
+  name: '${p}-env-${suffix}'
   location: location
   properties: {
     appLogsConfiguration: {
@@ -143,7 +145,7 @@ resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
-var appName = '${prefix}-app'
+var appName = '${p}-app'
 
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName

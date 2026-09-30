@@ -29,6 +29,7 @@ resource allowAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@202
 resource db 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
   parent: pg
   name: dbName
+  dependsOn: [allowAzure] // one operation at a time on a flexible server
 }
 
 resource admin 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@2024-08-01' = {

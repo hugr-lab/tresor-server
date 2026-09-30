@@ -11,9 +11,12 @@ What it creates in a resource group:
   - the secrets that references (`ref+azkv://`) may read. The identity is *Key Vault Secrets User* on the vault.
 - **The database**, Entra authentication only, with the identity as its administrator:
   - `database=postgres`: Azure Database for PostgreSQL Flexible Server, Burstable B1ms;
-  - `database=sqlserver`: Azure SQL, a serverless database that pauses when idle.
+  - `database=sqlserver`: Azure SQL, a Basic database (the smallest; pick a larger sku for production). Not
+    serverless: the service's readiness checks and its purge of expired grants reach the database every
+    minute, so a serverless one would never pause - and bill vCores all the time.
 - **A Container Apps environment** with a Log Analytics workspace, and the app:
-  - built-in ingress with TLS (`tls.offload`: TLS ends at the ingress);
+  - built-in ingress with TLS (`tls.offload`: TLS ends at the ingress). The container's port is reachable
+    only through the ingress: `tls.offload` must never be set where the port is exposed directly;
   - two replicas or more;
   - liveness `/healthz` and readiness `/readyz`.
 
@@ -62,7 +65,8 @@ The recipe is small on purpose. Tighten it:
   1. an administrator of your own;
   2. a role for the identity that owns only the `tresor` database. On PostgreSQL:
      `SELECT * FROM pgaadauth_create_principal('<identity name>', false, false);` then
-     `GRANT ALL ON DATABASE tresor TO "<identity name>"`. On Azure SQL:
+     `ALTER DATABASE tresor OWNER TO "<identity name>"` (the owner may create in `public`, which the migrations
+     need). On Azure SQL:
      `CREATE USER [<identity name>] FROM EXTERNAL PROVIDER; ALTER ROLE db_owner ADD MEMBER [<identity name>];`
 - **References to other vaults.** For each vault in `materialAllow`, give the identity *Key Vault Secrets
   User* on the vault, or on the secrets it may read.

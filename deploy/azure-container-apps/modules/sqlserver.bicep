@@ -1,9 +1,12 @@
-// Azure SQL, Entra only, with the service's identity as its administrator; a serverless database.
+// Azure SQL, Entra only, with the service's identity as its administrator.
 param location string
 param name string
 param dbName string
 param identityName string
-param principalId string
+@description('The identity\'s client (application) id: an Application administrator\'s sid is its client id.')
+param clientId string
+@description('The database\'s sku. Basic is the smallest; the service\'s readiness checks keep a serverless one from ever pausing.')
+param sku object = { name: 'Basic', tier: 'Basic' }
 
 resource sql 'Microsoft.Sql/servers@2023-08-01' = {
   name: name
@@ -15,7 +18,7 @@ resource sql 'Microsoft.Sql/servers@2023-08-01' = {
       administratorType: 'ActiveDirectory'
       azureADOnlyAuthentication: true
       login: identityName
-      sid: principalId
+      sid: clientId
       principalType: 'Application'
       tenantId: tenant().tenantId
     }
@@ -32,11 +35,7 @@ resource db 'Microsoft.Sql/servers/databases@2023-08-01' = {
   parent: sql
   name: dbName
   location: location
-  sku: { name: 'GP_S_Gen5_1', tier: 'GeneralPurpose' }
-  properties: {
-    autoPauseDelay: 60 // serverless: it pauses when idle; the first request after waits for it to resume
-    minCapacity: json('0.5')
-  }
+  sku: sku
   dependsOn: [allowAzure]
 }
 
