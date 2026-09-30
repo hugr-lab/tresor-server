@@ -1,0 +1,123 @@
+# CI (spec 002): the Go tests on every PR, and tresor's conformance suite against this service. tresor is
+# built once per pinned commit (scripts/ci/tresor_checkout.sh) and cached: its build is C++ (DuckDB).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "gofmt needed:"; echo "$out"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # tresor at the pinned commit: the unittest runner, the duckdb CLI and the tresor extension, built on a
+  # cache miss only (a new pin), and handed to the conformance jobs as an artifact
+  tresor:
+    name: tresor build (pinned)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GEN: ninja
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      TRESOR_TEST_HTTPFS: '1'
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_bincache,readwrite'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cached build
+        id: cache
+        uses: actions/cache@v6
+        with:
+          path: tresor-build.tar.gz
+          key: tresor-build-linux_amd64-${{ hashFiles('scripts/ci/tresor_checkout.sh') }}
+      - name: Check out tresor with its submodules
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: scripts/ci/tresor_checkout.sh _tresor --submodules
+      - name: Install build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache
+      - name: Setup vcpkg
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: _tresor
+        run: make vcpkg-setup
+      - name: Cache vcpkg binary packages
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v6
+        with:
+          path: vcpkg_bincache
+          key: vcpkg-bincache-linux_amd64-${{ hashFiles('scripts/ci/tresor_checkout.sh') }}
+          restore-keys: vcpkg-bincache-linux_amd64-
+      - name: Restore ccache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v6
+        with:
+          path: .ccache
+          key: ccache-tresor-linux_amd64-${{ hashFiles('scripts/ci/tresor_checkout.sh') }}
+          restore-keys: ccache-tresor-linux_amd64-
+      - name: Build tresor
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: _tresor
+        run: |
+          EXT_FLAGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" make
+          ccache -s
+          tar -czf ../tresor-build.tar.gz build/release/test/unittest build/release/duckdb \
+            build/release/extension/tresor/tresor.duckdb_extension
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tresor-build
+          path: tresor-build.tar.gz
+          retention-days: 3
+
+  conformance:
+    name: Conformance (${{ matrix.state }})
+    needs: tresor
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        state: [memory]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Check out tresor (the tests, no submodules)
+        run: scripts/ci/tresor_checkout.sh _tresor
+      - uses: actions/download-artifact@v8
+        with:
+          name: tresor-build
+      - name: Unpack tresor's build
+        run: tar -xzf tresor-build.tar.gz -C _tresor
+      - name: tresor's conformance suite and reference-server tests
+        run: |
+          set -o pipefail   # a failing script must fail the step, whatever the summary line says
+          scripts/ci/conformance.sh _tresor "${{ matrix.state }}" 2>&1 | tee conformance.log
+          _tresor/scripts/ci/assert_ran.sh conformance.log 4 45 'require-env TRESOR_CONFORMANCE'
+          grep -q "the reference server's tests passed" conformance.log
+          grep -q "private_key_jwt: a node logged in to Keycloak with its key" conformance.log
