@@ -25,6 +25,18 @@ func OpenSQLite(ctx context.Context, path string, wrapper keys.KeyWrapper, opts 
 			return nil, fmt.Errorf("state.path: %w", err)
 		}
 	}
+	// created 0600 before SQLite opens it, whatever the umask; its WAL and shared memory files follow the
+	// database's mode, and are set too in case an earlier run left them open wider
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("state.path: %w", err)
+	}
+	f.Close()
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Chmod(p, 0o600); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("state.path: %w", err)
+		}
+	}
 	q := url.Values{}
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "busy_timeout(10000)")
@@ -38,10 +50,6 @@ func OpenSQLite(ctx context.Context, path string, wrapper keys.KeyWrapper, opts 
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("state: the SQLite database: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("state.path: %w", err)
 	}
 	s, err := open(ctx, db, SQLite, wrapper, opts)
 	if err != nil {

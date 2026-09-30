@@ -65,6 +65,17 @@ func wrapper(t *testing.T, b byte) keys.KeyWrapper {
 
 var ctx = context.Background()
 
+// unreachable is a KEK that does not answer (a KMS outage).
+type unreachable struct{}
+
+func (unreachable) Wrap(context.Context, []byte) ([]byte, string, error) {
+	return nil, "", errors.New("timeout")
+}
+func (unreachable) Unwrap(context.Context, []byte, string) ([]byte, error) {
+	return nil, errors.New("timeout")
+}
+func (unreachable) Current(context.Context) (string, error) { return "", errors.New("timeout") }
+
 func TestSealOpen(t *testing.T) {
 	st := newStore()
 	e := keys.NewEnvelope(wrapper(t, 1), st, keys.Options{})
@@ -99,10 +110,15 @@ func TestSealOpen(t *testing.T) {
 	if plain, err := other.Open(ctx, id, []byte("aad"), sealed); err != nil || string(plain) != "hunter2" {
 		t.Fatalf("another replica: %v", err)
 	}
-	// under another KEK, the data key does not unwrap: an error, and not ErrSealed (the value is not bad)
+	// under another KEK the data key never unwraps: ErrSealed (not transient)
 	wrong := keys.NewEnvelope(wrapper(t, 2), st, keys.Options{})
-	if _, err := wrong.Open(ctx, id, []byte("aad"), sealed); err == nil || errors.Is(err, keys.ErrSealed) {
+	if _, err := wrong.Open(ctx, id, []byte("aad"), sealed); !errors.Is(err, keys.ErrSealed) {
 		t.Fatalf("another KEK: %v", err)
+	}
+	// a KEK that cannot be reached is not ErrSealed: nothing is known to be bad
+	down := keys.NewEnvelope(unreachable{}, st, keys.Options{})
+	if _, err := down.Open(ctx, id, []byte("aad"), sealed); err == nil || errors.Is(err, keys.ErrSealed) {
+		t.Fatalf("an unreachable KEK: %v", err)
 	}
 	if err := e.Check(ctx); err != nil {
 		t.Fatal(err)

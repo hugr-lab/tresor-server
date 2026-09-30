@@ -42,6 +42,15 @@ func (s *Store) Get(_ context.Context, name string) (*state.Secret, error) {
 	return state.Clone(sec), nil
 }
 
+func (s *Store) Describe(ctx context.Context, name string) (*state.Secret, error) {
+	sec, err := s.Get(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	sec.Params = nil
+	return sec, nil
+}
+
 func (s *Store) Update(ctx context.Context, name string,
 	fn func(current *state.Secret) (*state.Secret, error)) (*state.Secret, error) {
 	if err := ctx.Err(); err != nil {

@@ -104,6 +104,21 @@ func TestSealedFailsClosed(t *testing.T) {
 	if list, err := s.List(ctx); err != nil || len(list) != 2 {
 		t.Fatalf("the list: %v", err)
 	}
+	if d, err := s.Describe(ctx, "a"); err != nil || d.Params != nil || d.Version != 1 {
+		t.Fatalf("a descriptor opens no material, so a broken one still answers: %v", err)
+	}
+	// an admin may delete it: nothing that opens is lost
+	if _, err := s.Update(ctx, "a", func(cur *state.Secret) (*state.Secret, error) {
+		if cur == nil || cur.Params != nil {
+			t.Fatalf("fn got %+v: the descriptor, no params", cur)
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("deleting a secret that does not open: %v", err)
+	}
+	if _, err := s.Get(ctx, "a"); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("after the delete: %v", err)
+	}
 	s.Close()
 	other := openAt(t, path, kek(t, 2))
 	if _, err := other.Get(ctx, "b"); err == nil {
@@ -113,8 +128,7 @@ func TestSealedFailsClosed(t *testing.T) {
 
 // one replica serves a SQLite database: another waits, serving nothing, and takes over when the first stops
 func TestLease(t *testing.T) {
-	leaseTTL, leaseRenew = 600*time.Millisecond, 100*time.Millisecond
-	t.Cleanup(func() { leaseTTL, leaseRenew = 15*time.Second, 5*time.Second })
+	shortLease(t)
 	path := filepath.Join(t.TempDir(), "tresor.db")
 	first := openAt(t, path, kek(t, 1))
 	put(t, first, "a", "x")
@@ -149,4 +163,76 @@ func TestNewerDatabase(t *testing.T) {
 	if _, err := OpenSQLite(ctx, path, kek(t, 1), Options{}); err == nil || !strings.Contains(err.Error(), "9999") {
 		t.Fatalf("a newer database: %v", err)
 	}
+}
+
+func shortLease(t *testing.T) {
+	leaseTTL, leaseRenew, leaseMargin = 600*time.Millisecond, 100*time.Millisecond, 200*time.Millisecond
+	t.Cleanup(func() { leaseTTL, leaseRenew, leaseMargin = 15*time.Second, 5*time.Second, 5*time.Second })
+}
+
+// a secret dropped and created again starts at version 1 again: a write read before the drop must not land
+// on the new one (the row id is in the compare-and-set), for an update and for a delete
+func TestNoABA(t *testing.T) {
+	s := openAt(t, filepath.Join(t.TempDir(), "tresor.db"), kek(t, 1))
+	for _, change := range []string{"update", "delete"} {
+		put(t, s, "lake", "first")
+		var runs int
+		s.beforeWrite = func() {
+			if runs++; runs > 1 {
+				return
+			}
+			// another replica, between this one's read and its write: drop "lake" and create it again
+			s.beforeWrite = nil
+			if _, err := s.Update(ctx, "lake", func(*state.Secret) (*state.Secret, error) { return nil, nil }); err != nil {
+				t.Fatal(err)
+			}
+			put(t, s, "lake", "second")
+			s.beforeWrite = func() { runs++ }
+		}
+		_, err := s.Update(ctx, "lake", func(cur *state.Secret) (*state.Secret, error) {
+			if change == "delete" {
+				return nil, nil
+			}
+			cur.Comment = "changed"
+			cur.Version++
+			return cur, nil
+		})
+		s.beforeWrite = nil
+		if err != nil {
+			t.Fatalf("%s: %v", change, err)
+		}
+		if runs < 2 {
+			t.Fatalf("%s: fn was not run again on the new secret", change)
+		}
+		got, err := s.Get(ctx, "lake")
+		switch {
+		case change == "update" && (err != nil || got.Comment != "changed" || string(got.Params["secret"]) != `"second"`):
+			t.Fatalf("the update landed on the old secret, or broke the new one: %v %+v", err, got)
+		case change == "delete" && !errors.Is(err, state.ErrNotFound):
+			t.Fatalf("the delete, run again on the new secret, deletes it: %v", err)
+		}
+		if change == "update" {
+			if _, err := s.Update(ctx, "lake", func(*state.Secret) (*state.Secret, error) { return nil, nil }); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+// a holder that cannot renew stops serving at its own deadline, before another may take over
+func TestLeaseFencing(t *testing.T) {
+	shortLease(t)
+	s := openAt(t, filepath.Join(t.TempDir(), "tresor.db"), kek(t, 1))
+	if err := s.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.lease.stop() // no more renewals: as a paused process
+	s.lease.mu.Lock()
+	s.lease.heldUntil = time.Now().Add(leaseTTL - leaseMargin)
+	s.lease.mu.Unlock()
+	time.Sleep(leaseTTL - leaseMargin + 50*time.Millisecond)
+	if _, err := s.List(ctx); !errors.Is(err, state.ErrUnavailable) {
+		t.Fatalf("serving past its deadline: %v", err)
+	}
+	s.lease = nil // stopped already
 }

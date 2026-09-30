@@ -1,6 +1,6 @@
 // Package sqlstore is the state.Store on a SQL database (spec 002): one set of queries in the portable
 // subset, a Dialect for what differs. Params are sealed (keys.Envelope) before they reach the database;
-// every write is compare-and-set on the version.
+// every write is compare-and-set on the row - its version and its row id.
 package sqlstore
 
 import (
@@ -30,7 +30,11 @@ type Store struct {
 	envelope *keys.Envelope
 	log      *slog.Logger
 	lease    *lease // SingleWriter dialects only
+	migrated atomic.Bool
 	closed   atomic.Bool
+
+	// beforeWrite, in tests, runs between fn and the compare-and-set: another writer's moment.
+	beforeWrite func()
 }
 
 // Options tune a store.
@@ -39,28 +43,54 @@ type Options struct {
 	Log  *slog.Logger
 }
 
-// open wires a store over db: the migrations, the lease where the dialect needs one, the envelope.
+// open wires a store over db: the envelope, the lease where the dialect needs one, the migrations. On a
+// single-writer database the migrations run once the lease is held: a replica that waits must not change
+// the schema under the one that serves.
 func open(ctx context.Context, db *sql.DB, d Dialect, wrapper keys.KeyWrapper, opts Options) (*Store, error) {
 	if opts.Log == nil {
 		opts.Log = slog.New(slog.DiscardHandler)
 	}
 	s := &Store{db: db, d: d, log: opts.Log}
-	if err := migrate(ctx, db, d); err != nil {
+	s.envelope = keys.NewEnvelope(wrapper, dataKeys{s}, opts.Keys)
+	if !d.SingleWriter {
+		if err := migrate(ctx, db, d); err != nil {
+			return nil, err
+		}
+		s.migrated.Store(true)
+		return s, nil
+	}
+	l, err := newLease(ctx, db, d, opts.Log, s.migrateOnce)
+	if err != nil {
 		return nil, err
 	}
-	s.envelope = keys.NewEnvelope(wrapper, dataKeys{s}, opts.Keys)
-	if d.SingleWriter {
-		s.lease = newLease(db, d, opts.Log)
-		s.lease.start()
+	s.lease = l
+	if err := l.start(ctx); err != nil {
+		return nil, err // held at once, and the database cannot be migrated: nothing to serve
 	}
 	return s, nil
 }
 
+// migrateOnce migrates when the lease is first held.
+func (s *Store) migrateOnce(ctx context.Context) error {
+	if s.migrated.Load() {
+		return nil
+	}
+	if err := migrate(ctx, s.db, s.d); err != nil {
+		return err
+	}
+	s.migrated.Store(true)
+	return nil
+}
+
 func (s *Store) q(query string) string { return s.d.Rebind(query) }
 
-// ready is the gate of every request: on a single-writer database, only the lease's holder serves.
+// ready is the gate of every request: on a single-writer database, only the lease's holder serves, and
+// only once its schema is current.
 func (s *Store) ready() error {
 	if s.lease != nil && !s.lease.held() {
+		return state.ErrUnavailable
+	}
+	if !s.migrated.Load() {
 		return state.ErrUnavailable
 	}
 	return nil
@@ -77,111 +107,70 @@ type row struct {
 	sealed    []byte
 }
 
+// selectSecrets reads secrets with their grants in one statement: one snapshot, the grants in their order.
+const selectSecrets = `SELECT s.name, s.row_id, s.type, s.provider, s.scope, s.redact_keys, s.comment, s.owner,
+	s.version, s.created_at, s.updated_at, s.data_key_id, s.sealed, g.id, g.principal, g.verbs
+	FROM secrets s LEFT JOIN grants g ON g.secret = s.name`
+
 const secretColumns = `name, row_id, type, provider, scope, redact_keys, comment, owner, version, created_at, updated_at, data_key_id, sealed`
 
-type scanner interface{ Scan(dest ...any) error }
-
-func scanRow(sc scanner) (*row, error) {
-	var r row
-	var scope, redact string
-	var created, updated int64
-	err := sc.Scan(&r.sec.Name, &r.rowID, &r.sec.Type, &r.sec.Provider, &scope, &redact, &r.sec.Comment,
-		&r.sec.Owner, &r.sec.Version, &created, &updated, &r.dataKeyID, &r.sealed)
+// query reads secrets (one, when name is set), in name order.
+func (s *Store) query(ctx context.Context, name string) ([]*row, error) {
+	query, args := selectSecrets+` ORDER BY s.name, g.position`, []any{}
+	if name != "" {
+		query, args = selectSecrets+` WHERE s.name = ? ORDER BY g.position`, []any{name}
+	}
+	rows, err := s.db.QueryContext(ctx, s.q(query), args...)
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal([]byte(scope), &r.sec.Scope); err != nil {
-		return nil, fmt.Errorf("secret %s: scope: %w", r.sec.Name, err)
+	defer rows.Close()
+	var out []*row
+	for rows.Next() {
+		var r row
+		var scope, redact string
+		var created, updated int64
+		var gID, gPrincipal, gVerbs sql.NullString
+		if err := rows.Scan(&r.sec.Name, &r.rowID, &r.sec.Type, &r.sec.Provider, &scope, &redact, &r.sec.Comment,
+			&r.sec.Owner, &r.sec.Version, &created, &updated, &r.dataKeyID, &r.sealed,
+			&gID, &gPrincipal, &gVerbs); err != nil {
+			return nil, err
+		}
+		if n := len(out); n == 0 || out[n-1].sec.Name != r.sec.Name {
+			if err := json.Unmarshal([]byte(scope), &r.sec.Scope); err != nil {
+				return nil, fmt.Errorf("secret %s: scope: %w", r.sec.Name, err)
+			}
+			if err := json.Unmarshal([]byte(redact), &r.sec.RedactKeys); err != nil {
+				return nil, fmt.Errorf("secret %s: redact_keys: %w", r.sec.Name, err)
+			}
+			r.sec.CreatedAt, r.sec.UpdatedAt = time.UnixMicro(created).UTC(), time.UnixMicro(updated).UTC()
+			out = append(out, &r)
+		}
+		if gID.Valid {
+			g := state.Grant{ID: gID.String, Principal: gPrincipal.String}
+			if err := json.Unmarshal([]byte(gVerbs.String), &g.Verbs); err != nil {
+				return nil, fmt.Errorf("secret %s: a grant's verbs: %w", r.sec.Name, err)
+			}
+			last := out[len(out)-1]
+			last.sec.Grants = append(last.sec.Grants, g)
+		}
 	}
-	if err := json.Unmarshal([]byte(redact), &r.sec.RedactKeys); err != nil {
-		return nil, fmt.Errorf("secret %s: redact_keys: %w", r.sec.Name, err)
+	return out, rows.Err()
+}
+
+// get reads one secret as stored, or nil when there is none.
+func (s *Store) get(ctx context.Context, name string) (*row, error) {
+	rows, err := s.query(ctx, name)
+	if err != nil || len(rows) == 0 {
+		return nil, err
 	}
-	r.sec.CreatedAt, r.sec.UpdatedAt = time.UnixMicro(created).UTC(), time.UnixMicro(updated).UTC()
-	return &r, nil
+	return rows[0], nil
 }
 
 // paramsAAD binds sealed params to their row, name and version: a value copied to another row, name or
 // version - or kept from a dropped secret of the same name - does not open.
 func paramsAAD(rowID, name string, version int64) []byte {
 	return []byte("tresor-server/params/1\x00" + rowID + "\x00" + name + "\x00" + strconv.FormatInt(version, 10))
-}
-
-func (s *Store) List(ctx context.Context) ([]*state.Secret, error) {
-	if err := s.ready(); err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, s.q(`SELECT `+secretColumns+` FROM secrets ORDER BY name`))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*state.Secret
-	byName := map[string]*state.Secret{}
-	for rows.Next() {
-		r, err := scanRow(rows)
-		if err != nil {
-			return nil, err
-		}
-		sec := r.sec // no params: a list opens no material
-		out = append(out, &sec)
-		byName[sec.Name] = &sec
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if err := s.grantsInto(ctx, s.db, byName, ""); err != nil {
-		return nil, err
-	}
-	if out == nil {
-		out = []*state.Secret{}
-	}
-	return out, nil
-}
-
-type querier interface {
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-}
-
-// grantsInto reads the grants of the secrets in byName (of one secret, when name is set), in their order.
-func (s *Store) grantsInto(ctx context.Context, q querier, byName map[string]*state.Secret, name string) error {
-	query, args := `SELECT secret, id, principal, verbs FROM grants ORDER BY secret, position`, []any{}
-	if name != "" {
-		query, args = `SELECT secret, id, principal, verbs FROM grants WHERE secret = ? ORDER BY position`, []any{name}
-	}
-	rows, err := q.QueryContext(ctx, s.q(query), args...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var secret, verbs string
-		var g state.Grant
-		if err := rows.Scan(&secret, &g.ID, &g.Principal, &verbs); err != nil {
-			return err
-		}
-		if err := json.Unmarshal([]byte(verbs), &g.Verbs); err != nil {
-			return fmt.Errorf("secret %s: a grant's verbs: %w", secret, err)
-		}
-		if sec := byName[secret]; sec != nil {
-			sec.Grants = append(sec.Grants, g)
-		}
-	}
-	return rows.Err()
-}
-
-// get reads one secret as stored, or nil when there is none.
-func (s *Store) get(ctx context.Context, name string) (*row, error) {
-	r, err := scanRow(s.db.QueryRowContext(ctx, s.q(`SELECT `+secretColumns+` FROM secrets WHERE name = ?`), name))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err := s.grantsInto(ctx, s.db, map[string]*state.Secret{name: &r.sec}, name); err != nil {
-		return nil, err
-	}
-	return r, nil
 }
 
 // opened is a row's secret with its params open.
@@ -191,10 +180,42 @@ func (s *Store) opened(ctx context.Context, r *row) (*state.Secret, error) {
 		return nil, fmt.Errorf("secret %s: its params: %w", r.sec.Name, err)
 	}
 	sec := r.sec
-	if err := json.Unmarshal(plain, &sec.Params); err != nil {
+	err = json.Unmarshal(plain, &sec.Params)
+	clear(plain)
+	if err != nil {
 		return nil, fmt.Errorf("secret %s: its params: %w", r.sec.Name, keys.ErrSealed)
 	}
-	clear(plain)
+	return &sec, nil
+}
+
+func (s *Store) List(ctx context.Context) ([]*state.Secret, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	rows, err := s.query(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*state.Secret, len(rows))
+	for i, r := range rows {
+		sec := r.sec // no params: a list opens no material
+		out[i] = &sec
+	}
+	return out, nil
+}
+
+func (s *Store) Describe(ctx context.Context, name string) (*state.Secret, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	r, err := s.get(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if r == nil {
+		return nil, state.ErrNotFound
+	}
+	sec := r.sec
 	return &sec, nil
 }
 
@@ -223,25 +244,34 @@ func (s *Store) Update(ctx context.Context, name string,
 			return nil, err
 		}
 		var current *state.Secret
+		var broken error // the params do not open: only a delete may pass
 		if r != nil {
-			// a secret whose params do not open is never rewritten blind
-			if current, err = s.opened(ctx, r); err != nil {
-				return nil, err
+			current, err = s.opened(ctx, r)
+			if errors.Is(err, keys.ErrSealed) {
+				broken, current = err, state.Clone(&r.sec)
+			} else if err != nil {
+				return nil, err // the KEK may be unreachable: nothing is decided on a guess
 			}
 		}
 		next, err := fn(state.Clone(current))
 		if err != nil {
 			return nil, err
 		}
+		if broken != nil && next != nil {
+			return nil, broken // never rewritten blind; an admin may delete it
+		}
 		if err := state.CheckVersion(current, next); err != nil {
 			return nil, err
+		}
+		if s.beforeWrite != nil {
+			s.beforeWrite()
 		}
 		var done bool
 		switch {
 		case next == nil && current == nil:
 			return nil, state.ErrNotFound
 		case next == nil:
-			done, err = s.remove(ctx, name, current.Version)
+			done, err = s.remove(ctx, r)
 		default:
 			next = state.Clone(next)
 			next.Name = name
@@ -258,9 +288,11 @@ func (s *Store) Update(ctx context.Context, name string,
 	return nil, state.ErrConflict
 }
 
-// remove deletes a secret at a version; false when the version moved on.
-func (s *Store) remove(ctx context.Context, name string, version int64) (bool, error) {
-	res, err := s.db.ExecContext(ctx, s.q(`DELETE FROM secrets WHERE name = ? AND version = ?`), name, version)
+// remove deletes the row r was read from; false when it changed or was replaced meanwhile. The row id is
+// in the compare: a secret dropped and created again starts at version 1 again.
+func (s *Store) remove(ctx context.Context, r *row) (bool, error) {
+	res, err := s.db.ExecContext(ctx, s.q(`DELETE FROM secrets WHERE name = ? AND version = ? AND row_id = ?`),
+		r.sec.Name, r.sec.Version, r.rowID)
 	if err != nil {
 		return false, err
 	}
@@ -268,8 +300,8 @@ func (s *Store) remove(ctx context.Context, name string, version int64) (bool, e
 	return n == 1, err
 }
 
-// write creates next (r nil) or replaces r by it, compare-and-set on r's version; false when another writer
-// came first.
+// write creates next (r nil) or replaces r's row by it, compare-and-set on its version and row id; false
+// when another writer came first.
 func (s *Store) write(ctx context.Context, r *row, next *state.Secret) (bool, error) {
 	rowID := ""
 	if r != nil {
@@ -311,7 +343,7 @@ func (s *Store) write(ctx context.Context, r *row, next *state.Secret) (bool, er
 	} else {
 		res, err := tx.ExecContext(ctx, s.q(`UPDATE secrets SET type = ?, provider = ?, scope = ?, redact_keys = ?,
 			comment = ?, owner = ?, version = ?, created_at = ?, updated_at = ?, data_key_id = ?, sealed = ?
-			WHERE name = ? AND version = ?`), append(args, next.Name, r.sec.Version)...)
+			WHERE name = ? AND version = ? AND row_id = ?`), append(args, next.Name, r.sec.Version, r.rowID)...)
 		if err != nil {
 			return false, err
 		}
@@ -332,13 +364,16 @@ func (s *Store) write(ctx context.Context, r *row, next *state.Secret) (bool, er
 	return true, tx.Commit()
 }
 
-// Ping says whether the store answers, and on a single-writer database whether this replica holds it.
+// Ping says whether the store answers, and on a single-writer database whether this replica serves it.
 func (s *Store) Ping(ctx context.Context) error {
 	if err := s.db.PingContext(ctx); err != nil {
 		return err
 	}
 	if s.lease != nil && !s.lease.held() {
 		return errors.New("another replica holds the SQLite database: waiting for its lease")
+	}
+	if !s.migrated.Load() {
+		return errors.New("the database's schema is not current (see the log)")
 	}
 	return nil
 }

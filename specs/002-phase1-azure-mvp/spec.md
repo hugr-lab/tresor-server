@@ -86,9 +86,11 @@ type StateStore interface {
 
 - **Why `Update(fn)`**: it is the reference server's own write path. The API's checks (permissions,
   `If-Match`) stay atomic with the write.
-- **Compare-and-set on `version`**, the protocol's ETag. Every write moves it: the ported handlers
-  bump it on a put, a patch and a grant change alike.
-  - An update or a delete: `… WHERE name = ? AND version = ?`, then the rows affected.
+- **Compare-and-set on `version`**, the protocol's ETag, and the row's random id. Every write moves
+  the version: the ported handlers bump it on a put, a patch and a grant change alike.
+  - An update or a delete: `… WHERE name = ? AND version = ? AND row_id = ?`, then the rows
+    affected. The row id is there because a secret dropped and created again starts at version 1
+    again: without it, a write read before the drop would land on the new secret.
   - A create: `INSERT`; a unique violation is a conflict too (another replica created it first).
   - The secret's row and its `grants` rows change in one transaction.
   - The same in all three dialects; it is what makes several replicas safe.
@@ -175,6 +177,11 @@ The schema (migration `0001`, one SQL file per dialect, applied in `schema_migra
 - WAL, `foreign_keys=ON`, `busy_timeout`;
 - **one writer**: at start the service takes the `lease` row (holder, expiry) and renews it. While
   another holder's lease is fresh, it waits: it serves no request, and `/readyz` says not ready.
+  - The migrations run once the lease is held: a waiting replica never changes the schema under the
+    one that serves.
+  - Fencing: the holder serves only until its own monotonic deadline, 5 s before the expiry it wrote
+    (15 s, renewed every 5 s). A paused process stops serving before another may take over; the
+    replicas' clocks may differ by up to 5 s.
   - This changes spec 001 ("refuses to start"): waiting lets a new revision start next to the old one
     and take over when it stops, with no restart loop.
 
@@ -244,6 +251,12 @@ Entra on Azure.
 - The `memory` store does not seal: it has nothing at rest. It behaves as the others otherwise (a list
   carries no params).
 - A secret whose params do not open is not rewritten either: an update of it fails, as a read does.
+  An administrator may delete it: nothing that opens is lost.
+- Only a read with `use` opens params (`Get`). A descriptor, a permission, a list open nothing
+  (`Describe`, `List`): with the KEK down they still answer, and a broken secret does not tell a
+  caller with no verb that its name exists.
+- A value that does not open is `503 service_unavailable`, as the protocol has no other type for it.
+  It is not transient; a type of its own would be a protocol change (a follow-up for tresor).
 
 ### Material by reference: `ref+azkv://`
 

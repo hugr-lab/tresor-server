@@ -303,7 +303,7 @@ func (s *Server) mayCreate(c *auth.Caller, name string) bool {
 // visible fetches a secret the caller holds any verb on (under a grant: the actor's use, an admin's management
 // through it); an invisible one is the same 404 as a missing one, so a name's existence does not leak.
 func (s *Server) visible(w http.ResponseWriter, r *http.Request, c *auth.Caller, name string) (*state.Secret, []string, bool) {
-	sec, err := s.store.Get(r.Context(), name)
+	sec, err := s.store.Describe(r.Context(), name) // no material: a permission needs none
 	if err != nil && !errors.Is(err, state.ErrNotFound) {
 		s.unavailable(w, "read", name, err)
 		return nil, nil, false
@@ -439,6 +439,17 @@ func (s *Server) getSecret(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, c, "use")
 		return
 	}
+	// the material, now that the caller may use it
+	full, err := s.store.Get(r.Context(), sec.Name)
+	if errors.Is(err, state.ErrNotFound) { // dropped meanwhile
+		problem(w, http.StatusNotFound, "not_found", fmt.Sprintf("no secret %q", sec.Name))
+		return
+	}
+	if err != nil {
+		s.unavailable(w, "read", sec.Name, err)
+		return
+	}
+	sec = full
 	body := descriptor(sec, verbs)
 	params := sec.Params
 	if params == nil {

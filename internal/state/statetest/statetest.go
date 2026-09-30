@@ -90,7 +90,17 @@ func testCreateGetList(t *testing.T, open Opener) {
 		t.Fatalf("list: %d secrets, not sorted by name", len(list))
 	}
 	listed := state.Clone(want)
-	listed.Params = nil // a list carries no material
+	listed.Params = nil // a list carries no material, nor does a descriptor
+	described, err := st.Describe(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, b := mustJSON(t, described), mustJSON(t, listed); a != b {
+		t.Fatalf("described\n%s\nwant\n%s", a, b)
+	}
+	if _, err := st.Describe(ctx, "zz"); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("describing a missing secret: %v", err)
+	}
 	if a, b := mustJSON(t, list[0]), mustJSON(t, listed); a != b {
 		t.Fatalf("listed\n%s\nwant\n%s", a, b)
 	}

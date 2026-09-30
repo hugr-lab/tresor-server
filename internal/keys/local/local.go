@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/hugr-lab/tresor-server/internal/keys"
 )
 
 // Wrapper wraps under one local key. Its id is a fingerprint of the key, so a data key wrapped under
@@ -71,7 +73,9 @@ func (w *Wrapper) Wrap(_ context.Context, dek []byte) ([]byte, string, error) {
 
 func (w *Wrapper) Unwrap(_ context.Context, wrapped []byte, kekID string) ([]byte, error) {
 	if kekID != w.id {
-		return nil, fmt.Errorf("the data key was wrapped under another KEK (%s, this one is %s)", kekID, w.id)
+		// not transient: this KEK will never unwrap it
+		return nil, fmt.Errorf("%w: the data key was wrapped under another KEK (%s, this one is %s)",
+			keys.ErrSealed, kekID, w.id)
 	}
 	return unwrap(w.kek, wrapped)
 }
@@ -79,7 +83,8 @@ func (w *Wrapper) Unwrap(_ context.Context, wrapped []byte, kekID string) ([]byt
 // defaultIV is RFC 3394's initial value.
 var defaultIV = []byte{0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6}
 
-var errUnwrap = errors.New("the data key does not unwrap under this KEK")
+// errUnwrap: the wrapped key fails RFC 3394's integrity check - tampered with, or another key's.
+var errUnwrap = fmt.Errorf("%w: the data key does not unwrap under this KEK", keys.ErrSealed)
 
 // wrap is RFC 3394 AES key wrap (2.2.1).
 func wrap(kek, plain []byte) ([]byte, error) {

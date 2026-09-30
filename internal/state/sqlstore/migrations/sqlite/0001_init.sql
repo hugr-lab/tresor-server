@@ -1,4 +1,5 @@
--- spec 002: secrets with their grants, the data keys that seal their params, and SQLite's one-writer lease.
+-- spec 002: secrets with their grants, and the data keys that seal their params. (SQLite's lease table is
+-- made before the migrations: a replica holds the lease before it migrates.)
 -- Times are microseconds since the epoch, UTC. JSON is kept as text. Material is only ever sealed.
 CREATE TABLE secrets (
     name        TEXT    NOT NULL PRIMARY KEY,
@@ -29,17 +30,12 @@ CREATE TABLE data_keys (
     id         TEXT    NOT NULL PRIMARY KEY,
     kek_id     TEXT    NOT NULL,
     wrapped    BLOB    NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    retired_at INTEGER                        -- rewrapped under a newer KEK version, or dropped (later)
 );
 
 CREATE TABLE active_data_key (
     id          INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
     data_key_id TEXT    NOT NULL REFERENCES data_keys (id),
     version     INTEGER NOT NULL
-);
-
-CREATE TABLE lease (
-    id         INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
-    holder     TEXT    NOT NULL,
-    expires_at INTEGER NOT NULL
 );
