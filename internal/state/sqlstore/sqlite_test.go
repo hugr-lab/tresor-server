@@ -3,6 +3,7 @@ package sqlstore
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -236,3 +237,47 @@ func TestLeaseFencing(t *testing.T) {
 	}
 	s.lease = nil // stopped already
 }
+
+// a grant's subject token and minted tokens are sealed at rest; its id is not stored at all
+func TestDelegationsSealedAtRest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tresor.db")
+	s := openAt(t, path, kek(t, 1))
+	now := time.Now()
+	g := state.Delegation{IDHash: []byte("hash-of-the-grant-id"), ActorOwner: "subject:i|node", ActorClient: "client:node",
+		UserOwner: "subject:i|alice", User: []byte(`{}`), ExpiresAt: now.Add(time.Hour),
+		Subject: []byte("hunter2-subject-token"), SubjectExpiresAt: now.Add(time.Hour)}
+	if err := s.Delegations().Put(ctx, g, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delegations().PutToken(ctx, g.IDHash, state.MintedToken{Key: "aud", Version: 1,
+		Token: []byte(`{"Refresh":"hunter2-refresh-token"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	for _, f := range []string{path, path + "-wal"} {
+		data, err := os.ReadFile(f)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if bytes.Contains(data, []byte("hunter2")) {
+			t.Fatalf("%s holds a token in the clear", filepath.Base(f))
+		}
+	}
+	// sealed to the grant: a subject token moved to another grant does not open
+	s = openAt(t, path, kek(t, 1))
+	other := g
+	other.IDHash, other.Subject = []byte("another-grant"), nil
+	if err := s.Delegations().Put(ctx, other, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE delegations SET subject_key_id = (SELECT subject_key_id FROM delegations WHERE id_hash = ?),
+		subject_sealed = (SELECT subject_sealed FROM delegations WHERE id_hash = ?) WHERE id_hash = ?`,
+		hexOf(g.IDHash), hexOf(g.IDHash), hexOf(other.IDHash)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Delegations().SubjectToken(ctx, other.IDHash, now); !errors.Is(err, keys.ErrSealed) {
+		t.Fatalf("a subject token moved to another grant: %v", err)
+	}
+}
+
+func hexOf(b []byte) string { return hex.EncodeToString(b) }

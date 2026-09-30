@@ -65,6 +65,8 @@ type Store interface {
 	// again on the fresh secret - so fn must not keep state from a former run - a bounded number of
 	// times, then ErrConflict.
 	Update(ctx context.Context, name string, fn func(current *Secret) (*Secret, error)) (*Secret, error)
+	// Delegations are the delegation grants, in the same database.
+	Delegations() DelegationStore
 	// Ping says whether the store answers.
 	Ping(ctx context.Context) error
 	Close() error

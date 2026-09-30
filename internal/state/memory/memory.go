@@ -12,12 +12,16 @@ import (
 
 // Store is safe for concurrent use. Writes are serialised, so fn runs once and never conflicts.
 type Store struct {
-	mu      sync.Mutex
-	secrets map[string]*state.Secret
+	mu          sync.Mutex
+	secrets     map[string]*state.Secret
+	delegations *delegations
 }
 
 // New returns an empty store.
-func New() *Store { return &Store{secrets: map[string]*state.Secret{}} }
+func New() *Store {
+	return &Store{secrets: map[string]*state.Secret{}, delegations: &delegations{
+		grants: map[string]*state.Delegation{}, tokens: map[string]map[string]*state.MintedToken{}}}
+}
 
 func (s *Store) List(context.Context) ([]*state.Secret, error) {
 	s.mu.Lock()

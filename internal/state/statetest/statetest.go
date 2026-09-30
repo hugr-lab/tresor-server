@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -34,6 +35,9 @@ func Run(t *testing.T, open Opener) {
 	t.Run("Isolation", func(t *testing.T) { testIsolation(t, open) })
 	t.Run("ConcurrentWriters", func(t *testing.T) { testConcurrentWriters(t, open) })
 	t.Run("SecondHandle", func(t *testing.T) { testSecondHandle(t, open) })
+	t.Run("Delegations", func(t *testing.T) { testDelegations(t, open) })
+	t.Run("DelegationLimit", func(t *testing.T) { testDelegationLimit(t, open) })
+	t.Run("MintedTokens", func(t *testing.T) { testMintedTokens(t, open) })
 }
 
 var ctx = context.Background()
@@ -265,5 +269,172 @@ func testSecondHandle(t *testing.T, open Opener) {
 	}
 	if _, err := first.Get(ctx, "a"); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("a delete through another handle: %v", err)
+	}
+}
+
+func grant(id, actor, user string, expires time.Time) state.Delegation {
+	return state.Delegation{IDHash: []byte("hash-" + id), ActorOwner: "subject:iss|" + actor, ActorClient: "client:" + actor,
+		ActorIssuer: "iss", UserOwner: "subject:iss|" + user, User: []byte(`{"Subject":"` + user + `"}`),
+		ExpiresAt: expires, Subject: []byte("subject-token-" + id), SubjectExpiresAt: expires.Add(-30 * time.Minute)}
+}
+
+func testDelegations(t *testing.T, open Opener) {
+	h := open(t)
+	d := h.First.Delegations()
+	now := time.Now()
+	g := grant("a", "node", "alice", now.Add(time.Hour))
+	if err := d.Put(ctx, g, 10); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.Get(ctx, g.IDHash, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ActorOwner != g.ActorOwner || got.ActorClient != g.ActorClient || got.UserOwner != g.UserOwner ||
+		string(got.User) != string(g.User) || got.Subject != nil || !got.ExpiresAt.Equal(g.ExpiresAt.Truncate(time.Microsecond)) {
+		t.Fatalf("read back %+v", got)
+	}
+	if sub, err := d.SubjectToken(ctx, g.IDHash, now); err != nil || string(sub) != "subject-token-a" {
+		t.Fatalf("the subject token: %q %v", sub, err)
+	}
+	// the subject token is not read after it expires, though the grant lives on
+	if _, err := d.SubjectToken(ctx, g.IDHash, now.Add(45*time.Minute)); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("an expired subject token: %v", err)
+	}
+	if _, err := d.Get(ctx, g.IDHash, now.Add(45*time.Minute)); err != nil {
+		t.Fatalf("the grant after its subject token expired: %v", err)
+	}
+	// an expired grant is not found
+	if _, err := d.Get(ctx, g.IDHash, now.Add(2*time.Hour)); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("an expired grant: %v", err)
+	}
+	// a grant with no subject token kept
+	bare := grant("b", "node", "bob", now.Add(time.Hour))
+	bare.Subject = nil
+	if err := d.Put(ctx, bare, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SubjectToken(ctx, bare.IDHash, now); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("no subject token kept: %v", err)
+	}
+	// another handle (a replica, a restart) honours them
+	if h.Another != nil {
+		d = h.Another().Delegations()
+		if _, err := d.Get(ctx, g.IDHash, now); err != nil {
+			t.Fatalf("through another handle: %v", err)
+		}
+	}
+	// revocation: by id, by actor, by user
+	for _, gg := range []state.Delegation{grant("c", "other", "alice", now.Add(time.Hour)), grant("e", "other", "carol", now.Add(time.Hour))} {
+		if err := d.Put(ctx, gg, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := d.Delete(ctx, bare.IDHash); err != nil || !ok {
+		t.Fatalf("delete: %v %v", ok, err)
+	}
+	if ok, _ := d.Delete(ctx, bare.IDHash); ok {
+		t.Fatal("deleted twice")
+	}
+	if n, err := d.DeleteWhere(ctx, "", "subject:iss|alice"); err != nil || n != 2 {
+		t.Fatalf("by user: %d %v", n, err)
+	}
+	if n, err := d.DeleteWhere(ctx, "client:other", "subject:iss|nobody"); err != nil || n != 0 {
+		t.Fatalf("by actor and user: %d %v", n, err)
+	}
+	if n, err := d.DeleteWhere(ctx, "client:other", ""); err != nil || n != 1 {
+		t.Fatalf("by actor: %d %v", n, err)
+	}
+	if _, err := d.DeleteWhere(ctx, "", ""); err == nil {
+		t.Fatal("revoking everything with no filter")
+	}
+}
+
+// the limit is per actor, taken with the insert: racing puts never pass it
+func testDelegationLimit(t *testing.T, open Opener) {
+	d := open(t).First.Delegations()
+	now := time.Now()
+	const limit = 5
+	var wg sync.WaitGroup
+	var ok, full atomic.Int32
+	for i := range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := d.Put(ctx, grant(fmt.Sprint(i), "node", "alice", now.Add(time.Hour)), limit)
+			switch {
+			case err == nil:
+				ok.Add(1)
+			case errors.Is(err, state.ErrTooMany):
+				full.Add(1)
+			default:
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if ok.Load() != limit || full.Load() != 20-limit {
+		t.Fatalf("%d put, %d refused: the limit is %d", ok.Load(), full.Load(), limit)
+	}
+	if n, _ := d.Count(ctx, "subject:iss|node", now); n != limit {
+		t.Fatalf("count %d", n)
+	}
+	// another actor has its own room; an expired grant takes none
+	if err := d.Put(ctx, grant("x", "other", "alice", now.Add(time.Hour)), limit); err != nil {
+		t.Fatalf("another actor: %v", err)
+	}
+	if n, _ := d.Count(ctx, "subject:iss|node", now.Add(2*time.Hour)); n != 0 {
+		t.Fatalf("expired grants counted: %d", n)
+	}
+}
+
+func testMintedTokens(t *testing.T, open Opener) {
+	d := open(t).First.Delegations()
+	now := time.Now()
+	g := grant("a", "node", "alice", now.Add(time.Hour))
+	if err := d.Put(ctx, g, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Token(ctx, g.IDHash, "aud"); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("no token yet: %v", err)
+	}
+	put := func(v int64, token, failed string) error {
+		var raw []byte
+		if token != "" {
+			raw = []byte(token)
+		}
+		return d.PutToken(ctx, g.IDHash, state.MintedToken{Key: "aud", Version: v, Token: raw, Failed: failed})
+	}
+	if err := put(1, `{"access":"t1"}`, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := put(1, `{"access":"other"}`, ""); !errors.Is(err, state.ErrConflict) {
+		t.Fatalf("a second first token: %v", err)
+	}
+	if err := put(2, `{"access":"t2"}`, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := put(2, `{"access":"stale"}`, ""); !errors.Is(err, state.ErrConflict) {
+		t.Fatalf("a renewal from a stale version: %v", err)
+	}
+	tok, err := d.Token(ctx, g.IDHash, "aud")
+	if err != nil || tok.Version != 2 || string(tok.Token) != `{"access":"t2"}` || tok.Failed != "" {
+		t.Fatalf("the token: %+v %v", tok, err)
+	}
+	if err := put(3, "", "the IdP refused"); err != nil {
+		t.Fatal(err)
+	}
+	if tok, _ := d.Token(ctx, g.IDHash, "aud"); tok.Token != nil || tok.Failed != "the IdP refused" {
+		t.Fatalf("a refusal kept: %+v", tok)
+	}
+	// the grant's tokens go with it; a token for a grant that is gone is not stored
+	if _, err := d.Delete(ctx, g.IDHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Token(ctx, g.IDHash, "aud"); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("a token outlives its grant: %v", err)
+	}
+	if err := put(1, `{"access":"x"}`, ""); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("a token for a grant that is gone: %v", err)
 	}
 }
