@@ -15,4 +15,4 @@ Research lives in the local, gitignored `design/` folder.
 | Spec | Title | Status |
 | --- | --- | --- |
 | [001](001-architecture/spec.md) | tresor-server - state stores, KEK, material by reference, deployment, phases | accepted |
-| [002](002-phase1-azure-mvp/spec.md) | phase 1 - the Azure MVP | draft |
+| [002](002-phase1-azure-mvp/spec.md) | phase 1 - the Azure MVP | accepted |

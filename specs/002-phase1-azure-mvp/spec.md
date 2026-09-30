@@ -1,6 +1,6 @@
 # Spec 002: phase 1 - the Azure MVP
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-09-30
 - **Author**: hugr lab
 
