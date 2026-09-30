@@ -42,7 +42,7 @@ fixes the scope and the concrete choices of phase 1, so it can be built in small
 
 ### The module and the layout
 
-- Module `github.com/hugr-lab/tresor-server`, Go 1.26, no cgo.
+- Module `github.com/hugr-lab/tresor-server`, Go 1.27, no cgo.
 - One binary, `cmd/tresor-server`.
 
 ```text
@@ -315,6 +315,50 @@ azure:
   - the README says the port must be reachable only through the ingress (Container Apps: no
     external port but the ingress's).
 
+### Configuration from the environment
+
+In containers, Kubernetes and Container Apps, the configuration often comes from environment
+variables, not a file. Every setting can be given there. The sources, in order, each over the last
+(loaded with [viper](https://github.com/spf13/viper): the layering and the merge are its):
+
+1. **the file**, `-config <path>`. Optional now: without it, the configuration starts empty.
+2. **`TRESOR_CONFIG`**: the whole YAML document in one variable, in place of a file.
+3. **one variable per setting**: `TRESOR_` and the setting's path in capitals, `__` between the
+   levels.
+   - `TRESOR_LISTEN=0.0.0.0:8080`, `TRESOR_PUBLIC_URL=https://secrets.corp.example`
+   - `TRESOR_STATE__KIND=postgres`, `TRESOR_STATE__DSN=host=… dbname=tresor`, `TRESOR_STATE__AUTH=entra`
+   - `TRESOR_KEYS__KIND=azurekeyvault`, `TRESOR_KEYS__KEY=https://corp-kv.vault.azure.net/keys/tresor-kek`
+   - A text setting takes the value as it is (a URL with `#`, a DSN, `null`: all text).
+   - A list, a section or a number is read as YAML, so it fits in one variable:
+     `TRESOR_POLICY__ADMINS=[role:secrets_admin]`,
+     `TRESOR_ISSUERS=[{issuer: https://login.microsoftonline.com/<tenant>/v2.0, audience: api://tresor}]`.
+   - A variable replaces the whole value at its path. A list is given whole: its items cannot be set
+     one by one (`TRESOR_ISSUERS__0__…` is an error).
+   - A section is set by its keys (`TRESOR_STATE__KIND`), not whole (`TRESOR_STATE` is an error); a
+     whole document goes in `TRESOR_CONFIG`.
+   - Names are in capitals: `TRESOR_state__kind` is an error.
+
+Rules:
+- The result is validated as a file is: unknown keys are errors.
+- **No weak typing.** A number or a flag where a text belongs is an error, never converted
+  (`audience: 0123` must be quoted, not become `83`). Keys are exact: `Listen:`, a key twice, or a
+  dotted key (`policy.admins:`) in a document is an error.
+- An empty variable is an empty text: it clears what the file set.
+  - Only a variable named after a setting is read as configuration (`TRESOR_LISTEN`,
+    `TRESOR_STATE__…`, …; `TRESOR_CONFIG`).
+  - A typo is an error, not ignored: a name with `__`, or a top-level setting's name and `_`, that
+    names no setting (`TRESOR_STATE__KNID`, `TRESOR_STATE_KIND`, `TRESOR_POLICIES__ADMINS`).
+  - Other `TRESOR_` variables are left alone: the ones a `*_env` setting names (whatever their
+    shape: `TRESOR_ISSUERS_SECRET` too), and tresor's test variables.
+  - A `*_env` setting may not name a variable that is read as configuration: its secret would be
+    configuration too.
+- **No secret in the configuration**, from a file or from the environment. Secrets stay where
+  their settings name them (`client_secret_env`, `password_env`, `key_env`): a Kubernetes Secret or a
+  Container Apps secret, as an environment variable of its own.
+- At start, the log names the settings that came from the environment, never their values. A
+  configuration error quotes no value either: a secret put in the wrong place stays out of the log.
+- No `${VAR}` expansion inside the YAML: one way to use the environment, not two.
+
 ### Health
 
 - `GET /healthz`: the process is up. Nothing else.
@@ -345,7 +389,7 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
   - the database's Entra administrator makes it a database user (a one-time step, in the README and
     a script: Bicep cannot create database users).
 - A Container Apps environment, the app with built-in ingress (TLS), two replicas or more.
-- The config as a Container Apps secret mounted as a file. It holds no secret itself.
+- The configuration as environment variables of the app (`TRESOR_…`); nothing to mount.
 - Optional: a VNet, with private endpoints to Key Vault and the database.
 - The cheapest tiers for the live run: PostgreSQL Burstable B1ms; Azure SQL serverless with
   auto-pause.
@@ -467,6 +511,8 @@ The docs site (Docusaurus, as tresor's `website/`) comes with or after (f).
 - **The image registry**: `ghcr.io/hugr-lab/tresor-server`.
 
 - **The region** for live runs: `westeurope`.
+- **Configuration from the environment** (the owner's addition): every setting, as `TRESOR_CONFIG`
+  or one `TRESOR_<PATH>` variable per setting.
 
 ## Open questions
 
