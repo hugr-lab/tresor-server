@@ -52,10 +52,11 @@ type Store interface {
 	// Get returns one secret, or ErrNotFound.
 	Get(ctx context.Context, name string) (*Secret, error)
 	// Update is the one write path. fn gets a copy of the current secret (nil when absent) and returns the
-	// next one (nil: delete) or an error that aborts the write and is returned as it is. A new secret has
-	// version 1; a changed one a version above the current one. The write is compare-and-set on the
-	// version: when another write came first, fn runs again on the fresh secret - so fn must not keep
-	// state from a former run - a bounded number of times, then ErrConflict.
+	// next one (nil: delete; ErrNotFound when there is nothing to delete) or an error that aborts the
+	// write and is returned as it is. A new secret has version 1; a changed one a version above the
+	// current one. The write is compare-and-set on the version: when another write came first, fn runs
+	// again on the fresh secret - so fn must not keep state from a former run - a bounded number of
+	// times, then ErrConflict.
 	Update(ctx context.Context, name string, fn func(current *Secret) (*Secret, error)) (*Secret, error)
 	// Ping says whether the store answers.
 	Ping(ctx context.Context) error

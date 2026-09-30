@@ -191,21 +191,31 @@ func TestIssuerNotUpYet(t *testing.T) {
 	}
 }
 
-// readiness (spec 002): an issuer is ready once its discovery and signing keys have answered, and stays
-// ready through a later outage - its keys are cached
-func TestReady(t *testing.T) {
+// readiness (spec 002): an issuer answers when its discovery and signing keys do; one that answered once is
+// remembered as such, for its outage to be degraded rather than fatal
+func TestCheckIssuer(t *testing.T) {
 	idp := testidp.New(t)
 	v := verifierFor(idp)
-	if err := v.Ready(context.Background()); err != nil {
+	if v.Answered(idp.Issuer) {
+		t.Fatal("answered before any check")
+	}
+	if err := v.CheckIssuer(context.Background(), idp.Issuer); err != nil {
 		t.Fatalf("a live issuer: %v", err)
 	}
 	idp.Stop()
-	if err := v.Ready(context.Background()); err != nil {
-		t.Fatalf("an issuer that answered once: %v", err)
+	if err := v.CheckIssuer(context.Background(), idp.Issuer); err == nil {
+		t.Fatal("an issuer that is down now answers")
+	}
+	if !v.Answered(idp.Issuer) {
+		t.Fatal("an issuer that answered once is forgotten")
 	}
 	down := testidp.New(t)
 	down.Stop()
-	if err := verifierFor(down).Ready(context.Background()); err == nil || !strings.Contains(err.Error(), down.Issuer) {
+	dv := verifierFor(down)
+	if err := dv.CheckIssuer(context.Background(), down.Issuer); err == nil || !strings.Contains(err.Error(), down.Issuer) {
 		t.Fatalf("an issuer that never answered: %v", err)
+	}
+	if dv.Answered(down.Issuer) || len(dv.Issuers()) != 1 {
+		t.Fatal("never answered; one issuer configured")
 	}
 }

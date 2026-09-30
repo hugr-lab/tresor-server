@@ -53,7 +53,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: tresor-build.tar.gz
-          key: tresor-build-linux_amd64-${{ hashFiles('scripts/ci/tresor_checkout.sh') }}
+          # the pin and this workflow (the build's env, the tar's list). The unittest runner keeps the absolute
+          # path it was built in: the conformance jobs unpack it at the same $GITHUB_WORKSPACE/_tresor
+          key: tresor-build-linux_amd64-${{ hashFiles('scripts/ci/tresor_checkout.sh', '.github/workflows/ci.yml') }}
       - name: Check out tresor with its submodules
         if: steps.cache.outputs.cache-hit != 'true'
         run: scripts/ci/tresor_checkout.sh _tresor --submodules

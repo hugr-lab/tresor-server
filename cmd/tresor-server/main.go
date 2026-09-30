@@ -64,10 +64,15 @@ func run(configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	checker := health.New(log, readyInterval,
-		health.Check{Name: "state", Run: st.Ping},
-		health.Check{Name: "issuers", Run: verifier.Ready},
-	)
+	checks := []health.Check{{Name: "state", Run: st.Ping}}
+	for _, iss := range verifier.Issuers() {
+		checks = append(checks, health.Check{
+			Name: "issuer " + iss,
+			Run:  func(ctx context.Context) error { return verifier.CheckIssuer(ctx, iss) },
+			Soft: func() bool { return verifier.Answered(iss) },
+		})
+	}
+	checker := health.New(log, readyInterval, checks...)
 	checker.Start(ctx)
 
 	mux := http.NewServeMux()
@@ -101,6 +106,7 @@ func run(configPath string, log *slog.Logger) error {
 		}
 		return err
 	case <-ctx.Done():
+		checker.Drain() // unready first: the platform stops sending requests here
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return server.Shutdown(shutdown)

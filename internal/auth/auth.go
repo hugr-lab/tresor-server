@@ -68,6 +68,7 @@ var ErrUnauthenticated = errors.New("unauthenticated")
 // server may start before its identity provider does.
 type Verifier struct {
 	issuers map[string]*issuer
+	order   []string
 	// Now is the clock (tests move it).
 	Now func() time.Time
 }
@@ -76,9 +77,9 @@ type issuer struct {
 	cfg        config.Issuer
 	mu         sync.Mutex
 	verifier   *oidc.IDTokenVerifier
-	tokenURL   string // the issuer's token endpoint, from the same discovery (specs/010: exchanges)
-	jwksURL    string // its signing keys, fetched once for readiness (Ready)
-	jwksOK     bool
+	tokenURL   string    // the issuer's token endpoint, from the same discovery (specs/010: exchanges)
+	jwksURL    string    // its signing keys, fetched for readiness (CheckIssuer)
+	answered   bool      // its keys were fetched once
 	failedAt   time.Time // the last failed discovery: retried after retryAfter, not on every request
 	lastFailed error
 }
@@ -95,6 +96,7 @@ func NewVerifier(cfg []config.Issuer) *Verifier {
 	v := &Verifier{issuers: map[string]*issuer{}, Now: time.Now}
 	for _, is := range cfg {
 		v.issuers[config.IssuerKey(is.Issuer)] = &issuer{cfg: is}
+		v.order = append(v.order, is.Issuer)
 	}
 	return v
 }
@@ -137,28 +139,23 @@ func (is *issuer) get(ctx context.Context, now func() time.Time) (*oidc.IDTokenV
 	return is.verifier, nil
 }
 
-// Ready says whether every issuer has answered once: its discovery, and its signing keys (spec 002,
-// /readyz). An issuer that answered stays ready: its keys are cached, and one identity provider's outage
-// must not take every replica out. The error names the issuer, never a token.
-func (v *Verifier) Ready(ctx context.Context) error {
-	for _, is := range v.issuers {
-		if err := is.ready(ctx, v.Now); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// Issuers are the configured issuers' identifiers, in the configuration's order.
+func (v *Verifier) Issuers() []string { return v.order }
 
-func (is *issuer) ready(ctx context.Context, now func() time.Time) error {
-	if _, err := is.get(ctx, now); err != nil {
+// CheckIssuer says whether an issuer answers now: its discovery, and its signing keys (spec 002, /readyz).
+// The error names the issuer; it is for the log. Its keys are fetched on every check: a readiness probe
+// runs it in the background, every 30 s.
+func (v *Verifier) CheckIssuer(ctx context.Context, iss string) error {
+	is, ok := v.issuers[config.IssuerKey(iss)]
+	if !ok {
+		return fmt.Errorf("issuer %q is not configured", iss)
+	}
+	if _, err := is.get(ctx, v.Now); err != nil {
 		return err
 	}
 	is.mu.Lock()
-	done, url := is.jwksOK, is.jwksURL
+	url := is.jwksURL
 	is.mu.Unlock()
-	if done {
-		return nil
-	}
 	if url == "" {
 		return fmt.Errorf("issuer %s names no jwks_uri", is.cfg.Issuer)
 	}
@@ -181,9 +178,21 @@ func (is *issuer) ready(ctx context.Context, now func() time.Time) error {
 		return fmt.Errorf("issuer %s: its signing keys did not answer (%d)", is.cfg.Issuer, resp.StatusCode)
 	}
 	is.mu.Lock()
-	is.jwksOK = true
+	is.answered = true
 	is.mu.Unlock()
 	return nil
+}
+
+// Answered says whether an issuer's keys have been fetched once: after that, its outage leaves the service
+// ready (the keys it verifies with are cached) - reported, not fatal.
+func (v *Verifier) Answered(iss string) bool {
+	is, ok := v.issuers[config.IssuerKey(iss)]
+	if !ok {
+		return false
+	}
+	is.mu.Lock()
+	defer is.mu.Unlock()
+	return is.answered
 }
 
 // TokenURL is the token endpoint of a configured issuer (by a token's iss), from its discovery.

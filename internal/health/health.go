@@ -1,5 +1,6 @@
 // Package health serves /healthz and /readyz (spec 002). The checks run in the background, so a probe never
-// calls the store, a KMS or an identity provider itself. An answer names the failing check, never a value.
+// calls the store, a KMS or an identity provider itself. The answer serves no error text: a failing check is
+// "unavailable" there, and its error goes to the log - it may name hosts, a database, an IdP's reply.
 package health
 
 import (
@@ -11,22 +12,32 @@ import (
 	"time"
 )
 
-// Check is one readiness condition; its error text is served, so it must name what failed, never a value.
+// Check is one readiness condition.
 type Check struct {
 	Name string
 	Run  func(ctx context.Context) error
+	// Soft, when set and true, makes a failure "degraded": reported, but the service stays ready (an issuer
+	// whose keys are cached already: one IdP's outage must not take every replica out).
+	Soft func() bool
 }
 
-// Checker runs its checks every Interval and keeps the last results.
+const (
+	statusOK          = "ok"
+	statusUnavailable = "unavailable"
+	statusDegraded    = "degraded"
+	statusNotChecked  = "not checked yet"
+)
+
+// Checker runs its checks every interval and keeps the last results.
 type Checker struct {
 	checks   []Check
 	interval time.Duration
 	timeout  time.Duration
 	log      *slog.Logger
 
-	mu      sync.Mutex
-	results map[string]string // name -> "" (ok) or the reason
-	ran     bool
+	mu       sync.Mutex
+	results  map[string]string // name -> a status
+	draining bool
 }
 
 // New returns a checker; Start runs it.
@@ -50,9 +61,17 @@ func (c *Checker) Start(ctx context.Context) {
 	}()
 }
 
+// Drain makes the service unready for good: it is shutting down, and new requests belong elsewhere.
+func (c *Checker) Drain() {
+	c.mu.Lock()
+	c.draining = true
+	c.mu.Unlock()
+}
+
 // RunOnce runs every check once, concurrently.
 func (c *Checker) RunOnce(ctx context.Context) {
 	results := make(map[string]string, len(c.checks))
+	errs := make(map[string]error, len(c.checks))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, check := range c.checks {
@@ -61,45 +80,48 @@ func (c *Checker) RunOnce(ctx context.Context) {
 			defer wg.Done()
 			checkCtx, cancel := context.WithTimeout(ctx, c.timeout)
 			defer cancel()
-			reason := ""
-			if err := check.Run(checkCtx); err != nil {
-				reason = err.Error()
+			status, err := statusOK, check.Run(checkCtx)
+			if err != nil {
+				status = statusUnavailable
+				if check.Soft != nil && check.Soft() {
+					status = statusDegraded
+				}
 			}
 			mu.Lock()
-			results[check.Name] = reason
+			results[check.Name], errs[check.Name] = status, err
 			mu.Unlock()
 		}()
 	}
 	wg.Wait()
 	c.mu.Lock()
-	for name, reason := range results {
-		if before, seen := c.results[name]; (!seen || before != reason) && reason != "" {
-			c.log.Warn("not ready", "check", name, "reason", reason)
-		} else if seen && before != "" && reason == "" {
-			c.log.Info("ready again", "check", name)
+	defer c.mu.Unlock()
+	for name, status := range results {
+		before := c.results[name]
+		switch {
+		case status != statusOK && status != before:
+			c.log.Warn("readiness: "+status, "check", name, "error", errs[name].Error())
+		case status == statusOK && before != "" && before != statusOK:
+			c.log.Info("readiness: ok again", "check", name)
 		}
 	}
-	c.results, c.ran = results, true
-	c.mu.Unlock()
+	c.results = results
 }
 
-// Ready is the last results: ok only when every check has run and passed.
+// Ready is the last results: ok only when every check has run and none is unavailable.
 func (c *Checker) Ready() (bool, map[string]string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make(map[string]string, len(c.checks))
-	ok := c.ran
+	ok := !c.draining
 	for _, check := range c.checks {
-		reason, seen := c.results[check.Name]
-		switch {
-		case !seen:
-			reason, ok = "not checked yet", false
-		case reason != "":
-			ok = false
-		default:
-			reason = "ok"
+		status, seen := c.results[check.Name]
+		if !seen {
+			status = statusNotChecked
 		}
-		out[check.Name] = reason
+		if status == statusNotChecked || status == statusUnavailable {
+			ok = false
+		}
+		out[check.Name] = status
 	}
 	return ok, out
 }

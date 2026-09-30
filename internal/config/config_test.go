@@ -42,6 +42,7 @@ func TestRefused(t *testing.T) {
 		"no audience":                  strings.Replace(good, "    audience: duckdb-secrets\n", "", 1),
 		"a bad principal":              strings.Replace(good, "role:secrets_admin", "secrets_admin", 1),
 		"the reference server's store": good + "store: {path: x.enc}\n",
+		"an empty store":               good + "store:\n",
 		"no state":                     strings.Replace(good, "state: {kind: memory}\n", "", 1),
 		"an unknown state kind":        strings.Replace(good, "kind: memory", "kind: etcd", 1),
 		"an actor with no verbs":       strings.Replace(good, "verbs: [use]", "verbs: []", 1),

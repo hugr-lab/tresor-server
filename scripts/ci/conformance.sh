@@ -25,7 +25,8 @@ grep -q "^  kind: $kind$" "$work/server.yaml" || {
 
 # one simple command that is the server (test_keycloak.sh runs it with exec): the config it names is the one
 # test_keycloak.sh writes on this run's ports
-export TRESOR_SERVER_CMD="$work/tresor-server -config \"\$TRESOR_TEST_SERVER_CONFIG\""
+printf -v bin '%q' "$work/tresor-server"
+export TRESOR_SERVER_CMD="$bin -config \"\$TRESOR_TEST_SERVER_CONFIG\""
 export TRESOR_SERVER_CONFIG="$work/server.yaml"
 export TRESOR_SERVER_WAIT="${TRESOR_SERVER_WAIT:-30}"
 echo "conformance: tresor-server on state $kind"

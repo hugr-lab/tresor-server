@@ -22,8 +22,9 @@ type Config struct {
 	State     State    `yaml:"state"`
 	Issuers   []Issuer `yaml:"issuers"`
 	Policy    Policy   `yaml:"policy"`
-	// Store is the reference server's encrypted file: kept only to refuse a config that still has it
-	Store any `yaml:"store"`
+	// Store is the reference server's encrypted file: kept only to refuse a config that still has it (a
+	// node, so an empty `store:` is seen too)
+	Store yaml.Node `yaml:"store"`
 }
 
 // TLS names the certificate the server serves with; empty means plain http (loopback only).
@@ -160,7 +161,7 @@ func (c *Config) validate() error {
 	if u.Scheme == "http" && !IsLoopback(u.Hostname()) {
 		return fmt.Errorf("public_url %q: http only for a loopback host", c.PublicURL)
 	}
-	if c.Store != nil {
+	if c.Store.Kind != 0 {
 		return errors.New("store: is the reference server's encrypted file - this service keeps its state as " +
 			"state: names it (state: {kind: memory})")
 	}
