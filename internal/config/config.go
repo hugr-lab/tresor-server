@@ -8,11 +8,8 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Config is the whole server configuration.
@@ -23,9 +20,9 @@ type Config struct {
 	State     State    `yaml:"state"`
 	Issuers   []Issuer `yaml:"issuers"`
 	Policy    Policy   `yaml:"policy"`
-	// Store is the reference server's encrypted file: kept only to refuse a config that still has it (a
-	// node, so an empty `store:` is seen too)
-	Store yaml.Node `yaml:"store"`
+	// Store is the reference server's encrypted file: kept only to refuse a config that still has it (an
+	// empty `store:` too: see load)
+	Store any `yaml:"store"`
 }
 
 // TLS names the certificate the server serves with; empty means plain http (loopback only).
@@ -104,44 +101,6 @@ type ActorRule struct {
 	Verbs     []string `yaml:"verbs"`
 }
 
-// typeError is one entry of a yaml.TypeError: its line, what was found and what was wanted - the value it
-// quotes in between is dropped (a secret put in the wrong place must not reach the log).
-var typeError = regexp.MustCompile(`(?s)^(line \d+): cannot unmarshal (\S+) .* into (\S+)$`)
-
-func decodeError(err error) error {
-	var te *yaml.TypeError
-	if !errors.As(err, &te) {
-		return redact(err)
-	}
-	out := make([]string, 0, len(te.Errors))
-	for _, e := range te.Errors {
-		switch m := typeError.FindStringSubmatch(e); {
-		case m != nil:
-			out = append(out, fmt.Sprintf("%s: a %s where a %s belongs", m[1], m[2], m[3]))
-		case strings.Contains(e, ": field ") && strings.Contains(e, " not found in type "):
-			out = append(out, e) // an unknown key: the key's name, which the file's author wrote
-		default:
-			line, _, _ := strings.Cut(e, ":")
-			out = append(out, line+": invalid")
-		}
-	}
-	return errors.New(strings.Join(out, "; "))
-}
-
-// Parse validates a YAML document; unknown keys are an error, not ignored.
-func Parse(data []byte) (*Config, error) {
-	var cfg Config
-	dec := yaml.NewDecoder(strings.NewReader(string(data)))
-	dec.KnownFields(true)
-	if err := dec.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("config: %w", decodeError(err))
-	}
-	if err := cfg.validate(); err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
-	return &cfg, nil
-}
-
 var allowedAlgorithms = map[string]bool{
 	"RS256": true, "RS384": true, "RS512": true,
 	"PS256": true, "PS384": true, "PS512": true,
@@ -177,7 +136,7 @@ func (c *Config) validate() error {
 	if u.Scheme == "http" && !IsLoopback(u.Hostname()) {
 		return fmt.Errorf("public_url %q: http only for a loopback host", c.PublicURL)
 	}
-	if c.Store.Kind != 0 {
+	if c.Store != nil {
 		return errors.New("store: is the reference server's encrypted file - this service keeps its state as " +
 			"state: names it (state: {kind: memory})")
 	}

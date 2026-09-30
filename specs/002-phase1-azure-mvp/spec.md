@@ -318,7 +318,8 @@ azure:
 ### Configuration from the environment
 
 In containers, Kubernetes and Container Apps, the configuration often comes from environment
-variables, not a file. Every setting can be given there. The sources, in order, each over the last:
+variables, not a file. Every setting can be given there. The sources, in order, each over the last
+(loaded with [viper](https://github.com/spf13/viper): the layering and the merge are its):
 
 1. **the file**, `-config <path>`. Optional now: without it, the configuration starts empty.
 2. **`TRESOR_CONFIG`**: the whole YAML document in one variable, in place of a file.
@@ -333,7 +334,9 @@ variables, not a file. Every setting can be given there. The sources, in order, 
      `TRESOR_ISSUERS=[{issuer: https://login.microsoftonline.com/<tenant>/v2.0, audience: api://tresor}]`.
    - A variable replaces the whole value at its path. A list is given whole: its items cannot be set
      one by one (`TRESOR_ISSUERS__0__…` is an error).
-   - A section's variable comes before its keys' (`TRESOR_STATE`, then `TRESOR_STATE__KIND` over it).
+   - A section is set by its keys (`TRESOR_STATE__KIND`), not whole (`TRESOR_STATE` is an error); a
+     whole document goes in `TRESOR_CONFIG`.
+   - Names are in capitals: `TRESOR_state__kind` is an error.
 
 Rules:
 - The result is validated as a file is: unknown keys are errors.
@@ -341,7 +344,6 @@ Rules:
     `TRESOR_STATE__…`, …; `TRESOR_CONFIG`).
   - A typo is an error, not ignored: a name with `__`, or a top-level setting's name and `_`, that
     names no setting (`TRESOR_STATE__KNID`, `TRESOR_STATE_KIND`, `TRESOR_POLICIES__ADMINS`).
-  - Two variables for one setting (`TRESOR_STATE__KIND`, `TRESOR_state__kind`) are an error.
   - Other `TRESOR_` variables are left alone: the ones a setting names (`client_secret_env`,
     `key_env`), and tresor's test variables.
   - A `*_env` setting may not name a variable that is read as configuration: its secret would be
