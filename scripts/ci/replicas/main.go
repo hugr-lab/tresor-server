@@ -37,7 +37,8 @@ func main() {
 		log.Fatal("usage: replicas -n 2 -config <file> <tresor-server>")
 	}
 	if err := run(flag.Arg(0), *configPath, *n); err != nil {
-		log.Fatalf("replicas: %v", err)
+		log.Printf("replicas: %v", err) // after run's deferred stops: no replica is left behind
+		os.Exit(1)
 	}
 }
 
@@ -61,12 +62,16 @@ func run(server, configPath string, n int) error {
 	var targets []*url.URL
 	exited := make(chan error, n)
 	var children []*exec.Cmd
+	var done []chan struct{} // closed when a child has exited: it is waited on once, by its goroutine
 	defer func() {
 		for _, c := range children {
 			_ = c.Process.Signal(syscall.SIGTERM)
 		}
-		for _, c := range children {
-			_ = c.Wait()
+		for _, d := range done {
+			select {
+			case <-d:
+			case <-time.After(10 * time.Second):
+			}
 		}
 	}()
 	for i := range n {
@@ -81,7 +86,13 @@ func run(server, configPath string, n int) error {
 			return err
 		}
 		children = append(children, cmd)
-		go func() { exited <- fmt.Errorf("replica %d exited: %v", i+1, cmd.Wait()) }()
+		d := make(chan struct{})
+		done = append(done, d)
+		go func() {
+			err := cmd.Wait()
+			close(d)
+			exited <- fmt.Errorf("replica %d exited: %v", i+1, err)
+		}()
 		targets = append(targets, &url.URL{Scheme: "http", Host: addr})
 	}
 	// the proxy opens once every replica answers: whoever waits on it waits on them all
@@ -114,6 +125,8 @@ func run(server, configPath string, n int) error {
 	}
 }
 
+var probe = &http.Client{Timeout: 2 * time.Second}
+
 // waitFor polls url until it answers, a replica exits, or 60 s pass.
 func waitFor(ctx context.Context, target string, exited <-chan error) error {
 	deadline := time.Now().Add(60 * time.Second)
@@ -125,7 +138,7 @@ func waitFor(ctx context.Context, target string, exited <-chan error) error {
 			return ctx.Err()
 		default:
 		}
-		if res, err := http.Get(target); err == nil {
+		if res, err := probe.Get(target); err == nil {
 			res.Body.Close()
 			return nil
 		}

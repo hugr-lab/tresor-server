@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+
+	"github.com/hugr-lab/tresor-server/internal/config"
 )
 
 // Login is how the service logs in to its database, asked again for each new connection (spec 002): a
@@ -63,15 +64,4 @@ func (l PasswordLogin) Password(context.Context) (string, error) {
 }
 
 // dsnHasPassword says whether a DSN carries a password: never allowed - the password comes from the Login.
-func dsnHasPassword(dsn string) bool {
-	if u, err := url.Parse(dsn); err == nil && u.Scheme != "" && u.User != nil {
-		if _, set := u.User.Password(); set {
-			return true
-		}
-		if u.Query().Has("password") {
-			return true
-		}
-	}
-	lower := strings.ToLower(dsn)
-	return strings.Contains(lower, "password=") || strings.Contains(lower, "pwd=")
-}
+func dsnHasPassword(dsn string) bool { return config.DSNHasPassword(dsn) }

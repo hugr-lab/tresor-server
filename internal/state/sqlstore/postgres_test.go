@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -92,5 +93,19 @@ func TestPostgresRefusesAPasswordInTheDSN(t *testing.T) {
 			!dsnHasPassword(dsn) {
 			t.Errorf("%s: accepted", dsn)
 		}
+	}
+}
+
+// off this machine the password (an Entra token) goes only over TLS with the certificate checked
+func TestPostgresRequiresVerifiedTLS(t *testing.T) {
+	for _, dsn := range []string{"host=db.example user=u dbname=d", "host=db.example user=u dbname=d sslmode=require",
+		"postgres://u@db.example/d?sslmode=prefer", "postgres://u@db.example/d"} {
+		_, err := OpenPostgres(ctx, dsn, PasswordLogin{Env: "X"}, 1, kek(t, 1), Options{})
+		if err == nil || !strings.Contains(err.Error(), "verify-full") {
+			t.Errorf("%s: %v", dsn, err)
+		}
+	}
+	if sslMode("host=db user=u sslmode = 'verify-full'") != "verify-full" || sslMode("postgres://u@h/d?sslmode=verify-full") != "verify-full" {
+		t.Fatal("sslmode not read")
 	}
 }

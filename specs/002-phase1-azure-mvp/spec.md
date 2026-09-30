@@ -207,6 +207,11 @@ The schema (migration `0001`, one SQL file per dialect, applied in `schema_migra
   role is the managed identity's (Azure Database for PostgreSQL Flexible Server).
 - `auth: password`: from `password_env` or `password_file`, read again for each new connection: a
   rotation needs no restart.
+- Off this machine, `sslmode=verify-full` is required: the password (an Entra token) goes over the
+  connection, and pgx's default (`prefer`) falls back to plain text while `require` checks no
+  certificate.
+- The pool: 10 connections unless `max_open_conns` says otherwise (a Burstable server has few), a
+  connection lives 30 minutes, a connect times out after 10 s.
 
 **SQL Server / Azure SQL** (`go-mssqldb`):
 - several replicas;
@@ -319,7 +324,7 @@ The reference server's YAML (unknown keys are errors), minus its `store:`, plus:
 state:
   kind: postgres                 # memory | sqlite | postgres | sqlserver
   # sqlite:    path: /data/tresor.db
-  # postgres:  dsn: host=corp-pg.postgres.database.azure.com dbname=tresor user=tresor-id sslmode=require
+  # postgres:  dsn: host=corp-pg.postgres.database.azure.com dbname=tresor user=tresor-id sslmode=verify-full
   # sqlserver: dsn: sqlserver://corp-sql.database.windows.net?database=tresor
   auth: entra                    # entra | password (password_env or password_file)
   max_open_conns: 10

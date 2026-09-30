@@ -49,13 +49,10 @@ func (d delegations) Put(ctx context.Context, g state.Delegation, maxPerActor in
 	if err := s.d.Lock(ctx, tx, "tresor-server/grants/"+g.ActorOwner); err != nil {
 		return err
 	}
-	now := time.Now().UnixMicro()
-	if _, err := tx.ExecContext(ctx, s.q(`DELETE FROM delegations WHERE expires_at <= ?`), now); err != nil {
-		return err
-	}
+	// only this actor's rows: another actor's are another lock's (Purge takes them all, on its own)
 	var n int
-	if err := tx.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM delegations WHERE actor_owner = ?`), g.ActorOwner).
-		Scan(&n); err != nil {
+	if err := tx.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM delegations WHERE actor_owner = ? AND expires_at > ?`),
+		g.ActorOwner, time.Now().UnixMicro()).Scan(&n); err != nil {
 		return err
 	}
 	if n >= maxPerActor {

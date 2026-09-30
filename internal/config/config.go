@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -287,11 +288,10 @@ func (s *State) validateServer(identity string) error {
 		}
 		return nil
 	}
-	lower := strings.ToLower(s.DSN)
 	switch {
 	case s.DSN == "":
 		return errors.New("state.dsn is required: the server, the database and the user")
-	case strings.Contains(lower, "password") || strings.Contains(lower, "pwd="):
+	case DSNHasPassword(s.DSN):
 		return errors.New("state.dsn carries no password: it comes from state.auth")
 	case s.MaxOpenConns < 0:
 		return errors.New("state.max_open_conns is positive")
@@ -316,6 +316,24 @@ func (s *State) validateServer(identity string) error {
 		return errors.New("state.auth is entra or password")
 	}
 	return nil
+}
+
+// dsnPasswordKey is a password in a keyword DSN (key=value pairs, spaces allowed around =).
+var dsnPasswordKey = regexp.MustCompile(`(?i)(^|[\s;&])(password|pwd)\s*=`)
+
+// DSNHasPassword says whether a DSN carries a password - a URL's user info or query, or a keyword - never
+// allowed: the password comes from state.auth. A name that merely contains the word does not count.
+func DSNHasPassword(dsn string) bool {
+	if u, err := url.Parse(dsn); err == nil && u.Scheme != "" && u.Host != "" {
+		if u.User != nil {
+			if _, set := u.User.Password(); set {
+				return true
+			}
+		}
+		// a query's parameters, split at & or ; (SQL Server's URLs use both)
+		return dsnPasswordKey.MatchString(u.RawQuery)
+	}
+	return dsnPasswordKey.MatchString(dsn)
 }
 
 func (k *Keys) validate(required bool) error {

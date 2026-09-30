@@ -157,3 +157,21 @@ func TestDatabaseServer(t *testing.T) {
 		}
 	}
 }
+
+func TestDSNHasPassword(t *testing.T) {
+	for dsn, want := range map[string]bool{
+		"postgres://u:secret@h/db":                      true,
+		"postgres://u@h/db?password=secret":             true,
+		"host=h user=u password=secret dbname=db":       true,
+		"host=h user=u password = secret":               true,
+		"sqlserver://h?database=db;Pwd=x":               true,
+		"postgres://u@h/passwords_db?sslmode=disable":   false,
+		"host=h user=password_reader dbname=passwords":  false,
+		"host=h user=u dbname=db sslmode=verify-full":   false,
+		"sqlserver://h?database=password_vault&fedauth": false,
+	} {
+		if got := DSNHasPassword(dsn); got != want {
+			t.Errorf("%s: %v", dsn, got)
+		}
+	}
+}

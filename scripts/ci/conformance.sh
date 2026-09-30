@@ -17,7 +17,8 @@ trap 'rm -rf "$work"' EXIT
 	exit 1
 }
 (cd "$root" && GOWORK=off CGO_ENABLED=0 go build -o "$work/tresor-server" ./cmd/tresor-server &&
-	GOWORK=off CGO_ENABLED=0 go build -o "$work/replicas" ./scripts/ci/replicas)
+	GOWORK=off CGO_ENABLED=0 go build -o "$work/replicas" ./scripts/ci/replicas &&
+	GOWORK=off CGO_ENABLED=0 go build -o "$work/pgdb" ./scripts/ci/pgdb)
 
 # one simple command that is the server (test_keycloak.sh runs it with exec): the config it names is the one
 # test_keycloak.sh writes on this run's ports
@@ -37,13 +38,16 @@ export TRESOR_SERVER_WAIT="${TRESOR_SERVER_WAIT:-30}"
 case "$kind" in
 memory) ;;
 postgres)
-	# TRESOR_TEST_POSTGRES: a fresh database for this run, no password in it; the password in
-	# TRESOR_TEST_POSTGRES_PASSWORD. A local KEK made for the run
+	# TRESOR_TEST_POSTGRES: the server's admin DSN, no password in it (the password in
+	# TRESOR_TEST_POSTGRES_PASSWORD); a database of this run's is made there, and dropped after. A local
+	# KEK made for the run
 	[ -n "${TRESOR_TEST_POSTGRES:-}" ] || {
-		echo "conformance: TRESOR_TEST_POSTGRES names no database" >&2
+		echo "conformance: TRESOR_TEST_POSTGRES names no server" >&2
 		exit 1
 	}
-	export TRESOR_STATE__DSN="$TRESOR_TEST_POSTGRES" TRESOR_STATE__AUTH=password
+	pg_run="$("$work/pgdb" create "$TRESOR_TEST_POSTGRES")"
+	trap '"$work/pgdb" drop "$TRESOR_TEST_POSTGRES" "$pg_run" || true; rm -rf "$work"' EXIT
+	export TRESOR_STATE__DSN="$pg_run" TRESOR_STATE__AUTH=password
 	export TRESOR_STATE__PASSWORD_ENV=TRESOR_TEST_POSTGRES_PASSWORD
 	export TRESOR_KEYS__KIND=local TRESOR_KEYS__KEY_ENV=TRESOR_TEST_KEK
 	TRESOR_TEST_KEK="$(openssl rand -base64 32)"
@@ -76,5 +80,12 @@ if [ "$kind" = sqlite ]; then
 		fi
 	done
 	[ "$status" = 0 ] && echo "conformance: the SQLite database holds no material in the clear"
+fi
+if [ "$kind" = postgres ]; then
+	if "$work/pgdb" clear "$pg_run" s3cr3t; then
+		echo "conformance: the PostgreSQL database holds no material in the clear"
+	else
+		status=1
+	fi
 fi
 exit "$status"
