@@ -197,3 +197,21 @@ func TestMaterialConfig(t *testing.T) {
 		t.Fatalf("a sovereign cloud's suffix, a 5-minute cache: %v", err)
 	}
 }
+
+// TLS ending at the platform's ingress (Container Apps): plain http on any address, public_url https
+func TestTLSOffload(t *testing.T) {
+	doc := strings.Replace(strings.Replace(good, "listen: 127.0.0.1:8443", "listen: 0.0.0.0:8080", 1),
+		"public_url: http://127.0.0.1:8443", "public_url: https://secrets.corp.example", 1) + "tls: {offload: true}\n"
+	if _, err := Parse([]byte(doc)); err != nil {
+		t.Fatal(err)
+	}
+	for name, bad := range map[string]string{
+		"no offload":           strings.Replace(doc, "tls: {offload: true}\n", "", 1),
+		"http behind it":       strings.Replace(doc, "https://secrets.corp.example", "http://secrets.corp.example", 1),
+		"a cert and offloaded": strings.Replace(doc, "tls: {offload: true}", "tls: {offload: true, cert: c, key: k}", 1),
+	} {
+		if _, err := Parse([]byte(bad)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

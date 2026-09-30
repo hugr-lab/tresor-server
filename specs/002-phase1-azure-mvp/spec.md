@@ -447,10 +447,14 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
 - A user-assigned managed identity:
   - `Key Vault Crypto Service Encryption User` on the KEK (the vault on the RBAC permission model);
   - `Key Vault Secrets User` on each vault in the allowlist;
-  - the database's Entra administrator makes it a database user (a one-time step, in the README and
-    a script: Bicep cannot create database users).
+  - it is the database server's Entra administrator: Bicep cannot create database users, and this
+    needs no step by hand. The README says how to tighten it (an administrator of one's own, a role
+    that owns the one database).
 - A Container Apps environment, the app with built-in ingress (TLS), two replicas or more.
 - The configuration as environment variables of the app (`TRESOR_…`); nothing to mount.
+- A Key Vault of the deployment's own (RBAC, purge protection) for the KEK and for references; the
+  database Entra-only (PostgreSQL: password authentication disabled; Azure SQL: Entra-only).
+- Probes: liveness `/healthz`, readiness `/readyz`, a startup probe.
 - Optional: a VNet, with private endpoints to Key Vault and the database.
 - The cheapest tiers for the live run: PostgreSQL Burstable B1ms; Azure SQL serverless with
   auto-pause.

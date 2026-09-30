@@ -11,6 +11,10 @@ and the secrets the caller's roles may use become part of DuckDB's own secret lo
 - **No static passwords**: managed identities, database logins through Entra ID or IAM.
 - **One container**; Azure Container Apps first, then Kubernetes (Helm).
 
+**Run it**: the image is `ghcr.io/hugr-lab/tresor-server` (`:edge` from main, `:vX.Y.Z` from a release), and
+[deploy/azure-container-apps](deploy/azure-container-apps/README.md) deploys it on Azure Container Apps - a
+database, the KEK in Key Vault, a managed identity, no password.
+
 Status: phase 1 in progress - see [spec 001](specs/001-architecture/spec.md) (the architecture) and
 [spec 002](specs/002-phase1-azure-mvp/spec.md) (phase 1, the Azure MVP).
 
