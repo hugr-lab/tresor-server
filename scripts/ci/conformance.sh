@@ -26,5 +26,34 @@ export TRESOR_SERVER_CONFIG="$root/testdata/keycloak/server.yaml"
 # the store from the environment, over the file's (spec 002: configuration from the environment)
 export TRESOR_STATE__KIND="$kind"
 export TRESOR_SERVER_WAIT="${TRESOR_SERVER_WAIT:-30}"
+case "$kind" in
+memory) ;;
+sqlite)
+	# a database of this run's, sealed under a local KEK made for it
+	export TRESOR_STATE__PATH="$work/tresor.db" TRESOR_KEYS__KIND=local TRESOR_KEYS__KEY_ENV=TRESOR_TEST_KEK
+	TRESOR_TEST_KEK="$(openssl rand -base64 32)"
+	export TRESOR_TEST_KEK
+	;;
+*)
+	echo "conformance: no setup for state $kind" >&2
+	exit 1
+	;;
+esac
 echo "conformance: tresor-server on state $kind"
-"$tresor/scripts/ci/test_keycloak.sh" "$tresor/build/release/test/unittest"
+status=0
+"$tresor/scripts/ci/test_keycloak.sh" "$tresor/build/release/test/unittest" || status=$?
+if [ "$kind" = sqlite ]; then
+	# the material test_keycloak.sh seeded (s3cr3t) was written - and is sealed at rest
+	[ -s "$work/tresor.db" ] || {
+		echo "conformance: no SQLite database was written" >&2
+		status=1
+	}
+	for f in "$work/tresor.db" "$work/tresor.db-wal"; do
+		if [ -f "$f" ] && grep -aq 's3cr3t' "$f"; then
+			echo "conformance: $(basename "$f") holds the seeded material in the clear" >&2
+			status=1
+		fi
+	done
+	[ "$status" = 0 ] && echo "conformance: the SQLite database holds no material in the clear"
+fi
+exit "$status"

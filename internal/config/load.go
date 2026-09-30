@@ -86,7 +86,7 @@ func load(data []byte, withEnv bool) (*Config, FromEnv, error) {
 	err = v.UnmarshalExact(&cfg, func(c *mapstructure.DecoderConfig) {
 		c.TagName = "yaml"
 		c.WeaklyTypedInput = false // `audience: 0123` must not become "83": a number for a text is an error
-		c.DecodeHook = typed
+		c.DecodeHook = mapstructure.ComposeDecodeHookFunc(mapstructure.StringToTimeDurationHookFunc(), typed)
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("config: %w", unquoted(err))

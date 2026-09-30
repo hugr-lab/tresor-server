@@ -241,7 +241,9 @@ Entra on Azure.
 - **Rotation**: a new KEK version gives a new data key for new writes. Old data keys are rewrapped
   under the new version by `tresor-server rewrap` (a command of the binary). Material is never
   re-encrypted for it.
-- The `memory` store seals too, with a local KEK made at start: one code path.
+- The `memory` store does not seal: it has nothing at rest. It behaves as the others otherwise (a list
+  carries no params).
+- A secret whose params do not open is not rewritten either: an update of it fails, as a read does.
 
 ### Material by reference: `ref+azkv://`
 
@@ -437,9 +439,11 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
 
 1. **(a) skeleton**: the module, the port from tresor, `state/memory`, `/healthz` `/readyz`, CI with
    conformance on memory (with the tresor hook).
-2. **(b) SQL and SQLite**: `sqlstore`, the dialect type, the migrations, the lease, delegations and
-   their minted tokens in the store, the StateStore suite; conformance on SQLite.
-3. **(c) the KEK and the envelope**: `keys`, `local`, `azurekeyvault`, data keys, `rewrap`.
+2. **(b) SQL, SQLite and the envelope**: `sqlstore`, the dialect type, the migrations, the lease, the
+   StateStore suite; `keys`, the envelope, data keys, the `local` KEK. SQLite never holds material in
+   the clear, so the envelope comes with it. Conformance on SQLite.
+3. **(c) delegations and Key Vault**: delegations and their minted tokens in the store (sealed from
+   the start), the `azurekeyvault` KEK, `rewrap`.
 4. **(d) PostgreSQL and SQL Server**: the two dialects, Entra logins, the suite and conformance on
    both, two replicas in CI.
 5. **(e) references**: `material`, `azkv`, the allowlist.

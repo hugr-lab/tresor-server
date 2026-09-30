@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 const good = `
@@ -81,5 +82,32 @@ func TestExchangeClient(t *testing.T) {
 	}
 	if _, err := Parse([]byte(strings.Replace(with, "client_secret_env: TRESOR_TEST_EX", "client_secret: x", 1))); err == nil {
 		t.Fatal("a client secret in the file")
+	}
+}
+
+// a store on disk needs a KEK: material is sealed at rest (spec 002)
+func TestStateAndKeys(t *testing.T) {
+	sqlite := strings.Replace(good, "state: {kind: memory}", "state: {kind: sqlite, path: /data/tresor.db}", 1)
+	withKeys := sqlite + "keys: {kind: local, key_env: TRESOR_TEST_KEK, data_key_max_age: 720h, cache_ttl: 1m}\n"
+	cfg, err := Parse([]byte(withKeys))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Keys.DataKeyMaxAge != 720*time.Hour || cfg.Keys.CacheTTL != time.Minute {
+		t.Fatalf("durations: %+v", cfg.Keys)
+	}
+	for name, doc := range map[string]string{
+		"sqlite without keys":     sqlite,
+		"sqlite without a path":   strings.Replace(withKeys, ", path: /data/tresor.db", "", 1),
+		"a key from env and file": strings.Replace(withKeys, "key_env: TRESOR_TEST_KEK", "key_env: A, key_file: /k", 1),
+		"no key source":           strings.Replace(withKeys, "key_env: TRESOR_TEST_KEK, ", "", 1),
+		"an unknown key kind":     strings.Replace(withKeys, "kind: local", "kind: hsm", 1),
+		"a KEK in a setting's variable": strings.Replace(withKeys, "key_env: TRESOR_TEST_KEK",
+			"key_env: TRESOR_LISTEN", 1),
+		"a negative duration": strings.Replace(withKeys, "cache_ttl: 1m", "cache_ttl: -1m", 1),
+	} {
+		if _, err := Parse([]byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }

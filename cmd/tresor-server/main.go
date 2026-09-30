@@ -22,8 +22,11 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/health"
+	"github.com/hugr-lab/tresor-server/internal/keys"
+	"github.com/hugr-lab/tresor-server/internal/keys/local"
 	"github.com/hugr-lab/tresor-server/internal/state"
 	"github.com/hugr-lab/tresor-server/internal/state/memory"
+	"github.com/hugr-lab/tresor-server/internal/state/sqlstore"
 )
 
 // readyInterval is how often the readiness checks run (spec 002).
@@ -40,12 +43,35 @@ func main() {
 	}
 }
 
-func openState(cfg config.State) (state.Store, error) {
-	switch cfg.Kind {
+// openState opens the configured store, and the readiness checks it brings (the KEK's).
+func openState(ctx context.Context, cfg *config.Config, log *slog.Logger) (state.Store, []health.Check, error) {
+	switch cfg.State.Kind {
 	case "memory":
-		return memory.New(), nil
+		return memory.New(), nil, nil
+	case "sqlite":
+		wrapper, err := keyWrapper(cfg.Keys)
+		if err != nil {
+			return nil, nil, err
+		}
+		st, err := sqlstore.OpenSQLite(ctx, cfg.State.Path, wrapper, sqlstore.Options{Log: log,
+			Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}})
+		if err != nil {
+			return nil, nil, err
+		}
+		return st, []health.Check{{Name: "keys", Run: st.Envelope().Check}}, nil
 	}
-	return nil, fmt.Errorf("state.kind %q is not built in", cfg.Kind)
+	return nil, nil, fmt.Errorf("state.kind %s is not built in", cfg.State.Kind)
+}
+
+// keyWrapper is the configured KEK.
+func keyWrapper(cfg config.Keys) (keys.KeyWrapper, error) {
+	switch {
+	case cfg.Kind == "local" && cfg.KeyEnv != "":
+		return local.FromEnv(cfg.KeyEnv)
+	case cfg.Kind == "local":
+		return local.FromFile(cfg.KeyFile)
+	}
+	return nil, fmt.Errorf("keys.kind %s is not built in", cfg.Kind)
 }
 
 func run(configPath string, log *slog.Logger) error {
@@ -59,7 +85,7 @@ func run(configPath string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	st, err := openState(cfg.State)
+	st, stateChecks, err := openState(ctx, cfg, log)
 	if err != nil {
 		return err
 	}
@@ -69,7 +95,7 @@ func run(configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	checks := []health.Check{{Name: "state", Run: st.Ping}}
+	checks := append([]health.Check{{Name: "state", Run: st.Ping}}, stateChecks...)
 	for _, iss := range verifier.Issuers() {
 		checks = append(checks, health.Check{
 			Name: "issuer " + iss,

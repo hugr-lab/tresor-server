@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Config is the whole server configuration.
@@ -18,6 +19,7 @@ type Config struct {
 	PublicURL string   `yaml:"public_url"`
 	TLS       TLS      `yaml:"tls"`
 	State     State    `yaml:"state"`
+	Keys      Keys     `yaml:"keys"`
 	Issuers   []Issuer `yaml:"issuers"`
 	Policy    Policy   `yaml:"policy"`
 	// Store is the reference server's encrypted file: kept only to refuse a config that still has it (an
@@ -33,12 +35,29 @@ type TLS struct {
 
 // State says where the service keeps what it knows (spec 002).
 type State struct {
-	// Kind is the store: memory (lost when the process ends).
+	// Kind is the store: memory (lost when the process ends), sqlite (one replica).
 	Kind string `yaml:"kind"`
+	// Path is the SQLite database's file.
+	Path string `yaml:"path"`
 }
 
 // StateKinds are the stores this build knows.
-var StateKinds = []string{"memory"}
+var StateKinds = []string{"memory", "sqlite"}
+
+// Keys is the KEK the params are sealed under (spec 002): local, a 32-byte key from the environment or a
+// file.
+type Keys struct {
+	Kind    string `yaml:"kind"`
+	KeyEnv  string `yaml:"key_env"`
+	KeyFile string `yaml:"key_file"`
+	// DataKeyMaxAge: a data key older than this is replaced for new values (default 30 days).
+	DataKeyMaxAge time.Duration `yaml:"data_key_max_age"`
+	// CacheTTL: how long an unwrapped data key stays in memory (default 5 minutes).
+	CacheTTL time.Duration `yaml:"cache_ttl"`
+}
+
+// KeyKinds are the KEKs this build knows.
+var KeyKinds = []string{"local"}
 
 // Issuer is one identity provider the server accepts tokens from.
 type Issuer struct {
@@ -146,6 +165,12 @@ func (c *Config) validate() error {
 	if !slices.Contains(StateKinds, c.State.Kind) {
 		return fmt.Errorf("state.kind is none of %s", strings.Join(StateKinds, " | "))
 	}
+	if c.State.Kind == "sqlite" && c.State.Path == "" {
+		return errors.New("state.path is required for sqlite")
+	}
+	if err := c.Keys.validate(c.State.Kind != "memory"); err != nil {
+		return err
+	}
 	if len(c.Issuers) == 0 {
 		return errors.New("at least one issuer is required")
 	}
@@ -220,6 +245,30 @@ func (c *Config) validate() error {
 				return fmt.Errorf("policy.actors[%d].verbs[%d] is not a verb", i, j)
 			}
 		}
+	}
+	return nil
+}
+
+func (k *Keys) validate(required bool) error {
+	if k.Kind == "" {
+		if required {
+			return errors.New("keys: is required with a state store on disk - material is sealed at rest " +
+				"(keys: {kind: local, key_env: ...})")
+		}
+		return nil
+	}
+	if !slices.Contains(KeyKinds, k.Kind) {
+		return fmt.Errorf("keys.kind is none of %s", strings.Join(KeyKinds, " | "))
+	}
+	if (k.KeyEnv == "") == (k.KeyFile == "") {
+		return errors.New("keys: a local KEK comes from key_env or key_file - one of them")
+	}
+	if k.KeyEnv != "" && IsSettingVariable(k.KeyEnv) {
+		return fmt.Errorf("keys.key_env names %s, which is read as configuration - give the KEK a variable of "+
+			"its own", k.KeyEnv)
+	}
+	if k.DataKeyMaxAge < 0 || k.CacheTTL < 0 {
+		return errors.New("keys: data_key_max_age and cache_ttl are positive")
 	}
 	return nil
 }

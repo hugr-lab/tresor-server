@@ -104,7 +104,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        state: [memory]
+        state: [memory, sqlite]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
