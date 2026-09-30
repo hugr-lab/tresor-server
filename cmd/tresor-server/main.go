@@ -44,6 +44,12 @@ func main() {
 	configPath := flags.String("config", "", "the configuration file (optional: TRESOR_CONFIG and TRESOR_<SETTING> "+
 		"variables are read over it)")
 	_ = flags.Parse(args)
+	if flags.NArg() > 0 {
+		// `tresor-server -config x rewrap` must not start the service: the command comes first
+		log.Error("tresor-server: unexpected arguments (usage: tresor-server [rewrap] -config <file>)",
+			"arguments", flags.Args())
+		os.Exit(2)
+	}
 	run := serve
 	if command == "rewrap" {
 		run = rewrap
@@ -61,6 +67,12 @@ func rewrap(configPath string, log *slog.Logger) error {
 	cfg, _, err := config.Load(configPath)
 	if err != nil {
 		return err
+	}
+	if cfg.State.Kind == "sqlite" {
+		// a wrong path must not create an empty database
+		if _, err := os.Stat(cfg.State.Path); err != nil {
+			return fmt.Errorf("state.path: %w", err)
+		}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

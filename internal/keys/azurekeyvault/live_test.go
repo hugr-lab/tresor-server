@@ -45,8 +45,8 @@ func TestLive(t *testing.T) {
 	}
 	// a rotation in the vault: a new data key, then rewrap moves the old one to the new version
 	if os.Getenv("TRESOR_LIVE_ROTATE") == "1" {
-		vault, name, _ := ParseKeyURL(keyURL)
-		vaultName := strings.TrimSuffix(strings.TrimPrefix(vault, "https://"), ".vault.azure.net")
+		host, name, _ := ParseKeyURL(keyURL)
+		vaultName := strings.TrimSuffix(host, ".vault.azure.net")
 		if out, err := exec.Command("az", "keyvault", "key", "rotate", "--vault-name", vaultName, "--name", name,
 			"-o", "none").CombinedOutput(); err != nil {
 			t.Fatalf("az keyvault key rotate: %v %s", err, out)

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ type vault struct {
 	versions map[string]*rsa.PrivateKey
 	current  string
 	disabled bool
+	failing  bool
 	calls    int
 }
 
@@ -55,6 +57,9 @@ func (v *vault) GetKey(_ context.Context, name, version string, _ *azkeys.GetKey
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.calls++
+	if v.failing {
+		return azkeys.GetKeyResponse{}, &azcore.ResponseError{StatusCode: 503, ErrorCode: "ServiceUnavailable"}
+	}
 	if name != v.name {
 		return azkeys.GetKeyResponse{}, &azcore.ResponseError{StatusCode: 404, ErrorCode: "KeyNotFound"}
 	}
@@ -94,11 +99,12 @@ func (v *vault) UnwrapKey(_ context.Context, name, version string, p azkeys.KeyO
 var ctx = context.Background()
 
 func TestParseKeyURL(t *testing.T) {
-	if v, n, err := ParseKeyURL("https://corp-kv.vault.azure.net/keys/tresor-kek"); err != nil || v != "https://corp-kv.vault.azure.net" || n != "tresor-kek" {
+	if v, n, err := ParseKeyURL("https://Corp-KV.vault.azure.net/keys/tresor-kek"); err != nil || v != "corp-kv.vault.azure.net" || n != "tresor-kek" {
 		t.Fatalf("%s %s %v", v, n, err)
 	}
 	for _, bad := range []string{"http://corp-kv.vault.azure.net/keys/k", "https://corp-kv.vault.azure.net/keys/k/0123",
-		"https://corp-kv.vault.azure.net/secrets/k", "https://corp-kv.vault.azure.net/keys/k?x=1", "corp-kv/keys/k"} {
+		"https://corp-kv.vault.azure.net/secrets/k", "https://corp-kv.vault.azure.net/keys/k?x=1", "corp-kv/keys/k",
+		"https://corp-kv.vault.azure.net:443/keys/k"} {
 		if _, _, err := ParseKeyURL(bad); err == nil {
 			t.Errorf("%s: accepted", bad)
 		}
@@ -122,6 +128,11 @@ func TestWrapUnwrap(t *testing.T) {
 	if back, err := w.Unwrap(ctx, wrapped, kekID); err != nil || !bytes.Equal(back, dek) {
 		t.Fatalf("unwrap: %v", err)
 	}
+	// the operator's spelling of the vault does not matter: Azure names it in lower case
+	upper, _ := NewWithOps("https://CORP-KV.vault.azure.net/keys/TRESOR-KEK", v)
+	if back, err := upper.Unwrap(ctx, wrapped, kekID); err != nil || !bytes.Equal(back, dek) {
+		t.Fatalf("a vault URL in capitals: %v", err)
+	}
 	// a tampered wrap: the vault refuses the value - ErrSealed, not an outage
 	wrapped[10] ^= 1
 	if _, err := w.Unwrap(ctx, wrapped, kekID); !errors.Is(err, keys.ErrSealed) {
@@ -129,7 +140,10 @@ func TestWrapUnwrap(t *testing.T) {
 	}
 	// a data key of another vault or key is never sent anywhere
 	for _, other := range []string{"https://evil.vault.azure.net/keys/tresor-kek/01#RSA-OAEP-256",
-		v.url + "/keys/other/01#RSA-OAEP-256", "local:0123"} {
+		v.url + "/keys/other/01#RSA-OAEP-256", "local:0123",
+		// malformed ids: never a panic (azkeys.ID would dereference nil), always ErrSealed
+		"local:abc#x", "%zz#x", "https://v.vault.azure.net#A", "local#x", v.url + "/keys/tresor-kek#RSA-OAEP-256",
+		v.url + "/keys/tresor-kek/01/extra#RSA-OAEP-256", ""} {
 		if _, err := w.Unwrap(ctx, wrapped, other); !errors.Is(err, keys.ErrSealed) {
 			t.Errorf("%s: %v", other, err)
 		}
@@ -166,6 +180,18 @@ func TestRotationInTheVault(t *testing.T) {
 	if v.calls != calls || len(store.keys) != keysBefore {
 		t.Fatalf("%d vault reads, %d new data keys for 5 seals", v.calls-calls, len(store.keys)-keysBefore)
 	}
+	// the vault does not answer: the last version read keeps serving (a rotation is only seen later)
+	v.failing = true
+	w.readAt = time.Now().Add(-2 * time.Minute)
+	if _, _, err := e.Seal(ctx, nil, []byte("x")); err != nil {
+		t.Fatalf("a vault blip fails a seal that needs no vault: %v", err)
+	}
+	// ... for an hour at most
+	w.readAt = time.Now().Add(-2 * time.Hour)
+	if _, _, err := e.Seal(ctx, nil, []byte("x")); err == nil {
+		t.Fatal("a version read two hours ago still serves")
+	}
+	v.failing = false
 	// a disabled key: nothing new is sealed
 	v.disabled = true
 	w.readAt = time.Time{}
@@ -260,5 +286,23 @@ func TestRewrap(t *testing.T) {
 	fresh := keys.NewEnvelope(w, store, keys.Options{})
 	if plain, err := fresh.Open(ctx, id, []byte("aad"), sealed); err != nil || string(plain) != "hunter2" {
 		t.Fatalf("after the old version is gone: %v", err)
+	}
+}
+
+// rewrap goes on past a data key it cannot rewrap, and names it: the others still move
+func TestRewrapSkips(t *testing.T) {
+	v := newVault(t)
+	w, _ := NewWithOps(v.url+"/keys/"+v.name, v)
+	store := &dataKeys{keys: map[string]keys.DataKey{}}
+	e := keys.NewEnvelope(w, store, keys.Options{})
+	if _, _, err := e.Seal(ctx, nil, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	store.keys["foreign"] = keys.DataKey{ID: "foreign", KEKID: "local:0123", Wrapped: []byte("w")}
+	v.rotate(t)
+	w.readAt = time.Time{}
+	n, err := e.Rewrap(ctx)
+	if n != 1 || err == nil || !strings.Contains(err.Error(), "foreign") {
+		t.Fatalf("rewrap past a foreign data key: %d %v", n, err)
 	}
 }

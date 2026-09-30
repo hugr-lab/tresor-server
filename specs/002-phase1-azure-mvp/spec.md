@@ -334,6 +334,8 @@ tls:
 azure:
   identity: managed              # managed | default (DefaultAzureCredential: az CLI for development)
   client_id: ""                  # a user-assigned managed identity
+# `default` is for development: its chain also takes a client secret from the environment
+# (AZURE_CLIENT_SECRET) - a static secret. Production runs `managed`.
 ```
 
 - `state.kind: memory` needs no `keys:`; every other kind refuses to start without it.
