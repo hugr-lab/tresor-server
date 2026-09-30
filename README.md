@@ -16,7 +16,7 @@ Status: phase 1 in progress - see [spec 001](specs/001-architecture/spec.md) (th
 
 ## Develop
 
-Go 1.26, no cgo.
+Go 1.27, no cgo.
 
 ```bash
 go test ./...                                   # the Go tests (GOWORK=off inside a go.work tree)

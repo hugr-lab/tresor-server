@@ -42,7 +42,7 @@ fixes the scope and the concrete choices of phase 1, so it can be built in small
 
 ### The module and the layout
 
-- Module `github.com/hugr-lab/tresor-server`, Go 1.26, no cgo.
+- Module `github.com/hugr-lab/tresor-server`, Go 1.27, no cgo.
 - One binary, `cmd/tresor-server`.
 
 ```text
