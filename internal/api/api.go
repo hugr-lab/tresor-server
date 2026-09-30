@@ -24,6 +24,7 @@ import (
 
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
+	"github.com/hugr-lab/tresor-server/internal/material"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
@@ -44,14 +45,18 @@ type Server struct {
 	store     state.Store
 	log       *slog.Logger
 	now       func() time.Time
-	direct    directCache
-	mintLocks mintLocks // one replica's renewals of a grant's token, per grant and audience // tokens minted for callers reading directly (specs/010)
+	direct    directCache        // tokens minted for callers reading directly (specs/010)
+	mintLocks mintLocks          // one replica's renewals of a grant's token, per grant and audience
+	material  *material.Resolver // references (ref+...): nil refuses them all
 }
 
 // New wires a server; the verifier and the store are the caller's. It reads the store once, to report
 // grants from before specs/009.
-func New(ctx context.Context, cfg *config.Config, verifier *auth.Verifier, st state.Store, log *slog.Logger) (*Server, error) {
+func New(ctx context.Context, cfg *config.Config, verifier *auth.Verifier, st state.Store, log *slog.Logger, opts ...Option) (*Server, error) {
 	s := &Server{cfg: cfg, verifier: verifier, store: st, log: log, now: time.Now}
+	for _, o := range opts {
+		o(s)
+	}
 	secrets, err := st.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("the state store: %w", err)
@@ -67,6 +72,12 @@ func New(ctx context.Context, cfg *config.Config, verifier *auth.Verifier, st st
 	}
 	return s, nil
 }
+
+// Option configures a server.
+type Option func(*Server)
+
+// WithMaterial lets secrets hold references (spec 002), resolved by r.
+func WithMaterial(r *material.Resolver) Option { return func(s *Server) { s.material = r } }
 
 // Handler returns the routes, under the path of public_url (a service may live below a base path: the
 // client asks <base>/.well-known/duckdb-secrets and appends /v1/... to `api`).
@@ -457,7 +468,18 @@ func (s *Server) getSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	sec = full
 	body := descriptor(sec, verbs)
-	params := sec.Params
+	// references are read now, with the service's identity: a rotation in the vault reaches DuckDB at its next
+	// fetch; one that does not resolve fails this fetch - never an empty or a stale value
+	params, resolved, err := s.material.Resolve(r.Context(), sec.Params)
+	if err != nil {
+		s.log.Error("a reference did not resolve", "secret", sec.Name, "error", err.Error())
+		problem(w, http.StatusServiceUnavailable, "service_unavailable", "a reference of the secret did not resolve")
+		return
+	}
+	for _, res := range resolved { // where and which version, never the value
+		s.log.Info("reference resolved", "secret", sec.Name, "param", res.Param, "ref", res.Ref.String(),
+			"version", res.Version)
+	}
 	if params == nil {
 		params = map[string]json.RawMessage{}
 	}
@@ -502,6 +524,31 @@ type secretBody struct {
 }
 
 // validParams: every value a string or {type, value} (protocol, Material).
+// duplicateKeys says whether a JSON object repeats a key (a map keeps only one of them).
+func duplicateKeys(raw json.RawMessage) bool {
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return true
+		}
+		k, _ := t.(string)
+		if seen[k] {
+			return true
+		}
+		seen[k] = true
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func validParams(params map[string]json.RawMessage, redact []string) error {
 	for key, raw := range params {
 		if key == "" {
@@ -514,13 +561,15 @@ func validParams(params map[string]json.RawMessage, redact []string) error {
 		if json.Unmarshal(raw, &str) == nil {
 			continue
 		}
-		var typed struct {
-			Type  string          `json:"type"`
-			Value json.RawMessage `json:"value"`
+		// exactly the keys type and value, as written: Go's decoder would match "VALUE" too, and take the last
+		// of repeated keys - a shape a client reads otherwise than this service
+		var typed map[string]json.RawMessage
+		if json.Unmarshal(raw, &typed) != nil || len(typed) != 2 || typed["type"] == nil || typed["value"] == nil {
+			return fmt.Errorf("parameter %q is neither a string nor {type, value}", key)
 		}
-		dec := json.NewDecoder(strings.NewReader(string(raw)))
-		dec.DisallowUnknownFields()
-		if dec.Decode(&typed) != nil || typed.Type == "" || typed.Value == nil || string(typed.Value) == "null" {
+		var typ string
+		if json.Unmarshal(typed["type"], &typ) != nil || typ == "" || string(typed["value"]) == "null" ||
+			duplicateKeys(raw) {
 			return fmt.Errorf("parameter %q is neither a string nor {type, value}", key)
 		}
 	}
@@ -581,6 +630,14 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// references (ref+...): to a configured source, within its allowlist, VARCHAR only - never stored as a
+	// literal - and redacted: a resolved value never shows in duckdb_secrets()
+	redact, err := s.material.CheckWrite(body.Provider, body.Params, body.RedactKeys)
+	if err != nil {
+		problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
+		return
+	}
+	body.RedactKeys = redact
 	// If-None-Match: "*" (CREATE) fails on any existing secret; with an ETag, on that version only
 	ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))
 	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))

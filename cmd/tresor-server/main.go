@@ -26,6 +26,8 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/keys/azurekeyvault"
 	"github.com/hugr-lab/tresor-server/internal/keys/local"
+	"github.com/hugr-lab/tresor-server/internal/material"
+	azkvsource "github.com/hugr-lab/tresor-server/internal/material/azurekeyvault"
 	"github.com/hugr-lab/tresor-server/internal/state"
 	"github.com/hugr-lab/tresor-server/internal/state/memory"
 	"github.com/hugr-lab/tresor-server/internal/state/sqlstore"
@@ -161,6 +163,23 @@ func databaseLogin(cfg *config.Config, scope string) (sqlstore.Login, error) {
 	return sqlstore.PasswordLogin{Env: cfg.State.PasswordEnv, File: cfg.State.PasswordFile}, nil
 }
 
+// materialResolver is where references may read (material:), or nil: then every reference is refused.
+func materialResolver(cfg *config.Config) (*material.Resolver, error) {
+	kv := cfg.Material.AzKV
+	if len(kv.Allow) == 0 {
+		return nil, nil
+	}
+	cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
+	if err != nil {
+		return nil, err
+	}
+	allow := make([]azkvsource.Allow, len(kv.Allow))
+	for i, a := range kv.Allow {
+		allow[i] = azkvsource.Allow{Vault: a.Vault, Prefixes: a.Prefixes}
+	}
+	return material.New(azkvsource.New(allow, cred, azkvsource.Options{DNSSuffix: kv.DNSSuffix, CacheTTL: kv.CacheTTL})), nil
+}
+
 // keyWrapper is the configured KEK.
 func keyWrapper(cfg *config.Config) (keys.KeyWrapper, error) {
 	k := cfg.Keys
@@ -196,7 +215,11 @@ func serve(configPath string, log *slog.Logger) error {
 	}
 	defer st.Close()
 	verifier := auth.NewVerifier(cfg.Issuers)
-	srv, err := api.New(ctx, cfg, verifier, st, log)
+	resolver, err := materialResolver(cfg)
+	if err != nil {
+		return err
+	}
+	srv, err := api.New(ctx, cfg, verifier, st, log, api.WithMaterial(resolver))
 	if err != nil {
 		return err
 	}

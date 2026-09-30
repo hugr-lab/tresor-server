@@ -175,3 +175,25 @@ func TestDSNHasPassword(t *testing.T) {
 		}
 	}
 }
+
+func TestMaterialConfig(t *testing.T) {
+	base := good + "azure: {identity: default}\nmaterial: {azkv: {allow: [{vault: corp-vault, prefixes: [lake-]}]}}\n"
+	if _, err := Parse([]byte(base)); err != nil {
+		t.Fatal(err)
+	}
+	for name, doc := range map[string]string{
+		"a suffix to another host": strings.Replace(base, "allow:", "dns_suffix: '.vault.azure.net@evil.example', allow:", 1),
+		"a suffix with no dot":     strings.Replace(base, "allow:", "dns_suffix: vault.azure.net, allow:", 1),
+		"a cache over 5 minutes":   strings.Replace(base, "allow:", "cache_ttl: 10m, allow:", 1),
+		"a vault's name":           strings.Replace(base, "vault: corp-vault", "vault: corp.vault.azure.net", 1),
+		"no identity":              strings.Replace(base, "azure: {identity: default}\n", "", 1),
+		"no vault listed":          strings.Replace(base, "allow: [{vault: corp-vault, prefixes: [lake-]}]", "cache_ttl: 1m", 1),
+	} {
+		if _, err := Parse([]byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, err := Parse([]byte(strings.Replace(base, "allow:", "dns_suffix: .vault.usgovcloudapi.net, cache_ttl: 5m, allow:", 1))); err != nil {
+		t.Fatalf("a sovereign cloud's suffix, a 5-minute cache: %v", err)
+	}
+}

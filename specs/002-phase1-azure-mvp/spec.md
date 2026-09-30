@@ -315,6 +315,11 @@ Entra on Azure.
   - a reference in a value that is not VARCHAR, or in a `token_exchange` secret: `422`.
   - a parameter holding a reference is added to `redact_keys`, if the caller left it out: the
     resolved value must never show in `duckdb_secrets()`.
+  - a typed value is exactly `{"type", "value"}`, as written: another key (`VALUE`), a repeated key,
+    a near miss (`REF+`, a space before `ref+`) is `422`, never stored as a literal that a client
+    would read otherwise.
+  - an error never repeats what follows `ref+` unless it is a known scheme's shape: it may be a
+    value written by mistake.
   - the write is an administrator's anyway (tresor specs/009); the check does not depend on it.
   - the reference is not resolved at write: a secret may be written before its vault value exists.
 - **At fetch** (`GET /v1/secrets/{name}` with `use`):
@@ -322,7 +327,8 @@ Entra on Azure.
   - the allowlist is checked again: the config may have changed;
   - any failure (not found, denied, disabled, outside the allowlist, unreachable) is
     `503 service_unavailable` for this fetch. Never an empty or a stale value.
-  - `material.azkv.cache_ttl` (default 0: none) allows a short cache, for vault request limits.
+  - `material.azkv.cache_ttl` (default 0: none, at most 5 minutes) allows a short cache, for vault
+    request limits: the longest a value - a rotated or disabled one too - may be read stale.
 - **The log** records each resolution: the secret's name, the vault, the Key Vault secret's name and
   version. Never the value.
 - A reference is never returned as such: callers see the resolved value, and only with `use`.
