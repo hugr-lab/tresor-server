@@ -1,6 +1,6 @@
 # Spec 001: tresor-server — a duckdb-secrets/1 service for the enterprise
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-09-30
 - **Author**: hugr lab
 
@@ -54,8 +54,8 @@ An organization that adopts tresor needs:
   shared library. It starts as a copy of the reference server's `internal/{api,auth,config,mint}`,
   at a pinned tresor commit (MIT, the same owner), and diverges from there. The reference server
   stays small.
-- **The binary's name.** tresor's reference binary is also `cmd/tresor-server`. It is renamed
-  there (`tresor-reference-server`, a small tresor PR), so the two are never confused.
+- **The binary's name.** tresor's reference binary was also `cmd/tresor-server`. It is renamed
+  there to `ref-server` (a small tresor PR), so the two are never confused.
 
 ### Layers
 
@@ -141,7 +141,8 @@ One schema, and one set of queries written for the portable subset:
   - The data key is wrapped by the KeyWrapper.
   - Unwrapped data keys are cached in memory for a short time.
 - **A reference**: a parameter's value names where the value lives, for example
-  `ref+azkv://corp-vault/lake-s3-secret`.
+  `ref+azkv://corp-vault/lake-s3-secret`. A `ref+` prefix in the value, as helm-secrets and vals
+  write it: no protocol change.
   - It is resolved at each fetch, with the service's identity. A rotation in the vault reaches
     DuckDB at its next fetch.
   - A reference is written only by an administrator.
@@ -230,10 +231,13 @@ Each phase gets its own spec here.
 - **DuckDB as the embedded database.** Its Go driver needs cgo, and the state is transactional
   (OLTP), not analytical. SQLite fits; DuckDB can come later if wanted.
 
+## Decisions (2026-09-30)
+
+- **The reference syntax**: a `ref+` prefix in the parameter's value. A descriptor field would
+  change `protocol.md` for what is the service's own business.
+- **The docs**: a site of its own, as tresor, duckdb-acl and acl-otel have.
+- **The repository**: public from the start (`hugr-lab/tresor-server`).
+
 ## Open questions
 
-- **The reference syntax**: a `ref+` prefix in a parameter (as in helm-secrets and vals), or a
-  separate descriptor field that the protocol would carry. A protocol field changes
-  `protocol.md`.
-- **Grants and delegations in the CRD store**: status, or sibling resources.
-- **A product docs site**: its own, or a section of tresor's.
+- **Grants and delegations in the CRD store**: status, or sibling resources (phase 3's spec).

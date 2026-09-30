@@ -14,4 +14,4 @@ Research lives in the local, gitignored `design/` folder.
 
 | Spec | Title | Status |
 | --- | --- | --- |
-| [001](001-architecture/spec.md) | tresor-server - state stores, KEK, material by reference, deployment, phases | draft |
+| [001](001-architecture/spec.md) | tresor-server - state stores, KEK, material by reference, deployment, phases | accepted |
