@@ -1,12 +1,11 @@
-// ref-server is the reference duckdb-secrets/1 service (specs/003): for tresor's tests and as an
-// example to read, not for production.
+// tresor-server is the production duckdb-secrets/1 service (spec 001, spec 002). It started from tresor's
+// reference server (tresor specs/003, MIT, the same owner).
 //
-//	ref-server -config server.yaml
+//	tresor-server -config server.yaml
 package main
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,17 +20,30 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/api"
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
-	"github.com/hugr-lab/tresor-server/internal/store"
+	"github.com/hugr-lab/tresor-server/internal/health"
+	"github.com/hugr-lab/tresor-server/internal/state"
+	"github.com/hugr-lab/tresor-server/internal/state/memory"
 )
+
+// readyInterval is how often the readiness checks run (spec 002).
+const readyInterval = 30 * time.Second
 
 func main() {
 	configPath := flag.String("config", "server.yaml", "the configuration file")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(*configPath, log); err != nil {
-		log.Error("ref-server stopped", "error", err.Error())
+		log.Error("tresor-server stopped", "error", err.Error())
 		os.Exit(1)
 	}
+}
+
+func openState(cfg config.State) (state.Store, error) {
+	switch cfg.Kind {
+	case "memory":
+		return memory.New(), nil
+	}
+	return nil, fmt.Errorf("state.kind %q is not built in", cfg.Kind)
 }
 
 func run(configPath string, log *slog.Logger) error {
@@ -39,22 +51,30 @@ func run(configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	var key []byte
-	if cfg.Store.Path != "" {
-		encoded := os.Getenv(cfg.Store.KeyEnv)
-		if encoded == "" {
-			return fmt.Errorf("the store key: %s is not set (32 bytes, base64)", cfg.Store.KeyEnv)
-		}
-		if key, err = base64.StdEncoding.DecodeString(encoded); err != nil {
-			return fmt.Errorf("the store key in %s is not base64", cfg.Store.KeyEnv)
-		}
-	}
-	st, err := store.Open(cfg.Store.Path, key)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	st, err := openState(cfg.State)
 	if err != nil {
 		return err
 	}
+	defer st.Close()
+	verifier := auth.NewVerifier(cfg.Issuers)
+	srv, err := api.New(ctx, cfg, verifier, st, log)
+	if err != nil {
+		return err
+	}
+	checker := health.New(log, readyInterval,
+		health.Check{Name: "state", Run: st.Ping},
+		health.Check{Name: "issuers", Run: verifier.Ready},
+	)
+	checker.Start(ctx)
+
+	mux := http.NewServeMux()
+	checker.Register(mux) // outside the protocol's routes, and outside public_url's path
+	mux.Handle("/", srv.Handler())
 	server := &http.Server{
-		Handler:           api.New(cfg, auth.NewVerifier(cfg.Issuers), st, log).Handler(),
+		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -63,11 +83,9 @@ func run(configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	log.Info("ref-server listening", "listen", listener.Addr().String(), "api", cfg.PublicURL,
-		"tls", cfg.TLS.Cert != "", "store", cfg.Store.Path != "")
+	log.Info("tresor-server listening", "listen", listener.Addr().String(), "api", cfg.PublicURL,
+		"tls", cfg.TLS.Cert != "", "state", cfg.State.Kind)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	errs := make(chan error, 1)
 	go func() {
 		if cfg.TLS.Cert != "" {

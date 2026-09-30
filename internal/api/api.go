@@ -1,6 +1,9 @@
-// Package api is the duckdb-secrets/1 HTTP surface of the reference server (specs/003,
+// Package api is the duckdb-secrets/1 HTTP surface (tresor specs/003,
 // website/docs/protocol.md). Every decision uses the caller's own principals - under a delegation grant, the
 // actor's for `use` (specs/009); nothing here logs a token or a secret's material.
+//
+// Taken over from tresor's reference server at 6133d0d (MIT, the same owner; see NOTICE). specs/NNN here are
+// tresor's specs; spec NNN (with a space) are this repository's.
 package api
 
 import (
@@ -19,7 +22,7 @@ import (
 
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
-	"github.com/hugr-lab/tresor-server/internal/store"
+	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
 // Protocol is the discovery document's protocol string.
@@ -36,18 +39,23 @@ var (
 type Server struct {
 	cfg      *config.Config
 	verifier *auth.Verifier
-	store    *store.Store
+	store    state.Store
 	log      *slog.Logger
 	now      func() time.Time
 	grants   grants
 	direct   directCache // tokens minted for callers reading directly (specs/010)
 }
 
-// New wires a server; the verifier and the store are the caller's.
-func New(cfg *config.Config, verifier *auth.Verifier, st *store.Store, log *slog.Logger) *Server {
+// New wires a server; the verifier and the store are the caller's. It reads the store once, to report
+// grants from before specs/009.
+func New(ctx context.Context, cfg *config.Config, verifier *auth.Verifier, st state.Store, log *slog.Logger) (*Server, error) {
 	s := &Server{cfg: cfg, verifier: verifier, store: st, log: log, now: time.Now}
+	secrets, err := st.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("the state store: %w", err)
+	}
 	// a store from before specs/009 may hold grants the model no longer honours: say so, once, by name
-	for _, sec := range st.List() {
+	for _, sec := range secrets {
 		for _, g := range sec.Grants {
 			if !roleOrGroup(g.Principal) || !slices.Equal(g.Verbs, []string{"use"}) {
 				log.Warn("a grant from before specs/009 is ignored: grants give use to roles and groups only",
@@ -55,7 +63,7 @@ func New(cfg *config.Config, verifier *auth.Verifier, st *store.Store, log *slog
 			}
 		}
 	}
-	return s
+	return s, nil
 }
 
 // Handler returns the routes, under the path of public_url (a service may live below a base path: the
@@ -240,7 +248,7 @@ func (s *Server) isAdmin(c *auth.Caller) bool {
 // and the management verbs for an admin (an admin role implies no `use`). Under a delegation grant `use` is
 // the ACTOR's (a user gets nothing beyond what the server was granted), and a management verb passes only
 // for a user who is an admin, when the actor policy lists it - administration through a duckdb-acl node.
-func (s *Server) verbs(c *auth.Caller, sec *store.Secret) []string {
+func (s *Server) verbs(c *auth.Caller, sec *state.Secret) []string {
 	out := []string{} // a list, never null
 	if c.Actor != "" {
 		allowed := s.actorVerbs(c.Actor, c.ActorIssuer)
@@ -269,7 +277,7 @@ func (s *Server) verbs(c *auth.Caller, sec *store.Secret) []string {
 // usable: a grant gives `use` to one of these principals - a role: or group: grant only. A grant a store kept
 // from before specs/009 (to a subject: or a client:, or of other verbs) gives nothing: it is reported at
 // start and ignored.
-func usable(sec *store.Secret, principals []string) bool {
+func usable(sec *state.Secret, principals []string) bool {
 	for _, g := range sec.Grants {
 		if roleOrGroup(g.Principal) && slices.Contains(g.Verbs, "use") && slices.Contains(principals, g.Principal) {
 			return true
@@ -294,8 +302,12 @@ func (s *Server) mayCreate(c *auth.Caller, name string) bool {
 
 // visible fetches a secret the caller holds any verb on (under a grant: the actor's use, an admin's management
 // through it); an invisible one is the same 404 as a missing one, so a name's existence does not leak.
-func (s *Server) visible(w http.ResponseWriter, c *auth.Caller, name string) (*store.Secret, []string, bool) {
-	sec, err := s.store.Get(name)
+func (s *Server) visible(w http.ResponseWriter, r *http.Request, c *auth.Caller, name string) (*state.Secret, []string, bool) {
+	sec, err := s.store.Get(r.Context(), name)
+	if err != nil && !errors.Is(err, state.ErrNotFound) {
+		s.unavailable(w, "read", name, err)
+		return nil, nil, false
+	}
 	if err == nil {
 		verbs := s.verbs(c, sec)
 		if len(verbs) > 0 {
@@ -304,6 +316,12 @@ func (s *Server) visible(w http.ResponseWriter, c *auth.Caller, name string) (*s
 	}
 	problem(w, http.StatusNotFound, "not_found", fmt.Sprintf("no secret %q", name))
 	return nil, nil, false
+}
+
+// unavailable answers a store that failed: 503, the reason in the log only.
+func (s *Server) unavailable(w http.ResponseWriter, what, name string, err error) {
+	s.log.Error("store "+what+" failed", "secret", name, "error", err.Error())
+	problem(w, http.StatusServiceUnavailable, "service_unavailable", "the store could not be "+what)
 }
 
 // --- discovery and identity ------------------------------------------------------------------------
@@ -368,7 +386,7 @@ func nilIfEmpty(v string) any {
 
 // --- secrets -----------------------------------------------------------------------------------------
 
-func descriptor(sec *store.Secret, verbs []string) map[string]any {
+func descriptor(sec *state.Secret, verbs []string) map[string]any {
 	if verbs == nil {
 		verbs = []string{}
 	}
@@ -394,8 +412,13 @@ func descriptor(sec *store.Secret, verbs []string) map[string]any {
 func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
 	c := callerOf(r)
 	typ := r.URL.Query().Get("type")
+	secrets, err := s.store.List(r.Context())
+	if err != nil {
+		s.unavailable(w, "read", "", err)
+		return
+	}
 	out := []map[string]any{}
-	for _, sec := range s.store.List() {
+	for _, sec := range secrets {
 		if typ != "" && !strings.EqualFold(sec.Type, typ) {
 			continue
 		}
@@ -408,7 +431,7 @@ func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getSecret(w http.ResponseWriter, r *http.Request) {
 	c := callerOf(r)
-	sec, verbs, ok := s.visible(w, c, r.PathValue("name"))
+	sec, verbs, ok := s.visible(w, r, c, r.PathValue("name"))
 	if !ok {
 		return
 	}
@@ -524,7 +547,8 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 	var refused *refusal
 	now := s.now()
 	created := false
-	saved, err := s.store.Update(name, func(current *store.Secret) (*store.Secret, error) {
+	saved, err := s.store.Update(r.Context(), name, func(current *state.Secret) (*state.Secret, error) {
+		refused, created = nil, false // fn may run again, on a fresher secret (state.Store)
 		if current == nil {
 			if !s.mayCreate(c, name) {
 				kind := "no_verb"
@@ -535,10 +559,10 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 				return nil, errors.New("refused")
 			}
 			if ifMatch != "" { // after the permission: a precondition must not tell a name exists
-				return nil, store.ErrPrecondition
+				return nil, errPrecondition
 			}
 			created = true
-			return &store.Secret{
+			return &state.Secret{
 				Type: body.Type, Provider: body.Provider, Scope: body.Scope, Params: body.Params,
 				RedactKeys: body.RedactKeys, Comment: deref(body.Comment), Owner: c.Owner(),
 				CreatedAt: now, UpdatedAt: now, Version: 1,
@@ -557,10 +581,10 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 		}
 		currentTag := strconv.Quote(strconv.FormatInt(current.Version, 10))
 		if ifNoneMatch == "*" || (ifNoneMatch != "" && ifNoneMatch == currentTag) {
-			return nil, store.ErrPrecondition
+			return nil, errPrecondition
 		}
 		if ifMatch != "" && ifMatch != currentTag && ifMatch != "*" {
-			return nil, store.ErrPrecondition
+			return nil, errPrecondition
 		}
 		if !slices.Contains(verbs, "update") {
 			kind := "no_verb"
@@ -583,11 +607,10 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case refused != nil:
 		problem(w, refused.status, refused.kind, refused.detail)
-	case errors.Is(err, store.ErrPrecondition):
+	case errors.Is(err, errPrecondition):
 		problem(w, http.StatusPreconditionFailed, "precondition_failed", "If-None-Match / If-Match not met")
 	case err != nil:
-		s.log.Error("store write failed", "secret", name, "error", err.Error())
-		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the store could not be written")
+		s.unavailable(w, "written", name, err)
 	default:
 		w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(saved.Version, 10)))
 		status := http.StatusOK
@@ -607,19 +630,20 @@ func deref(p *string) string {
 
 // mutate runs a change that needs `verb` on a visible secret; fn may refuse with a problem of its own.
 func (s *Server) mutate(w http.ResponseWriter, r *http.Request, verb string,
-	fn func(current *store.Secret) (*store.Secret, error)) (*store.Secret, bool) {
+	fn func(current *state.Secret) (*state.Secret, error)) (*state.Secret, bool) {
 	c := callerOf(r)
 	name := r.PathValue("name")
 	var missing, forbidden bool
-	saved, err := s.store.Update(name, func(current *store.Secret) (*store.Secret, error) {
+	saved, err := s.store.Update(r.Context(), name, func(current *state.Secret) (*state.Secret, error) {
+		missing, forbidden = false, false // fn may run again, on a fresher secret (state.Store)
 		if current == nil {
 			missing = true
-			return nil, store.ErrNotFound
+			return nil, state.ErrNotFound
 		}
 		verbs := s.verbs(c, current)
 		if len(verbs) == 0 {
 			missing = true
-			return nil, store.ErrNotFound
+			return nil, state.ErrNotFound
 		}
 		if !slices.Contains(verbs, verb) {
 			forbidden = true
@@ -636,11 +660,10 @@ func (s *Server) mutate(w http.ResponseWriter, r *http.Request, verb string,
 		problem(w, http.StatusForbidden, "no_verb", strings.TrimPrefix(err.Error(), errNotHeld.Error()+": "))
 	case errors.Is(err, errInvalid):
 		problem(w, http.StatusUnprocessableEntity, "invalid_secret", strings.TrimPrefix(err.Error(), errInvalid.Error()+": "))
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, state.ErrNotFound):
 		problem(w, http.StatusNotFound, "not_found", "no such grant")
 	case err != nil:
-		s.log.Error("store write failed", "secret", name, "error", err.Error())
-		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the store could not be written")
+		s.unavailable(w, "written", name, err)
 	default:
 		return saved, true
 	}
@@ -648,12 +671,13 @@ func (s *Server) mutate(w http.ResponseWriter, r *http.Request, verb string,
 }
 
 var (
-	errInvalid = errors.New("invalid")
-	errNotHeld = errors.New("not held")
+	errInvalid      = errors.New("invalid")
+	errNotHeld      = errors.New("not held")
+	errPrecondition = errors.New("precondition failed")
 )
 
 func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.mutate(w, r, "delete", func(*store.Secret) (*store.Secret, error) { return nil, nil }); ok {
+	if _, ok := s.mutate(w, r, "delete", func(*state.Secret) (*state.Secret, error) { return nil, nil }); ok {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -667,7 +691,7 @@ func (s *Server) patchSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.now()
-	saved, ok := s.mutate(w, r, "annotate", func(current *store.Secret) (*store.Secret, error) {
+	saved, ok := s.mutate(w, r, "annotate", func(current *state.Secret) (*state.Secret, error) {
 		current.Comment = *body.Comment
 		current.UpdatedAt = now
 		current.Version++
@@ -680,15 +704,15 @@ func (s *Server) patchSecret(w http.ResponseWriter, r *http.Request) {
 
 // --- grants ------------------------------------------------------------------------------------------
 
-func grantList(sec *store.Secret) []store.Grant {
+func grantList(sec *state.Secret) []state.Grant {
 	if sec.Grants == nil {
-		return []store.Grant{}
+		return []state.Grant{}
 	}
 	return sec.Grants
 }
 
 func (s *Server) listGrants(w http.ResponseWriter, r *http.Request) {
-	sec, verbs, ok := s.visible(w, callerOf(r), r.PathValue("name"))
+	sec, verbs, ok := s.visible(w, r, callerOf(r), r.PathValue("name"))
 	if !ok {
 		return
 	}
@@ -709,7 +733,7 @@ func (s *Server) putGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	saved, ok := s.mutate(w, r, "grant", func(current *store.Secret) (*store.Secret, error) {
+	saved, ok := s.mutate(w, r, "grant", func(current *state.Secret) (*state.Secret, error) {
 		// a grant gives `use` to a role or a group (specs/009): never one user, never a management verb
 		role, isRole := strings.CutPrefix(body.Principal, "role:")
 		group, isGroup := strings.CutPrefix(body.Principal, "group:")
@@ -719,7 +743,7 @@ func (s *Server) putGrant(w http.ResponseWriter, r *http.Request) {
 		if len(body.Verbs) != 1 || body.Verbs[0] != "use" {
 			return nil, fmt.Errorf("%w: a grant gives use, and only use", errInvalid)
 		}
-		grant := store.Grant{ID: id, Principal: body.Principal, Verbs: body.Verbs}
+		grant := state.Grant{ID: id, Principal: body.Principal, Verbs: body.Verbs}
 		replaced := false
 		for i := range current.Grants {
 			if current.Grants[i].ID == id {
@@ -741,7 +765,7 @@ func (s *Server) putGrant(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteGrant(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_, ok := s.mutate(w, r, "grant", func(current *store.Secret) (*store.Secret, error) {
+	_, ok := s.mutate(w, r, "grant", func(current *state.Secret) (*state.Secret, error) {
 		kept := current.Grants[:0]
 		found := false
 		for _, g := range current.Grants {
@@ -752,7 +776,7 @@ func (s *Server) deleteGrant(w http.ResponseWriter, r *http.Request) {
 			kept = append(kept, g)
 		}
 		if !found {
-			return nil, store.ErrNotFound
+			return nil, state.ErrNotFound
 		}
 		current.Grants = kept
 		current.Version++

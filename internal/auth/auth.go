@@ -1,5 +1,8 @@
 // Package auth verifies bearer tokens against the configured issuers and turns their claims into
 // principals (specs/003). It never logs or returns a token.
+//
+// Taken over from tresor's reference server at 6133d0d (MIT, the same owner; see NOTICE). specs/NNN here are
+// tresor's specs; spec NNN (with a space) are this repository's.
 package auth
 
 import (
@@ -8,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -72,7 +76,9 @@ type issuer struct {
 	cfg        config.Issuer
 	mu         sync.Mutex
 	verifier   *oidc.IDTokenVerifier
-	tokenURL   string    // the issuer's token endpoint, from the same discovery (specs/010: exchanges)
+	tokenURL   string // the issuer's token endpoint, from the same discovery (specs/010: exchanges)
+	jwksURL    string // its signing keys, fetched once for readiness (Ready)
+	jwksOK     bool
 	failedAt   time.Time // the last failed discovery: retried after retryAfter, not on every request
 	lastFailed error
 }
@@ -113,6 +119,12 @@ func (is *issuer) get(ctx context.Context, now func() time.Time) (*oidc.IDTokenV
 		return nil, is.lastFailed
 	}
 	is.tokenURL = provider.Endpoint().TokenURL
+	var meta struct {
+		JWKS string `json:"jwks_uri"`
+	}
+	if err := provider.Claims(&meta); err == nil {
+		is.jwksURL = meta.JWKS
+	}
 	// the JWKS is fetched later, by Verify, under the same bounded client (go-oidc keeps the client
 	// of this context, not its deadline)
 	is.verifier = provider.Verifier(&oidc.Config{
@@ -123,6 +135,55 @@ func (is *issuer) get(ctx context.Context, now func() time.Time) (*oidc.IDTokenV
 		Now:                  now,
 	})
 	return is.verifier, nil
+}
+
+// Ready says whether every issuer has answered once: its discovery, and its signing keys (spec 002,
+// /readyz). An issuer that answered stays ready: its keys are cached, and one identity provider's outage
+// must not take every replica out. The error names the issuer, never a token.
+func (v *Verifier) Ready(ctx context.Context) error {
+	for _, is := range v.issuers {
+		if err := is.ready(ctx, v.Now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (is *issuer) ready(ctx context.Context, now func() time.Time) error {
+	if _, err := is.get(ctx, now); err != nil {
+		return err
+	}
+	is.mu.Lock()
+	done, url := is.jwksOK, is.jwksURL
+	is.mu.Unlock()
+	if done {
+		return nil
+	}
+	if url == "" {
+		return fmt.Errorf("issuer %s names no jwks_uri", is.cfg.Issuer)
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("issuer %s: jwks_uri: %w", is.cfg.Issuer, err)
+	}
+	resp, err := (&http.Client{Timeout: discoveryTimeout}).Do(req)
+	if err != nil {
+		return fmt.Errorf("issuer %s: its signing keys are not reachable: %w", is.cfg.Issuer, err)
+	}
+	defer resp.Body.Close()
+	var keys struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&keys) != nil ||
+		len(keys.Keys) == 0 {
+		return fmt.Errorf("issuer %s: its signing keys did not answer (%d)", is.cfg.Issuer, resp.StatusCode)
+	}
+	is.mu.Lock()
+	is.jwksOK = true
+	is.mu.Unlock()
+	return nil
 }
 
 // TokenURL is the token endpoint of a configured issuer (by a token's iss), from its discovery.

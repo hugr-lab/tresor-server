@@ -8,6 +8,7 @@ import (
 const good = `
 listen: 127.0.0.1:8443
 public_url: http://127.0.0.1:8443
+state: {kind: memory}
 issuers:
   - issuer: http://127.0.0.1:18080/realms/tresor/
     audience: duckdb-secrets
@@ -38,13 +39,15 @@ func TestRefused(t *testing.T) {
 		"an unknown key": good + "\nextra: 1\n",
 		"a symmetric algorithm": strings.Replace(good, "audience: duckdb-secrets",
 			"audience: duckdb-secrets\n    algorithms: [HS256]", 1),
-		"no audience":             strings.Replace(good, "    audience: duckdb-secrets\n", "", 1),
-		"a bad principal":         strings.Replace(good, "role:secrets_admin", "secrets_admin", 1),
-		"a store without a key":   good + "store: {path: x.enc}\n",
-		"an actor with no verbs":  strings.Replace(good, "verbs: [use]", "verbs: []", 1),
-		"an actor's unknown verb": strings.Replace(good, "verbs: [use]", "verbs: [use, fly]", 1),
-		"the old create policy":   good + "  create:\n    - {principal: role:analysts, names: [\"*\"]}\n",
-		"no issuers":              "listen: 127.0.0.1:1\npublic_url: http://127.0.0.1:1\n",
+		"no audience":                  strings.Replace(good, "    audience: duckdb-secrets\n", "", 1),
+		"a bad principal":              strings.Replace(good, "role:secrets_admin", "secrets_admin", 1),
+		"the reference server's store": good + "store: {path: x.enc}\n",
+		"no state":                     strings.Replace(good, "state: {kind: memory}\n", "", 1),
+		"an unknown state kind":        strings.Replace(good, "kind: memory", "kind: etcd", 1),
+		"an actor with no verbs":       strings.Replace(good, "verbs: [use]", "verbs: []", 1),
+		"an actor's unknown verb":      strings.Replace(good, "verbs: [use]", "verbs: [use, fly]", 1),
+		"the old create policy":        good + "  create:\n    - {principal: role:analysts, names: [\"*\"]}\n",
+		"no issuers":                   "listen: 127.0.0.1:1\npublic_url: http://127.0.0.1:1\nstate: {kind: memory}\n",
 	}
 	for name, doc := range cases {
 		if _, err := Parse([]byte(doc)); err == nil {

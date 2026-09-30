@@ -1,5 +1,8 @@
 // Package mint obtains tokens for a caller at its identity provider (specs/010): RFC 8693 token exchange of
 // the caller's token for a downstream audience, and refreshes. It never logs or returns a token in an error.
+//
+// Taken over from tresor's reference server at 6133d0d (MIT, the same owner; see NOTICE). specs/NNN here are
+// tresor's specs; spec NNN (with a space) are this repository's.
 package mint
 
 import (

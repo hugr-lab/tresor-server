@@ -190,3 +190,22 @@ func TestIssuerNotUpYet(t *testing.T) {
 		t.Fatal("after retryAfter discovery is retried")
 	}
 }
+
+// readiness (spec 002): an issuer is ready once its discovery and signing keys have answered, and stays
+// ready through a later outage - its keys are cached
+func TestReady(t *testing.T) {
+	idp := testidp.New(t)
+	v := verifierFor(idp)
+	if err := v.Ready(context.Background()); err != nil {
+		t.Fatalf("a live issuer: %v", err)
+	}
+	idp.Stop()
+	if err := v.Ready(context.Background()); err != nil {
+		t.Fatalf("an issuer that answered once: %v", err)
+	}
+	down := testidp.New(t)
+	down.Stop()
+	if err := verifierFor(down).Ready(context.Background()); err == nil || !strings.Contains(err.Error(), down.Issuer) {
+		t.Fatalf("an issuer that never answered: %v", err)
+	}
+}

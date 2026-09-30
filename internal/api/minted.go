@@ -19,7 +19,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/mint"
-	"github.com/hugr-lab/tresor-server/internal/store"
+	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
 const (
@@ -35,7 +35,7 @@ var tokenParam = map[string]string{"http": "bearer_token", "quack": "token"}
 
 var errNoExchange = errors.New("this service cannot mint tokens for the caller's issuer (no exchange client)")
 
-func isMinted(sec *store.Secret) bool { return sec.Provider == tokenExchangeProvider }
+func isMinted(sec *state.Secret) bool { return sec.Provider == tokenExchangeProvider }
 
 // mintTarget is a minted secret's audience and scope, from its params.
 func mintTarget(params map[string]json.RawMessage) (audience, scope string) {
@@ -188,8 +188,13 @@ func (s *Server) mintAtGrant(ctx context.Context, gr *grant, subject string, act
 	if !slices.Contains(s.actorVerbs(actor.Client(), actor.Issuer), "use") {
 		return
 	}
+	secrets, err := s.store.List(ctx)
+	if err != nil {
+		s.log.Error("store read failed", "error", err.Error())
+		return // minted lazily from the subject token, while it lives
+	}
 	targets := map[string][2]string{}
-	for _, sec := range s.store.List() {
+	for _, sec := range secrets {
 		if isMinted(sec) && usable(sec, actor.Principals) {
 			audience, scope := mintTarget(sec.Params)
 			targets[mintKey(audience, scope)] = [2]string{audience, scope}
@@ -238,7 +243,7 @@ func isRefusal(err error) bool {
 }
 
 // mintedToken is the token a minted secret's material carries for this request's caller, or the problem.
-func (s *Server) mintedToken(r *http.Request, c *auth.Caller, sec *store.Secret) (*mint.Token, *mintProblem) {
+func (s *Server) mintedToken(r *http.Request, c *auth.Caller, sec *state.Secret) (*mint.Token, *mintProblem) {
 	audience, scope := mintTarget(sec.Params)
 	key := mintKey(audience, scope)
 	now := s.now()

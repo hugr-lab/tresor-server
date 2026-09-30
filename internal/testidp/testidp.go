@@ -1,5 +1,8 @@
 // Package testidp is an in-process OIDC issuer for the server's tests: discovery, a JWKS, and tokens
 // signed with its key (or with anything else a test needs to see refused).
+//
+// Taken over from tresor's reference server at 6133d0d (MIT, the same owner; see NOTICE). specs/NNN here are
+// tresor's specs; spec NNN (with a space) are this repository's.
 package testidp
 
 import (
@@ -210,3 +213,6 @@ func unverifiedClaims(raw string) (map[string]any, bool) {
 	var out map[string]any
 	return out, json.Unmarshal(data, &out) == nil
 }
+
+// Stop closes the issuer's server: the identity provider is down.
+func (idp *IdP) Stop() { idp.server.Close() }

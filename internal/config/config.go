@@ -1,4 +1,5 @@
-// Package config reads and validates the reference server's configuration (specs/003).
+// Package config reads and validates the service's configuration: the reference server's (tresor specs/003,
+// taken over from tresor under its MIT license) plus state: (spec 002).
 package config
 
 import (
@@ -7,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -17,9 +19,11 @@ type Config struct {
 	Listen    string   `yaml:"listen"`
 	PublicURL string   `yaml:"public_url"`
 	TLS       TLS      `yaml:"tls"`
-	Store     Store    `yaml:"store"`
+	State     State    `yaml:"state"`
 	Issuers   []Issuer `yaml:"issuers"`
 	Policy    Policy   `yaml:"policy"`
+	// Store is the reference server's encrypted file: kept only to refuse a config that still has it
+	Store any `yaml:"store"`
 }
 
 // TLS names the certificate the server serves with; empty means plain http (loopback only).
@@ -28,11 +32,14 @@ type TLS struct {
 	Key  string `yaml:"key"`
 }
 
-// Store says where the secrets are kept: memory when Path is empty, else an encrypted file.
-type Store struct {
-	Path   string `yaml:"path"`
-	KeyEnv string `yaml:"key_env"`
+// State says where the service keeps what it knows (spec 002).
+type State struct {
+	// Kind is the store: memory (lost when the process ends).
+	Kind string `yaml:"kind"`
 }
+
+// StateKinds are the stores this build knows.
+var StateKinds = []string{"memory"}
 
 // Issuer is one identity provider the server accepts tokens from.
 type Issuer struct {
@@ -153,11 +160,15 @@ func (c *Config) validate() error {
 	if u.Scheme == "http" && !IsLoopback(u.Hostname()) {
 		return fmt.Errorf("public_url %q: http only for a loopback host", c.PublicURL)
 	}
-	if c.Store.Path != "" && c.Store.KeyEnv == "" {
-		return errors.New("store.key_env is required with store.path: the store is always encrypted")
+	if c.Store != nil {
+		return errors.New("store: is the reference server's encrypted file - this service keeps its state as " +
+			"state: names it (state: {kind: memory})")
 	}
-	if c.Store.Path == "" && c.Store.KeyEnv != "" {
-		return errors.New("store.key_env without store.path: the store would silently be memory only")
+	if c.State.Kind == "" {
+		return errors.New("state.kind is required: " + strings.Join(StateKinds, " | "))
+	}
+	if !slices.Contains(StateKinds, c.State.Kind) {
+		return fmt.Errorf("state.kind %q: %s expected", c.State.Kind, strings.Join(StateKinds, " | "))
 	}
 	if len(c.Issuers) == 0 {
 		return errors.New("at least one issuer is required")

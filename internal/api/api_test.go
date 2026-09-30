@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -12,7 +13,8 @@ import (
 
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
-	"github.com/hugr-lab/tresor-server/internal/store"
+	"github.com/hugr-lab/tresor-server/internal/state"
+	"github.com/hugr-lab/tresor-server/internal/state/memory"
 	"github.com/hugr-lab/tresor-server/internal/testidp"
 )
 
@@ -49,6 +51,7 @@ func newFixtureWith(t *testing.T, basePath string, withExchange bool) *fixture {
 	cfg, err := config.Parse([]byte(`
 listen: 127.0.0.1:0
 public_url: ` + f.base + `
+state: {kind: memory}
 issuers:
   - issuer: ` + idp.URL + `
     audience: duckdb-secrets
@@ -68,9 +71,10 @@ policy:
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, _ := store.Open("", nil)
 	log := slog.New(slog.NewTextHandler(f.logs, nil))
-	f.srv = New(cfg, auth.NewVerifier(cfg.Issuers), st, log)
+	if f.srv, err = New(context.Background(), cfg, auth.NewVerifier(cfg.Issuers), memory.New(), log); err != nil {
+		t.Fatal(err)
+	}
 	f.server.Config.Handler = f.srv.Handler()
 	f.server.Start()
 	t.Cleanup(f.server.Close)
@@ -398,11 +402,12 @@ func TestLegacyGrantsIgnored(t *testing.T) {
 	f := newFixture(t, "")
 	node := f.idp.Service(t, "duckdb-secrets", "node")
 	f.do("PUT", "/v1/secrets/old", f.admin, s3Secret)
-	_, _ = f.srv.store.Update("old", func(cur *store.Secret) (*store.Secret, error) {
+	_, _ = f.srv.store.Update(context.Background(), "old", func(cur *state.Secret) (*state.Secret, error) {
+		cur.Version++
 		cur.Grants = append(cur.Grants,
-			store.Grant{ID: "s", Principal: "subject:" + f.idp.URL + "|carol-id", Verbs: []string{"use"}},
-			store.Grant{ID: "c", Principal: "client:node", Verbs: []string{"use", "update"}},
-			store.Grant{ID: "r", Principal: "role:analysts", Verbs: []string{"update", "grant"}})
+			state.Grant{ID: "s", Principal: "subject:" + f.idp.URL + "|carol-id", Verbs: []string{"use"}},
+			state.Grant{ID: "c", Principal: "client:node", Verbs: []string{"use", "update"}},
+			state.Grant{ID: "r", Principal: "role:analysts", Verbs: []string{"update", "grant"}})
 		return cur, nil
 	})
 	for name, token := range map[string]string{"carol": f.carol, "the node": node, "alice": f.alice} {
@@ -413,7 +418,9 @@ func TestLegacyGrantsIgnored(t *testing.T) {
 	if r := f.do("PUT", "/v1/secrets/old", f.alice, s3Secret); r.status != 403 {
 		t.Errorf("alice's legacy update: %d", r.status)
 	}
-	New(f.srv.cfg, f.srv.verifier, f.srv.store, f.srv.log)
+	if _, err := New(context.Background(), f.srv.cfg, f.srv.verifier, f.srv.store, f.srv.log); err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(f.logs.String(), "a grant from before specs/009 is ignored") {
 		t.Fatal("legacy grants are reported at start")
 	}
