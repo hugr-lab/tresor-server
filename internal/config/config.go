@@ -121,20 +121,20 @@ func (c *Config) validate() error {
 	}
 	host, _, err := net.SplitHostPort(c.Listen)
 	if err != nil {
-		return fmt.Errorf("listen %q: %w", c.Listen, err)
+		return errors.New("listen must be host:port")
 	}
 	if (c.TLS.Cert == "") != (c.TLS.Key == "") {
 		return errors.New("tls needs both cert and key")
 	}
 	if c.TLS.Cert == "" && !IsLoopback(host) {
-		return fmt.Errorf("plain http is allowed only on a loopback listen address, not %q - configure tls", host)
+		return errors.New("plain http is allowed only on a loopback listen address - configure tls")
 	}
 	u, err := url.Parse(c.PublicURL)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return fmt.Errorf("public_url %q must be an absolute http(s) URL", c.PublicURL)
+		return errors.New("public_url must be an absolute http(s) URL")
 	}
 	if u.Scheme == "http" && !IsLoopback(u.Hostname()) {
-		return fmt.Errorf("public_url %q: http only for a loopback host", c.PublicURL)
+		return errors.New("public_url: http only for a loopback host")
 	}
 	if c.Store != nil {
 		return errors.New("store: is the reference server's encrypted file - this service keeps its state as " +
@@ -144,7 +144,7 @@ func (c *Config) validate() error {
 		return errors.New("state.kind is required: " + strings.Join(StateKinds, " | "))
 	}
 	if !slices.Contains(StateKinds, c.State.Kind) {
-		return fmt.Errorf("state.kind is none of %s", strings.Join(StateKinds, " | ")) // the value unquoted: config values stay out of logs
+		return fmt.Errorf("state.kind is none of %s", strings.Join(StateKinds, " | "))
 	}
 	if len(c.Issuers) == 0 {
 		return errors.New("at least one issuer is required")
@@ -161,18 +161,18 @@ func (c *Config) validate() error {
 		if err != nil || iu.Host == "" || (iu.Scheme != "https" && !(iu.Scheme == "http" && IsLoopback(iu.Hostname()))) {
 			// its discovery and JWKS are fetched from here: over plain http anyone on the path could
 			// substitute the signing keys
-			return fmt.Errorf("issuer %q must be https (http only for a loopback host)", is.Issuer)
+			return fmt.Errorf("issuers[%d]: issuer must be https (http only for a loopback host)", i)
 		}
 		if seen[IssuerKey(is.Issuer)] {
-			return fmt.Errorf("issuer %q listed twice", is.Issuer)
+			return fmt.Errorf("issuers[%d]: the issuer is listed twice", i)
 		}
 		seen[IssuerKey(is.Issuer)] = true
 		if len(is.HumanFlows) > 0 && is.ClientID == "" {
-			return fmt.Errorf("issuer %q: human_flows need the public client_id people log in with", is.Issuer)
+			return fmt.Errorf("issuers[%d]: human_flows need the public client_id people log in with", i)
 		}
 		if is.Service != nil {
 			if is.Service.Claim == "" {
-				return fmt.Errorf("issuer %q: service.claim is required", is.Issuer)
+				return fmt.Errorf("issuers[%d]: service.claim is required", i)
 			}
 			if is.Service.ClientClaim == "" {
 				is.Service.ClientClaim = "azp"
@@ -180,22 +180,22 @@ func (c *Config) validate() error {
 		}
 		if ex := is.Exchange; ex != nil {
 			if ex.ClientID == "" || ex.ClientSecretEnv == "" {
-				return fmt.Errorf("issuer %q: exchange needs client_id and client_secret_env", is.Issuer)
+				return fmt.Errorf("issuers[%d]: exchange needs client_id and client_secret_env", i)
 			}
 			if IsSettingVariable(ex.ClientSecretEnv) {
-				return fmt.Errorf("issuer %q: exchange.client_secret_env names %s, which is read as configuration - "+
-					"give the secret a variable of its own", is.Issuer, ex.ClientSecretEnv)
+				return fmt.Errorf("issuers[%d]: exchange.client_secret_env names %s, which is read as configuration - "+
+					"give the secret a variable of its own", i, ex.ClientSecretEnv)
 			}
 			if ex.ClientSecret = os.Getenv(ex.ClientSecretEnv); ex.ClientSecret == "" {
-				return fmt.Errorf("issuer %q: exchange: the environment variable %s is empty", is.Issuer, ex.ClientSecretEnv)
+				return fmt.Errorf("issuers[%d]: exchange: the environment variable %s is empty", i, ex.ClientSecretEnv)
 			}
 		}
 		if len(is.Algorithms) == 0 {
 			is.Algorithms = []string{"RS256", "ES256"}
 		}
-		for _, alg := range is.Algorithms {
+		for j, alg := range is.Algorithms {
 			if !allowedAlgorithms[alg] {
-				return fmt.Errorf("issuer %q: algorithm %q is not allowed (asymmetric only)", is.Issuer, alg)
+				return fmt.Errorf("issuers[%d].algorithms[%d] is not allowed (asymmetric only)", i, j)
 			}
 		}
 	}
@@ -203,21 +203,21 @@ func (c *Config) validate() error {
 		return errors.New("policy.create is gone (tresor specs/009): only admins create secrets - list them in " +
 			"policy.admins")
 	}
-	for _, p := range c.Policy.Admins {
+	for i, p := range c.Policy.Admins {
 		if err := checkPrincipal(p); err != nil {
-			return fmt.Errorf("policy.admins: %w", err)
+			return fmt.Errorf("policy.admins[%d]: %w", i, err)
 		}
 	}
-	for _, a := range c.Policy.Actors {
+	for i, a := range c.Policy.Actors {
 		if !strings.HasPrefix(a.Principal, "client:") || len(a.Principal) <= len("client:") {
-			return fmt.Errorf("policy.actors: %q - an actor is a service, client:<id>", a.Principal)
+			return fmt.Errorf("policy.actors[%d]: an actor is a service, client:<id>", i)
 		}
 		if len(a.Verbs) == 0 {
-			return fmt.Errorf("policy.actors: %s lists no verbs - leave it out instead", a.Principal)
+			return fmt.Errorf("policy.actors[%d] lists no verbs - leave it out instead", i)
 		}
-		for _, v := range a.Verbs {
+		for j, v := range a.Verbs {
 			if !KnownVerb(v) && v != "create" {
-				return fmt.Errorf("policy.actors: unknown verb %q", v)
+				return fmt.Errorf("policy.actors[%d].verbs[%d] is not a verb", i, j)
 			}
 		}
 	}
@@ -230,7 +230,7 @@ func checkPrincipal(p string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("principal %q: role:, group:, subject: or client: expected", p)
+	return errors.New("role:, group:, subject: or client: expected")
 }
 
 // IssuerKey is how an issuer is looked up by a token's iss: without a trailing '/'.

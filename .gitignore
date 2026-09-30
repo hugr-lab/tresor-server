@@ -4,3 +4,4 @@ design/
 *.db-wal
 *.db-shm
 .env
+.claude/worktrees/

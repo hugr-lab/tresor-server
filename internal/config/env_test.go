@@ -165,3 +165,78 @@ func TestSecretVariableNotASetting(t *testing.T) {
 		t.Fatalf("a secret in a setting's variable: %v", err)
 	}
 }
+
+// a number or a flag where a text belongs is an error, never converted: `audience: 0123` must not become "83"
+func TestNoWeakTyping(t *testing.T) {
+	for name, doc := range map[string]string{
+		"an octal audience":  strings.Replace(good, "audience: duckdb-secrets", "audience: 0123", 1),
+		"a hex client_id":    strings.Replace(good, "audience: duckdb-secrets", "audience: a\n    client_id: 0x1F", 1),
+		"a flag for a text":  strings.Replace(good, "audience: duckdb-secrets", "audience: true", 1),
+		"a text for a list":  strings.Replace(good, "admins: [role:secrets_admin]", "admins: role:secrets_admin", 1),
+		"a text for a flag":  strings.Replace(good, "audience: duckdb-secrets", "audience: a\n    audience_parameter: '1'", 1),
+		"a key in capitals":  strings.Replace(good, "listen:", "Listen:", 1),
+		"a key twice":        good + "listen: 127.0.0.1:9\n",
+		"a dotted key":       good + "policy.admins: [role:x]\n",
+		"an empty Store key": good + "Store:\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			setenv(t)
+			if cfg, _, err := loadEnv(doc); err == nil {
+				t.Errorf("accepted: %+v", cfg.Issuers)
+			}
+		})
+	}
+	t.Run("env", func(t *testing.T) {
+		setenv(t, "TRESOR_ISSUERS=[{issuer: 'https://idp.example', audience: 0777}]")
+		if _, _, err := loadEnv(good); err == nil {
+			t.Error("an octal audience from the environment")
+		}
+	})
+	t.Run("a quoted number stays a text", func(t *testing.T) {
+		setenv(t)
+		cfg, _, err := loadEnv(strings.Replace(good, "audience: duckdb-secrets", "audience: '0123'", 1))
+		if err != nil || cfg.Issuers[0].Audience != "0123" {
+			t.Errorf("%v %+v", err, cfg)
+		}
+	})
+}
+
+// an empty variable is an empty text: it clears what the file set
+func TestEnvEmptyClears(t *testing.T) {
+	setenv(t, "TRESOR_TLS__CERT=", "TRESOR_TLS__KEY=")
+	cfg, used, err := loadEnv(good + "tls: {cert: a, key: b}\n")
+	if err != nil || cfg.TLS.Cert != "" || cfg.TLS.Key != "" || len(used) != 2 {
+		t.Fatalf("empty variables: %v %+v %v", err, cfg, used)
+	}
+}
+
+// a secret's variable a *_env setting names is left alone, whatever its shape
+func TestSecretVariableShapedLikeASetting(t *testing.T) {
+	setenv(t, "TRESOR_ISSUERS_SECRET=s3cr3t")
+	with := strings.Replace(good, "audience: duckdb-secrets",
+		"audience: duckdb-secrets\n    exchange: {client_id: c, client_secret_env: TRESOR_ISSUERS_SECRET}", 1)
+	cfg, _, err := loadEnv(with)
+	if err != nil || cfg.Issuers[0].Exchange.ClientSecret != "s3cr3t" {
+		t.Fatalf("a secret named by client_secret_env: %v", err)
+	}
+}
+
+// validation names the setting, never its value
+func TestValidationQuotesNoValue(t *testing.T) {
+	for _, env := range [][]string{
+		{"TRESOR_LISTEN=hunter2"},
+		{"TRESOR_LISTEN=hunter2:1"},
+		{"TRESOR_PUBLIC_URL=hunter2"},
+		{"TRESOR_POLICY__ADMINS=[hunter2]"},
+		{"TRESOR_POLICY__ACTORS=[{principal: hunter2, verbs: [use]}]"},
+		{"TRESOR_POLICY__ACTORS=[{principal: 'client:x', verbs: [hunter2]}]"},
+		{"TRESOR_ISSUERS=[{issuer: 'http://hunter2.example', audience: a}]"},
+		{"TRESOR_ISSUERS=[{issuer: 'https://i.example', audience: a, algorithms: [hunter2]}]"},
+	} {
+		setenv(t, env...)
+		_, _, err := loadEnv(good)
+		if err == nil || strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("%v: %v", env, err)
+		}
+	}
+}

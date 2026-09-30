@@ -340,12 +340,16 @@ variables, not a file. Every setting can be given there. The sources, in order, 
 
 Rules:
 - The result is validated as a file is: unknown keys are errors.
+- **No weak typing.** A number or a flag where a text belongs is an error, never converted
+  (`audience: 0123` must be quoted, not become `83`). Keys are exact: `Listen:`, a key twice, or a
+  dotted key (`policy.admins:`) in a document is an error.
+- An empty variable is an empty text: it clears what the file set.
   - Only a variable named after a setting is read as configuration (`TRESOR_LISTEN`,
     `TRESOR_STATE__…`, …; `TRESOR_CONFIG`).
   - A typo is an error, not ignored: a name with `__`, or a top-level setting's name and `_`, that
     names no setting (`TRESOR_STATE__KNID`, `TRESOR_STATE_KIND`, `TRESOR_POLICIES__ADMINS`).
-  - Other `TRESOR_` variables are left alone: the ones a setting names (`client_secret_env`,
-    `key_env`), and tresor's test variables.
+  - Other `TRESOR_` variables are left alone: the ones a `*_env` setting names (whatever their
+    shape: `TRESOR_ISSUERS_SECRET` too), and tresor's test variables.
   - A `*_env` setting may not name a variable that is read as configuration: its secret would be
     configuration too.
 - **No secret in the configuration**, from a file or from the environment. Secrets stay where
