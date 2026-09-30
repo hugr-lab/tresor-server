@@ -315,6 +315,36 @@ azure:
   - the README says the port must be reachable only through the ingress (Container Apps: no
     external port but the ingress's).
 
+### Configuration from the environment
+
+In containers, Kubernetes and Container Apps, the configuration often comes from environment
+variables, not a file. Every setting can be given there. The sources, in order, each over the last:
+
+1. **the file**, `-config <path>`. Optional now: without it, the configuration starts empty.
+2. **`TRESOR_CONFIG`**: the whole YAML document in one variable, in place of a file.
+3. **one variable per setting**: `TRESOR_` and the setting's path in capitals, `__` between the
+   levels.
+   - `TRESOR_LISTEN=0.0.0.0:8080`, `TRESOR_PUBLIC_URL=https://secrets.corp.example`
+   - `TRESOR_STATE__KIND=postgres`, `TRESOR_STATE__DSN=host=… dbname=tresor`, `TRESOR_STATE__AUTH=entra`
+   - `TRESOR_KEYS__KIND=azurekeyvault`, `TRESOR_KEYS__KEY=https://corp-kv.vault.azure.net/keys/tresor-kek`
+   - A value is read as YAML, so a list or a section fits in one variable:
+     `TRESOR_POLICY__ADMINS=[role:secrets_admin]`,
+     `TRESOR_ISSUERS=[{issuer: https://login.microsoftonline.com/<tenant>/v2.0, audience: api://tresor}]`.
+   - A variable replaces the whole value at its path (a list is not merged).
+
+Rules:
+- The result is validated as a file is: unknown keys are errors.
+  - Only a variable named after a top-level setting is read as configuration (`TRESOR_LISTEN`,
+    `TRESOR_STATE__…`, …; `TRESOR_CONFIG`).
+  - `TRESOR_STATE__KNID` (a known section, an unknown key) is an error.
+  - Other `TRESOR_` variables are left alone: the ones a setting names (`client_secret_env`,
+    `key_env`), and tresor's test variables.
+- **No secret in the configuration**, from a file or from the environment. Secrets stay where
+  their settings name them (`client_secret_env`, `password_env`, `key_env`): a Kubernetes Secret or a
+  Container Apps secret, as an environment variable of its own.
+- At start, the log names the settings that came from the environment, never their values.
+- No `${VAR}` expansion inside the YAML: one way to use the environment, not two.
+
 ### Health
 
 - `GET /healthz`: the process is up. Nothing else.
@@ -345,7 +375,7 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
   - the database's Entra administrator makes it a database user (a one-time step, in the README and
     a script: Bicep cannot create database users).
 - A Container Apps environment, the app with built-in ingress (TLS), two replicas or more.
-- The config as a Container Apps secret mounted as a file. It holds no secret itself.
+- The configuration as environment variables of the app (`TRESOR_…`); nothing to mount.
 - Optional: a VNet, with private endpoints to Key Vault and the database.
 - The cheapest tiers for the live run: PostgreSQL Burstable B1ms; Azure SQL serverless with
   auto-pause.
@@ -467,6 +497,8 @@ The docs site (Docusaurus, as tresor's `website/`) comes with or after (f).
 - **The image registry**: `ghcr.io/hugr-lab/tresor-server`.
 
 - **The region** for live runs: `westeurope`.
+- **Configuration from the environment** (the owner's addition): every setting, as `TRESOR_CONFIG`
+  or one `TRESOR_<PATH>` variable per setting.
 
 ## Open questions
 

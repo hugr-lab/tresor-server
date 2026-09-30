@@ -1,7 +1,7 @@
 # tresor-server next to the Keycloak of tresor's server/docker-compose.yml, for tresor's conformance suite
 # (scripts/ci/conformance.sh, through tresor's scripts/ci/test_keycloak.sh). It matches tresor's own
 # server/testdata/keycloak/server.yaml, which the tests are written against; test_keycloak.sh rewrites the
-# two ports. scripts/ci/conformance.sh sets the state kind.
+# two ports. scripts/ci/conformance.sh sets the state kind through TRESOR_STATE__KIND.
 listen: 127.0.0.1:18443
 public_url: http://127.0.0.1:18443
 state:

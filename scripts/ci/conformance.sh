@@ -17,17 +17,14 @@ trap 'rm -rf "$work"' EXIT
 	exit 1
 }
 (cd "$root" && GOWORK=off CGO_ENABLED=0 go build -o "$work/tresor-server" ./cmd/tresor-server)
-sed -e "s/^  kind: memory$/  kind: $kind/" "$root/testdata/keycloak/server.yaml" >"$work/server.yaml"
-grep -q "^  kind: $kind$" "$work/server.yaml" || {
-	echo "conformance: the config template names no state kind to replace" >&2
-	exit 1
-}
 
 # one simple command that is the server (test_keycloak.sh runs it with exec): the config it names is the one
 # test_keycloak.sh writes on this run's ports
 printf -v bin '%q' "$work/tresor-server"
 export TRESOR_SERVER_CMD="$bin -config \"\$TRESOR_TEST_SERVER_CONFIG\""
-export TRESOR_SERVER_CONFIG="$work/server.yaml"
+export TRESOR_SERVER_CONFIG="$root/testdata/keycloak/server.yaml"
+# the store from the environment, over the file's (spec 002: configuration from the environment)
+export TRESOR_STATE__KIND="$kind"
 export TRESOR_SERVER_WAIT="${TRESOR_SERVER_WAIT:-30}"
 echo "conformance: tresor-server on state $kind"
 "$tresor/scripts/ci/test_keycloak.sh" "$tresor/build/release/test/unittest"

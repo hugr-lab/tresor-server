@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -103,14 +104,7 @@ type ActorRule struct {
 	Verbs     []string `yaml:"verbs"`
 }
 
-// Load reads and validates a YAML file.
-func Load(file string) (*Config, error) {
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return nil, err
-	}
-	return Parse(data)
-}
+var quoted = regexp.MustCompile("`[^`]*`")
 
 // Parse validates a YAML document; unknown keys are an error, not ignored.
 func Parse(data []byte) (*Config, error) {
@@ -118,7 +112,8 @@ func Parse(data []byte) (*Config, error) {
 	dec := yaml.NewDecoder(strings.NewReader(string(data)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("config: %w", err)
+		// a type error quotes the value (`...`): it may be a secret put in the wrong place
+		return nil, fmt.Errorf("config: %s", quoted.ReplaceAllString(err.Error(), "`…`"))
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
