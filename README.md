@@ -44,6 +44,16 @@ Every setting can come from the environment, over the file: `TRESOR_CONFIG` (a w
   ```
 
   After a rotation of the KEK, `tresor-server rewrap -config …` moves the data keys to its current version.
+
+- Material that stays in Azure Key Vault: an administrator writes a parameter as a reference,
+  `ref+azkv://<vault>/<secret>[/<version>]` (from DuckDB: `CREATE PERSISTENT SECRET … (SECRET 'ref+azkv://corp-vault/lake-s3') IN corp`).
+  It is read at each fetch with the service's identity (Key Vault Secrets User), only within the allowlist:
+
+  ```yaml
+  material:
+    azkv:
+      allow: [{vault: corp-vault, prefixes: [lake-, duckdb-]}]
+  ```
   `scripts/dev/azure_live.sh up` checks the Key Vault KEK against a real vault.
 
 - `/healthz`: the process is up. `/readyz`: the state store, the KEK and every issuer answer.

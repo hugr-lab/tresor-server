@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# The Key Vault KEK, live (spec 002): a resource group of its own, a Key Vault on the RBAC permission model,
-# an RSA key, and the signed-in az user allowed to use it; then the live test seals, opens, rotates the key in
-# the vault and rewraps. Nothing is printed of a key or a token.
+# Key Vault, live (spec 002): a resource group of its own, a Key Vault on the RBAC permission model, an RSA key
+# and a secret, and the signed-in az user allowed to use them. The live tests then seal, open, rotate the key
+# in the vault and rewrap (the KEK); and resolve ref+azkv:// to the secret (references). Nothing is printed of
+# a key, a secret's value or a token.
 #
 #   scripts/dev/azure_live.sh up        # create (idempotent) and run the live test
 #   scripts/dev/azure_live.sh test      # run the live test against what exists
@@ -35,14 +36,17 @@ up() {
 	scope="$(az keyvault show -n "$vault" -g "$rg" --query id -o tsv)"
 	# the developer creates and rotates the key (Crypto Officer); the service's own role would be
 	# Key Vault Crypto Service Encryption User, on the key only
-	if [ -z "$(az role assignment list --assignee "$me" --role "Key Vault Crypto Officer" --scope "$scope" \
-		--query '[0].id' -o tsv)" ]; then
-		az role assignment create --assignee-object-id "$me" --assignee-principal-type User \
-			--role "Key Vault Crypto Officer" --scope "$scope" -o none || {
-			echo "azure_live: the role could not be assigned - Owner or User Access Administrator is needed on $rg" >&2
-			exit 1
-		}
-	fi
+	# ... and writes the test secret (Secrets Officer); the service's own role would be Key Vault Secrets
+	# User, on the secrets it may read
+	for role in "Key Vault Crypto Officer" "Key Vault Secrets Officer"; do
+		if [ -z "$(az role assignment list --assignee "$me" --role "$role" --scope "$scope" --query '[0].id' -o tsv)" ]; then
+			az role assignment create --assignee-object-id "$me" --assignee-principal-type User \
+				--role "$role" --scope "$scope" -o none || {
+				echo "azure_live: $role could not be assigned - Owner or User Access Administrator is needed on $rg" >&2
+				exit 1
+			}
+		fi
+	done
 	ready=0
 	for _ in $(seq 30); do
 		if az keyvault key list --vault-name "$vault" -o none 2>/dev/null; then
@@ -65,6 +69,17 @@ live() {
 	echo "azure_live: sealing through $kek"
 	(cd "$root" && GOWORK=off TRESOR_LIVE_KEK="$kek" TRESOR_LIVE_ROTATE=1 \
 		go test -tags live -count=1 -run TestLive -v ./internal/keys/azurekeyvault)
+	# a secret of this run's: a random value, set in the vault; the test compares it by hash only
+	value="$(openssl rand -hex 24)"
+	sha="$(printf '%s' "$value" | shasum -a 256 | cut -d' ' -f1)"
+	for _ in $(seq 30); do
+		az keyvault secret set --vault-name "$vault" -n duckdb-live-ref --value "$value" -o none 2>/dev/null && break
+		sleep 10 # the Secrets Officer role takes a while to reach the vault
+	done
+	unset value
+	echo "azure_live: resolving ref+azkv://$vault/duckdb-live-ref"
+	(cd "$root" && GOWORK=off TRESOR_LIVE_VAULT="$vault" TRESOR_LIVE_SECRET=duckdb-live-ref TRESOR_LIVE_SECRET_SHA="$sha" \
+		go test -tags live -count=1 -run TestLive -v ./internal/material/azurekeyvault)
 }
 
 down() {

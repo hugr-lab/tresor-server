@@ -22,6 +22,7 @@ type Config struct {
 	State     State    `yaml:"state"`
 	Keys      Keys     `yaml:"keys"`
 	Azure     Azure    `yaml:"azure"`
+	Material  Material `yaml:"material"`
 	Issuers   []Issuer `yaml:"issuers"`
 	Policy    Policy   `yaml:"policy"`
 	// Store is the reference server's encrypted file: kept only to refuse a config that still has it (an
@@ -71,6 +72,29 @@ type Keys struct {
 
 // KeyKinds are the KEKs this build knows.
 var KeyKinds = []string{"local", "azurekeyvault"}
+
+// Material is where references (ref+...) may read (spec 002).
+type Material struct {
+	AzKV AzKV `yaml:"azkv"`
+}
+
+// AzKV lets ref+azkv://<vault>/<secret> read Key Vault secrets: only in the vaults and under the name prefixes
+// listed, with the service's identity (Key Vault Secrets User).
+type AzKV struct {
+	Allow []AzKVAllow `yaml:"allow"`
+	// CacheTTL keeps a value read for this long (default 0: read at every fetch).
+	CacheTTL time.Duration `yaml:"cache_ttl"`
+	// DNSSuffix is another cloud's (default .vault.azure.net).
+	DNSSuffix string `yaml:"dns_suffix"`
+}
+
+// AzKVAllow is one vault, and the prefixes its secrets' names must start with (none: all).
+type AzKVAllow struct {
+	Vault    string   `yaml:"vault"`
+	Prefixes []string `yaml:"prefixes"`
+}
+
+var azkvVault = regexp.MustCompile(`^[0-9A-Za-z-]{3,24}$`)
 
 // Azure is the service's identity on Azure (spec 002): managed (a managed identity; ClientID names a
 // user-assigned one) or default (DefaultAzureCredential: the az CLI for development).
@@ -202,6 +226,25 @@ func (c *Config) validate() error {
 	}
 	if c.Azure.ClientID != "" && c.Azure.Identity != "managed" {
 		return errors.New("azure.client_id names a user-assigned managed identity: azure.identity: managed")
+	}
+	if kv := c.Material.AzKV; len(kv.Allow) > 0 || kv.CacheTTL != 0 || kv.DNSSuffix != "" {
+		if len(kv.Allow) == 0 {
+			return errors.New("material.azkv: allow lists the vaults references may read - none, no references")
+		}
+		if c.Azure.Identity == "" {
+			return errors.New("material.azkv reads with the service's Azure identity: azure.identity is required")
+		}
+		for i, a := range kv.Allow {
+			if !azkvVault.MatchString(a.Vault) {
+				return fmt.Errorf("material.azkv.allow[%d].vault: a vault's name, 3 to 24 letters, digits or dashes", i)
+			}
+		}
+		if kv.CacheTTL < 0 {
+			return errors.New("material.azkv.cache_ttl is positive")
+		}
+		if kv.DNSSuffix != "" && !strings.HasPrefix(kv.DNSSuffix, ".") {
+			return errors.New("material.azkv.dns_suffix begins with a dot (.vault.azure.net)")
+		}
 	}
 	if len(c.Issuers) == 0 {
 		return errors.New("at least one issuer is required")
