@@ -57,6 +57,18 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+  # the Container Apps recipe compiles, lint included
+  bicep:
+    name: Bicep
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: az bicep build
+        run: |
+          az bicep install
+          az bicep build -f deploy/azure-container-apps/main.bicep --stdout >/dev/null 2>bicep.log || { cat bicep.log; exit 1; }
+          if grep -q Warning bicep.log; then cat bicep.log; exit 1; fi
+
   # tresor at the pinned commit, built on a cache miss only (a new pin): its own workflow, so a change here
   # does not rebuild it
   tresor:

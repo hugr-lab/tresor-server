@@ -33,6 +33,9 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/state/sqlstore"
 )
 
+// version is the build's (-ldflags -X main.version=...): the image's tag.
+var version = "dev"
+
 // readyInterval is how often the readiness checks run (spec 002).
 const readyInterval = 30 * time.Second
 
@@ -248,8 +251,8 @@ func serve(configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	log.Info("tresor-server listening", "listen", listener.Addr().String(), "api", cfg.PublicURL,
-		"tls", cfg.TLS.Cert != "", "state", cfg.State.Kind)
+	log.Info("tresor-server listening", "version", version, "listen", listener.Addr().String(), "api", cfg.PublicURL,
+		"tls", cfg.TLS.Cert != "", "tls_offload", cfg.TLS.Offload, "state", cfg.State.Kind)
 
 	errs := make(chan error, 1)
 	go func() {

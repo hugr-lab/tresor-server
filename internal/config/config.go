@@ -30,10 +30,14 @@ type Config struct {
 	Store any `yaml:"store"`
 }
 
-// TLS names the certificate the server serves with; empty means plain http (loopback only).
+// TLS names the certificate the server serves with; empty means plain http (loopback only) - unless TLS ends
+// at the platform's ingress (Offload: Container Apps, an ingress controller), which forwards plain http.
 type TLS struct {
 	Cert string `yaml:"cert"`
 	Key  string `yaml:"key"`
+	// Offload: TLS ends before this process; it listens with plain http on any address, public_url is https,
+	// and the port must be reachable only through the ingress.
+	Offload bool `yaml:"offload"`
 }
 
 // State says where the service keeps what it knows (spec 002).
@@ -192,8 +196,12 @@ func (c *Config) validate() error {
 	if (c.TLS.Cert == "") != (c.TLS.Key == "") {
 		return errors.New("tls needs both cert and key")
 	}
-	if c.TLS.Cert == "" && !IsLoopback(host) {
-		return errors.New("plain http is allowed only on a loopback listen address - configure tls")
+	if c.TLS.Offload && c.TLS.Cert != "" {
+		return errors.New("tls.offload: TLS ends at the ingress - no cert and key here")
+	}
+	if c.TLS.Cert == "" && !c.TLS.Offload && !IsLoopback(host) {
+		return errors.New("plain http is allowed only on a loopback listen address - configure tls, or tls.offload " +
+			"when TLS ends at the platform's ingress")
 	}
 	u, err := url.Parse(c.PublicURL)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
@@ -201,6 +209,9 @@ func (c *Config) validate() error {
 	}
 	if u.Scheme == "http" && !IsLoopback(u.Hostname()) {
 		return errors.New("public_url: http only for a loopback host")
+	}
+	if c.TLS.Offload && u.Scheme != "https" {
+		return errors.New("public_url: https with tls.offload - clients reach the service through the ingress's TLS")
 	}
 	if c.Store != nil {
 		return errors.New("store: is the reference server's encrypted file - this service keeps its state as " +
