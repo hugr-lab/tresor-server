@@ -6,34 +6,41 @@ package api
 // an admin granted the server; management passes through only for a user who is an admin, and only the
 // verbs the actor policy lists (administration through a duckdb-acl node).
 
+// Grants are kept in the state store (spec 002), for every replica to honour: keyed by the SHA-256 of their
+// id - a bearer credential, never stored - with the user's subject token and minted tokens sealed.
+
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
+	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
 const (
-	defaultGrantTTL = time.Hour
-	maxGrantTTL     = 8 * time.Hour
-	maxGrants       = 100000 // in memory: an allowed actor must not be able to exhaust it
+	defaultGrantTTL   = time.Hour
+	maxGrantTTL       = 8 * time.Hour
+	maxGrantsPerActor = 10000 // live grants per actor: one allowed actor must not exhaust the others' room
 )
 
-// grant is a delegation grant: in memory only - a bearer credential is never written to disk.
+// grant is a delegation grant, as read from the store for one request.
 type grant struct {
+	idHash      []byte
 	actorOwner  string // the subject: of the server it was issued to - only it may present the grant
 	actorClient string // its client: principal
 	actorIssuer string
 	user        auth.Caller
 	expires     time.Time
-	minted      *grantTokens // the user's tokens minted at the exchange (specs/010), in memory with the grant
 }
 
 type grantKey struct{}
@@ -44,83 +51,33 @@ func grantOf(r *http.Request) *grant {
 	return gr
 }
 
-type grants struct {
-	mu     sync.Mutex
-	byID   map[string]*grant
-	purged time.Time
+// errGrantStore: the store did not answer - 503, not a refusal.
+var errGrantStore = errors.New("the delegation grants could not be read")
+
+func hashGrantID(id string) []byte {
+	sum := sha256.Sum256([]byte(id))
+	return sum[:]
 }
 
-var errTooManyGrants = errors.New("too many delegation grants")
-
-func (g *grants) put(gr *grant, now time.Time) (string, error) {
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		panic(err) // no randomness, no grants
+// loadGrant reads a live grant by its id: nil when there is none (or it expired).
+func (s *Server) loadGrant(ctx context.Context, id string) (*grant, error) {
+	if id == "" {
+		return nil, nil
 	}
-	id := hex.EncodeToString(raw)
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.byID == nil {
-		g.byID = map[string]*grant{}
+	d, err := s.store.Delegations().Get(ctx, hashGrantID(id), s.now())
+	if errors.Is(err, state.ErrNotFound) {
+		return nil, nil
 	}
-	g.purge(now, true)
-	if len(g.byID) >= maxGrants {
-		return "", errTooManyGrants
+	if err != nil {
+		s.log.Error("delegation grants: the store failed", "error", err.Error())
+		return nil, errGrantStore
 	}
-	g.byID[id] = gr
-	return id, nil
-}
-
-// purge drops expired grants; at most once a second unless forced (a lookup must not scan the map).
-func (g *grants) purge(now time.Time, force bool) {
-	if !force && now.Sub(g.purged) < time.Second {
-		return
+	gr := &grant{idHash: d.IDHash, actorOwner: d.ActorOwner, actorClient: d.ActorClient, actorIssuer: d.ActorIssuer,
+		expires: d.ExpiresAt}
+	if err := json.Unmarshal(d.User, &gr.user); err != nil {
+		return nil, fmt.Errorf("%w: a grant's user does not read", errGrantStore)
 	}
-	g.purged = now
-	for key, gr := range g.byID {
-		if !now.Before(gr.expires) {
-			delete(g.byID, key)
-		}
-	}
-}
-
-// full: no room for another grant (after purging the expired ones).
-func (g *grants) full(now time.Time) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.purge(now, true)
-	return len(g.byID) >= maxGrants
-}
-
-func (g *grants) get(id string, now time.Time) *grant {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.purge(now, false)
-	gr := g.byID[id]
-	if gr == nil || !now.Before(gr.expires) {
-		return nil
-	}
-	return gr
-}
-
-// revokeWhere removes every grant `match` accepts; how many.
-func (g *grants) revokeWhere(match func(*grant) bool) int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	n := 0
-	for key, gr := range g.byID {
-		if match(gr) {
-			delete(g.byID, key)
-			n++
-		}
-	}
-	return n
-}
-
-func (g *grants) remove(id string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	delete(g.byID, id)
+	return gr, nil
 }
 
 // actorVerbs is what the policy lets this server (its client: principal, from this issuer) do for users;
@@ -144,7 +101,10 @@ func (s *Server) actorAllowed(client, issuer string) bool {
 // client: a grant presented by anyone but its actor is no grant.
 func (s *Server) delegated(r *http.Request, actor *auth.Caller) (*auth.Caller, *grant, error) {
 	id := strings.TrimSpace(r.Header.Get("Delegation"))
-	gr := s.grants.get(id, s.now())
+	gr, err := s.loadGrant(r.Context(), id)
+	if err != nil {
+		return nil, nil, err
+	}
 	if gr == nil {
 		return nil, nil, errors.New("no such delegation grant (or expired)")
 	}
@@ -199,21 +159,51 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 		ttl = maxGrantTTL
 	}
 	expires := s.now().Add(ttl)
-	gr := &grant{actorOwner: actor.Owner(), actorClient: client, actorIssuer: actor.Issuer, user: *user,
-		expires: expires}
-	if s.grants.full(s.now()) { // before any exchange at the IdP
+	grants := s.store.Delegations()
+	if n, err := grants.Count(r.Context(), actor.Owner(), s.now()); err != nil || n >= maxGrantsPerActor {
+		// before any exchange at the IdP
+		if err != nil {
+			s.log.Error("delegation grants: the store failed", "error", err.Error())
+		}
 		problem(w, http.StatusServiceUnavailable, "service_unavailable", "too many delegation grants")
 		return
 	}
 	// the user's tokens for what the server may mint (specs/010): now, while the subject token lives
-	s.mintAtGrant(r.Context(), gr, body.SubjectToken, actor)
+	mayMint := slices.Contains(s.actorVerbs(client, actor.Issuer), "use")
+	var minted map[string]mintResult
+	if mayMint {
+		minted = s.mintAtGrant(r.Context(), user, body.SubjectToken, actor)
+	}
 	if r.Context().Err() != nil {
 		return // the server gave up waiting: no grant nobody holds, with its refresh tokens
 	}
-	id, err := s.grants.put(gr, s.now())
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		panic(err) // no randomness, no grants
+	}
+	id := hex.EncodeToString(raw)
+	userJSON, err := json.Marshal(user)
 	if err != nil {
+		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the grant could not be stored")
+		return
+	}
+	d := state.Delegation{IDHash: hashGrantID(id), ActorOwner: actor.Owner(), ActorClient: client,
+		ActorIssuer: actor.Issuer, UserOwner: user.Owner(), User: userJSON, ExpiresAt: expires}
+	if mayMint { // kept, sealed, for what could not be minted now - only while it lives
+		d.Subject, d.SubjectExpiresAt = []byte(body.SubjectToken), user.ExpiresAt
+	}
+	if err := grants.Put(r.Context(), d, maxGrantsPerActor); err != nil {
+		if !errors.Is(err, state.ErrTooMany) {
+			s.log.Error("delegation grants: the store failed", "error", err.Error())
+		}
 		problem(w, http.StatusServiceUnavailable, "service_unavailable", "too many delegation grants")
 		return
+	}
+	for key, res := range minted {
+		if err := s.storeMinted(r.Context(), d.IDHash, key, 1, res); err != nil {
+			// minted lazily from the subject token instead, while it lives
+			s.log.Warn("a grant's minted token was not stored", "actor", client, "error", err.Error())
+		}
 	}
 	s.log.Info("delegation granted", "actor", client, "user", user.Owner(), "expires", expires.UTC())
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -231,19 +221,19 @@ func (s *Server) revokeGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, subject := r.URL.Query().Get("actor"), r.URL.Query().Get("subject")
-	var n int
 	if s.isAdmin(c) {
 		if actor == "" && subject == "" {
 			problem(w, http.StatusUnprocessableEntity, "invalid_secret", "name an actor or a subject to revoke")
 			return
 		}
-		n = s.grants.revokeWhere(func(g *grant) bool {
-			return (actor == "" || g.actorClient == actor) && (subject == "" || g.user.Owner() == subject)
-		})
 	} else {
-		n = s.grants.revokeWhere(func(g *grant) bool {
-			return g.user.Owner() == c.Owner() && (actor == "" || g.actorClient == actor)
-		})
+		subject = c.Owner() // anyone else: the grants made for themselves
+	}
+	n, err := s.store.Delegations().DeleteWhere(r.Context(), actor, subject)
+	if err != nil {
+		s.log.Error("delegation grants: the store failed", "error", err.Error())
+		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the grants could not be revoked")
+		return
 	}
 	s.log.Info("delegation grants revoked", "by", c.Owner(), "actor", actor, "subject", subject, "count", n)
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": n})
@@ -251,12 +241,20 @@ func (s *Server) revokeGrants(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
 	c := callerOf(r)
-	gr := s.grants.get(r.PathValue("id"), s.now())
+	gr, err := s.loadGrant(r.Context(), r.PathValue("id"))
+	if err != nil {
+		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the grant could not be read")
+		return
+	}
 	if gr == nil || c.Actor != "" || (gr.actorOwner != c.Owner() && !s.isAdmin(c)) {
 		problem(w, http.StatusNotFound, "not_found", "no such delegation grant")
 		return
 	}
-	s.grants.remove(r.PathValue("id"))
+	if _, err := s.store.Delegations().Delete(r.Context(), gr.idHash); err != nil {
+		s.log.Error("delegation grants: the store failed", "error", err.Error())
+		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the grant could not be revoked")
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

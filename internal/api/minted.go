@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"net/url"
 	"slices"
@@ -80,44 +81,54 @@ func (s *Server) validMinted(typ string, params map[string]json.RawMessage) erro
 // mintKey identifies a minted token: the audience and the scope - all a token depends on.
 func mintKey(audience, scope string) string { return audience + "\x00" + scope }
 
-// mintEntry is one audience's token under a grant; its own lock serialises that audience's mints and
-// refreshes (refresh tokens rotate) without holding up the grant's other audiences.
-type mintEntry struct {
-	mu     sync.Mutex
+// mintResult is what minting at a grant's exchange gave for one audience: a token, or the IdP's lasting
+// refusal (an outage leaves both empty: minted lazily later).
+type mintResult struct {
 	token  *mint.Token
-	failed string // why minting for the user failed for good (the IdP refused), never a token
+	failed string
 }
 
-// grantTokens are a grant's minted tokens (in memory only, with the grant): the user's, per audience. The
-// grant's subject token is kept until it expires: a secret the IdP could not mint at the exchange (an outage)
-// or one granted to the server since is minted from it lazily, while it lives.
-type grantTokens struct {
-	mu         sync.Mutex
-	entries    map[string]*mintEntry
-	subject    string
-	subjectExp time.Time
+// mintLocks serialise one replica's renewals of one grant's token (other replicas are held off by the
+// store's compare-and-set): a fixed set, by hash, so it never grows.
+var mintLocks [64]sync.Mutex
+
+func mintLock(idHash []byte, key string) *sync.Mutex {
+	h := fnv.New32a()
+	h.Write(idHash)
+	h.Write([]byte(key))
+	return &mintLocks[h.Sum32()%uint32(len(mintLocks))]
 }
 
-func (g *grantTokens) entry(key string) *mintEntry {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	e := g.entries[key]
-	if e == nil {
-		e = &mintEntry{}
-		g.entries[key] = e
+// storeMinted stores a grant's minted token (or its refusal) at a version, sealed by the store.
+func (s *Server) storeMinted(ctx context.Context, idHash []byte, key string, version int64, res mintResult) error {
+	t := state.MintedToken{Key: key, Version: version, Failed: res.failed}
+	if res.token != nil {
+		raw, err := json.Marshal(res.token)
+		if err != nil {
+			return err
+		}
+		t.Token = raw
 	}
-	return e
+	return s.store.Delegations().PutToken(ctx, idHash, t)
 }
 
-// liveSubject is the grant's subject token while it lives; an expired one is dropped.
-func (g *grantTokens) liveSubject(now time.Time) string {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.subject != "" && now.Before(g.subjectExp) {
-		return g.subject
+// loadMinted reads a grant's minted token: the token (nil when none, or refused), the refusal, the version.
+func (s *Server) loadMinted(ctx context.Context, idHash []byte, key string) (*mint.Token, string, int64, error) {
+	t, err := s.store.Delegations().Token(ctx, idHash, key)
+	if errors.Is(err, state.ErrNotFound) {
+		return nil, "", 0, nil
 	}
-	g.subject = ""
-	return ""
+	if err != nil {
+		return nil, "", 0, err
+	}
+	var token *mint.Token
+	if t.Token != nil {
+		token = &mint.Token{}
+		if err := json.Unmarshal(t.Token, token); err != nil {
+			return nil, "", 0, fmt.Errorf("a minted token does not read: %w", err)
+		}
+	}
+	return token, t.Failed, t.Version, nil
 }
 
 // directCache caches the tokens minted for callers reading directly, until shortly before they expire.
@@ -181,17 +192,13 @@ func (s *Server) checkMinted(token *mint.Token, audience string) error {
 }
 
 // mintAtGrant: at a grant's exchange, the user's token is exchanged - with a refresh token - for every
-// audience the actor may mint, concurrently and under one deadline; the results stay with the grant. The
-// subject token is kept until it expires, for what could not be minted now.
-func (s *Server) mintAtGrant(ctx context.Context, gr *grant, subject string, actor *auth.Caller) {
-	gr.minted = &grantTokens{entries: map[string]*mintEntry{}, subject: subject, subjectExp: gr.user.ExpiresAt}
-	if !slices.Contains(s.actorVerbs(actor.Client(), actor.Issuer), "use") {
-		return
-	}
+// audience the actor may mint, concurrently and under one deadline; the results are stored with the grant.
+// The subject token is kept (sealed) until it expires, for what could not be minted now.
+func (s *Server) mintAtGrant(ctx context.Context, user *auth.Caller, subject string, actor *auth.Caller) map[string]mintResult {
 	secrets, err := s.store.List(ctx)
 	if err != nil {
 		s.log.Error("store read failed", "error", err.Error())
-		return // minted lazily from the subject token, while it lives
+		return nil // minted lazily from the subject token, while it lives
 	}
 	targets := map[string][2]string{}
 	for _, listed := range secrets {
@@ -206,17 +213,18 @@ func (s *Server) mintAtGrant(ctx context.Context, gr *grant, subject string, act
 		}
 	}
 	if len(targets) == 0 {
-		return
+		return nil
 	}
-	client, problem := s.mintClient(ctx, gr.user.Issuer)
+	client, problem := s.mintClient(ctx, user.Issuer)
 	if problem != nil {
-		return // minted lazily from the subject token, or refused at the read with the reason
+		return nil // minted lazily from the subject token, or refused at the read with the reason
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), grantMintDeadline)
 	defer cancel()
+	results := map[string]mintResult{}
+	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for key, target := range targets {
-		entry := gr.minted.entry(key)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -224,21 +232,22 @@ func (s *Server) mintAtGrant(ctx context.Context, gr *grant, subject string, act
 			if err == nil {
 				err = s.checkMinted(token, target[0])
 			}
-			entry.mu.Lock()
-			defer entry.mu.Unlock()
+			mu.Lock()
+			defer mu.Unlock()
 			switch {
 			case err == nil:
-				entry.token = token
+				results[key] = mintResult{token: token}
 			case isRefusal(err):
-				entry.failed = err.Error() // the IdP's word, redacted; lazily retried only for outages
+				results[key] = mintResult{failed: err.Error()} // the IdP's word, redacted; outages retried lazily
 				fallthrough
 			default:
-				s.log.Warn("minting at a grant failed", "actor", actor.Client(), "user", gr.user.Owner(),
+				s.log.Warn("minting at a grant failed", "actor", actor.Client(), "user", user.Owner(),
 					"audience", target[0], "reason", err.Error())
 			}
 		}()
 	}
 	wg.Wait()
+	return results
 }
 
 // isRefusal: the IdP answered no (a lasting refusal), as opposed to not answering (an outage).
@@ -298,69 +307,103 @@ func (s *Server) mintedToken(r *http.Request, c *auth.Caller, sec *state.Secret)
 }
 
 // mintedForGrant: under a grant, the grant's user's token - minted at the exchange (or lazily from the
-// subject token while it lives), renewed from its refresh token.
+// subject token while it lives), renewed from its refresh token. Every replica reads it from the store; a
+// renewal is compare-and-set, and a replica that loses the race takes the winner's token rather than spend a
+// rotated refresh token twice.
 func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope string,
 	fresh func(*mint.Token) bool) (*mint.Token, *mintProblem) {
-	if gr.minted == nil {
-		return nil, refusedMint("this grant carries no minted tokens")
-	}
-	entry := gr.minted.entry(key)
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	if fresh(entry.token) || (entry.token != nil && entry.token.Expiry.IsZero()) {
-		return entry.token, nil
-	}
-	client, problem := s.mintClient(r.Context(), gr.user.Issuer)
-	if problem != nil {
-		return nil, problem
-	}
+	lock := mintLock(gr.idHash, key)
+	lock.Lock()
+	defer lock.Unlock()
 	// detached from the request: a refresh token the IdP rotated must not be lost with a dropped connection
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), refreshTimeout)
 	defer cancel()
-	if entry.token != nil && entry.token.Refresh != "" {
-		renewed, err := client.Refresh(ctx, entry.token.Refresh)
-		if err == nil {
-			if err = s.checkMinted(renewed, audience); err == nil {
-				entry.token = renewed
-				return renewed, nil
+	for range 3 {
+		token, failed, version, err := s.loadMinted(ctx, gr.idHash, key)
+		if err != nil {
+			s.log.Error("a grant's minted token: the store failed", "error", err.Error())
+			return nil, unavailableMint("the grant's token could not be read")
+		}
+		if fresh(token) || (token != nil && token.Expiry.IsZero()) {
+			return token, nil
+		}
+		client, problem := s.mintClient(ctx, gr.user.Issuer)
+		if problem != nil {
+			return nil, problem
+		}
+		var next mintResult
+		switch {
+		case token != nil && token.Refresh != "":
+			renewed, err := client.Refresh(ctx, token.Refresh)
+			if err == nil {
+				err = s.checkMinted(renewed, audience)
 			}
+			if err != nil {
+				if _, _, now, rerr := s.loadMinted(ctx, gr.idHash, key); rerr == nil && now != version {
+					continue // another replica renewed it meanwhile (and spent the refresh token): take its
+				}
+				if mint.IsInvalidGrant(err) {
+					next = mintResult{failed: "the user's session at the identity provider has ended"}
+					break
+				}
+				s.log.Warn("renewing a minted token failed", "user", gr.user.Owner(), "audience", audience,
+					"reason", err.Error())
+				if !isRefusal(err) {
+					return nil, unavailableMint("the identity provider did not renew the token")
+				}
+				next = mintResult{failed: err.Error()}
+				break
+			}
+			next = mintResult{token: renewed}
+		case failed != "":
+			return nil, refusedMint("minting for the user was refused: " + failed)
+		default:
+			// nothing minted yet (an outage at the exchange, or a secret granted to the server since): from
+			// the subject token, while it lives
+			subject, err := s.store.Delegations().SubjectToken(ctx, gr.idHash, s.now())
+			if errors.Is(err, state.ErrNotFound) {
+				return nil, refusedMint("the grant's user token has expired: a new session mints it")
+			}
+			if err != nil {
+				s.log.Error("a grant's subject token: the store failed", "error", err.Error())
+				return nil, unavailableMint("the grant's token could not be read")
+			}
+			minted, err := client.Exchange(ctx, string(subject), audience, scope, true)
+			clear(subject)
+			if err == nil {
+				err = s.checkMinted(minted, audience)
+			}
+			if err != nil {
+				s.log.Warn("minting for the grant's user failed", "user", gr.user.Owner(), "audience", audience,
+					"reason", err.Error())
+				if !isRefusal(err) && !strings.Contains(err.Error(), "minted a token") {
+					return nil, unavailableMint("the identity provider did not answer")
+				}
+				next = mintResult{failed: err.Error()}
+				break
+			}
+			next = mintResult{token: minted}
 		}
-		if mint.IsInvalidGrant(err) {
-			entry.token = nil
-			entry.failed = "the user's session at the identity provider has ended"
-			return nil, refusedMint(entry.failed)
+		err = s.storeMinted(ctx, gr.idHash, key, version+1, next)
+		if errors.Is(err, state.ErrConflict) {
+			continue // another replica stored one first: read it
 		}
-		s.log.Warn("renewing a minted token failed", "user", gr.user.Owner(), "audience", audience, "reason", err.Error())
-		if !isRefusal(err) {
-			return nil, unavailableMint("the identity provider did not renew the token")
+		if errors.Is(err, state.ErrNotFound) {
+			return nil, refusedMint("the delegation grant has been revoked")
 		}
-		entry.token, entry.failed = nil, err.Error()
-		return nil, refusedMint("renewing the user's token was refused: " + err.Error())
-	}
-	if entry.failed != "" {
-		return nil, refusedMint("minting for the user was refused: " + entry.failed)
-	}
-	// nothing minted yet (an outage at the exchange, or a secret granted to the server since): from the
-	// subject token, while it lives
-	subject := gr.minted.liveSubject(s.now())
-	if subject == "" {
-		return nil, refusedMint("the grant's user token has expired: a new session mints it")
-	}
-	token, err := client.Exchange(ctx, subject, audience, scope, true)
-	if err == nil {
-		err = s.checkMinted(token, audience)
-	}
-	if err != nil {
-		s.log.Warn("minting for the grant's user failed", "user", gr.user.Owner(), "audience", audience,
-			"reason", err.Error())
-		if isRefusal(err) || strings.Contains(err.Error(), "minted a token") {
-			entry.failed = err.Error()
-			return nil, refusedMint("minting for the user was refused: " + err.Error())
+		if err != nil {
+			s.log.Error("a grant's minted token: the store failed", "error", err.Error())
+			// the token is good for this request; the next one renews again
 		}
-		return nil, unavailableMint("the identity provider did not answer")
+		if next.token == nil {
+			if strings.HasPrefix(next.failed, "the user's session") {
+				return nil, refusedMint(next.failed)
+			}
+			return nil, refusedMint("minting for the user was refused: " + next.failed)
+		}
+		return next.token, nil
 	}
-	entry.token = token
-	return token, nil
+	return nil, unavailableMint("the grant's token kept changing")
 }
 
 // bearerOf is the raw bearer token of the request (verified already by authed).

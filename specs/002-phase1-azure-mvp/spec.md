@@ -137,8 +137,8 @@ type DelegationStore interface {
     expiries, a version.
   - A renewal is compare-and-set on that version: refresh tokens rotate, and a replica that loses
     the race takes the winner's tokens instead of spending a refresh token twice.
-  - Each replica keeps a short cache of access tokens, keyed by the id hash. A grant the store no
-    longer has (revoked, expired) drops its cache entries.
+  - No replica caches them: each request reads the grant and its token from the store. A grant
+    revoked on one replica is gone on the next request on any other.
 - **The limit** is per actor (`maxPerActor`, default 10000), not global: one actor cannot use up
   every other's. `Put` counts and inserts under a lock: the transaction on SQLite, an advisory lock
   on PostgreSQL, `sp_getapplock` on SQL Server.
@@ -455,12 +455,12 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
 2. **(b) SQL, SQLite and the envelope**: `sqlstore`, the dialect type, the migrations, the lease, the
    StateStore suite; `keys`, the envelope, data keys, the `local` KEK. SQLite never holds material in
    the clear, so the envelope comes with it. Conformance on SQLite.
-3. **(c) delegations and Key Vault**: delegations and their minted tokens in the store (sealed from
-   the start), the `azurekeyvault` KEK, `rewrap`.
-4. **(d) PostgreSQL and SQL Server**: the two dialects, Entra logins, the suite and conformance on
+3. **(c1) delegations**: delegations and their minted tokens in the store, sealed from the start.
+4. **(c2) Key Vault**: the `azurekeyvault` KEK, `rewrap`.
+5. **(d) PostgreSQL and SQL Server**: the two dialects, Entra logins, the suite and conformance on
    both, two replicas in CI.
-5. **(e) references**: `material`, `azkv`, the allowlist.
-6. **(f) the container and Container Apps**: `tls.offload`, Dockerfile, image CI, the Bicep recipe; the live run.
+6. **(e) references**: `material`, `azkv`, the allowlist.
+7. **(f) the container and Container Apps**: `tls.offload`, Dockerfile, image CI, the Bicep recipe; the live run.
 
 The docs site (Docusaurus, as tresor's `website/`) comes with or after (f).
 
