@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	mssql "github.com/microsoft/go-mssqldb"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -75,6 +76,39 @@ var Postgres = Dialect{
 		return err
 	},
 	Bootstrap: bootstrapPortable,
+}
+
+// SQLServer is SQL Server or Azure SQL through go-mssqldb: several replicas.
+var SQLServer = Dialect{
+	Name:       "sqlserver",
+	Rebind:     numbered("@p"),
+	Unique:     msNumber(2627, 2601, 2714), // a unique constraint, a unique index; an object that exists (the bootstrap)
+	ForeignKey: msNumber(547),
+	Retryable:  msNumber(1205), // a deadlock victim
+	Lock: func(ctx context.Context, tx *sql.Tx, key string) error {
+		_, err := tx.ExecContext(ctx, `DECLARE @r INT;
+			EXEC @r = sp_getapplock @Resource = @p1, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 30000;
+			IF @r < 0 THROW 50000, 'sp_getapplock did not give the lock', 1;`, key)
+		return err
+	},
+	Bootstrap: `IF OBJECT_ID(N'schema_migrations', N'U') IS NULL
+		CREATE TABLE schema_migrations (version BIGINT NOT NULL PRIMARY KEY, name NVARCHAR(400) NOT NULL,
+			applied_at BIGINT NOT NULL)`,
+}
+
+func msNumber(numbers ...int32) func(error) bool {
+	return func(err error) bool {
+		var me mssql.Error
+		if !errors.As(err, &me) {
+			return false
+		}
+		for _, n := range numbers {
+			if me.SQLErrorNumber() == n {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 // numbered rebinds `?` to prefix1, prefix2, ... (the queries hold no `?` of their own).

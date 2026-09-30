@@ -37,7 +37,8 @@ type TLS struct {
 
 // State says where the service keeps what it knows (spec 002).
 type State struct {
-	// Kind is the store: memory (lost when the process ends), sqlite (one replica), postgres (several).
+	// Kind is the store: memory (lost when the process ends), sqlite (one replica), postgres or sqlserver
+	// (several).
 	Kind string `yaml:"kind"`
 	// Path is the SQLite database's file.
 	Path string `yaml:"path"`
@@ -52,7 +53,7 @@ type State struct {
 }
 
 // StateKinds are the stores this build knows.
-var StateKinds = []string{"memory", "sqlite", "postgres"}
+var StateKinds = []string{"memory", "sqlite", "postgres", "sqlserver"}
 
 // Keys is the KEK the params are sealed under (spec 002): local, a 32-byte key from the environment or a
 // file; or azurekeyvault, a key in Key Vault or Managed HSM.
@@ -280,9 +281,9 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// validateServer checks a database server's settings (postgres).
+// validateServer checks a database server's settings (postgres, sqlserver).
 func (s *State) validateServer(identity string) error {
-	if s.Kind != "postgres" {
+	if s.Kind != "postgres" && s.Kind != "sqlserver" {
 		if s.DSN != "" || s.Auth != "" || s.PasswordEnv != "" || s.PasswordFile != "" || s.MaxOpenConns != 0 {
 			return fmt.Errorf("state: dsn, auth, password_env, password_file, max_open_conns are for a database server, not %s", s.Kind)
 		}

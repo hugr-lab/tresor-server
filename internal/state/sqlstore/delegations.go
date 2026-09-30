@@ -2,6 +2,7 @@ package sqlstore
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -17,9 +18,13 @@ type delegations struct{ s *Store }
 
 func (s *Store) Delegations() state.DelegationStore { return delegations{s} }
 
-// mintKeyColumn is a minted token's key as stored: hex - a key joins its audience and scope with a NUL, which
-// a PostgreSQL text holds not.
-func mintKeyColumn(key string) string { return hex.EncodeToString([]byte(key)) }
+// mintKeyColumn is a minted token's key as stored: its SHA-256, hex - a key joins its audience and scope with
+// a NUL, which a PostgreSQL text holds not, and may be longer than a SQL Server index key. (The AAD names the
+// key itself.)
+func mintKeyColumn(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
+}
 
 func subjectAAD(idHash string) []byte { return []byte("tresor-server/delegation/1\x00" + idHash) }
 

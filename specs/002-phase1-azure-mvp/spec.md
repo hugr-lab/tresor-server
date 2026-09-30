@@ -180,8 +180,8 @@ The schema (migration `0001`, one SQL file per dialect, applied in `schema_migra
   SQL Server: `sp_getapplock`), so several replicas starting at once apply them once. A binary
   refuses a database whose migration is newer than it knows.
 - No upsert, no JSON functions: portable SQL only.
-- A minted token's key (its audience and scope, NUL between) is stored hex: a PostgreSQL text holds no
-  NUL.
+- A minted token's key (its audience and scope, NUL between) is stored as its SHA-256, hex: a
+  PostgreSQL text holds no NUL, and a SQL Server index key is short. The AAD names the key itself.
 - What differs per dialect beyond the DDL: how a transaction locks a name (the migrations; an actor's
   grants counted and inserted) - PostgreSQL `pg_advisory_xact_lock`, SQL Server `sp_getapplock`,
   SQLite's exclusive write transaction; and which errors mean "run it again" (deadlocks, serialization
@@ -220,6 +220,10 @@ The schema (migration `0001`, one SQL file per dialect, applied in `schema_migra
   user is created `FROM EXTERNAL PROVIDER` for the managed identity.
 - `auth: password`: as for PostgreSQL.
 - Snapshot isolation is not needed: the compare-and-set is a single `UPDATE`.
+- Off this machine, `encrypt=true` (or `strict`) with the certificate checked is required: the login
+  goes over the connection.
+- An index key holds 900 bytes (1700 nonclustered): a secret's name is at most 450 characters, the
+  grants' key is nonclustered, and a minted token's key is stored as its SHA-256 (in every dialect).
 
 A database password as a `ref+azkv://` reference (spec 001) is a follow-up; phase 1 logs in with
 Entra on Azure.
@@ -325,7 +329,7 @@ state:
   kind: postgres                 # memory | sqlite | postgres | sqlserver
   # sqlite:    path: /data/tresor.db
   # postgres:  dsn: host=corp-pg.postgres.database.azure.com dbname=tresor user=tresor-id sslmode=verify-full
-  # sqlserver: dsn: sqlserver://corp-sql.database.windows.net?database=tresor
+  # sqlserver: dsn: sqlserver://corp-sql.database.windows.net?database=tresor&encrypt=true
   auth: entra                    # entra | password (password_env or password_file)
   max_open_conns: 10
 keys:
