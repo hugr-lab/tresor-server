@@ -36,14 +36,22 @@ type TLS struct {
 
 // State says where the service keeps what it knows (spec 002).
 type State struct {
-	// Kind is the store: memory (lost when the process ends), sqlite (one replica).
+	// Kind is the store: memory (lost when the process ends), sqlite (one replica), postgres (several).
 	Kind string `yaml:"kind"`
 	// Path is the SQLite database's file.
 	Path string `yaml:"path"`
+	// DSN names a database server, the database and the user - never a password.
+	DSN string `yaml:"dsn"`
+	// Auth is how the service logs in to the database: entra (its Azure identity's token) or password
+	// (PasswordEnv or PasswordFile, read again for each new connection).
+	Auth         string `yaml:"auth"`
+	PasswordEnv  string `yaml:"password_env"`
+	PasswordFile string `yaml:"password_file"`
+	MaxOpenConns int    `yaml:"max_open_conns"`
 }
 
 // StateKinds are the stores this build knows.
-var StateKinds = []string{"memory", "sqlite"}
+var StateKinds = []string{"memory", "sqlite", "postgres"}
 
 // Keys is the KEK the params are sealed under (spec 002): local, a 32-byte key from the environment or a
 // file; or azurekeyvault, a key in Key Vault or Managed HSM.
@@ -178,6 +186,9 @@ func (c *Config) validate() error {
 	if c.State.Kind == "sqlite" && c.State.Path == "" {
 		return errors.New("state.path is required for sqlite")
 	}
+	if err := c.State.validateServer(c.Azure.Identity); err != nil {
+		return err
+	}
 	if err := c.Keys.validate(c.State.Kind != "memory"); err != nil {
 		return err
 	}
@@ -264,6 +275,45 @@ func (c *Config) validate() error {
 				return fmt.Errorf("policy.actors[%d].verbs[%d] is not a verb", i, j)
 			}
 		}
+	}
+	return nil
+}
+
+// validateServer checks a database server's settings (postgres).
+func (s *State) validateServer(identity string) error {
+	if s.Kind != "postgres" {
+		if s.DSN != "" || s.Auth != "" || s.PasswordEnv != "" || s.PasswordFile != "" || s.MaxOpenConns != 0 {
+			return fmt.Errorf("state: dsn, auth, password_env, password_file, max_open_conns are for a database server, not %s", s.Kind)
+		}
+		return nil
+	}
+	lower := strings.ToLower(s.DSN)
+	switch {
+	case s.DSN == "":
+		return errors.New("state.dsn is required: the server, the database and the user")
+	case strings.Contains(lower, "password") || strings.Contains(lower, "pwd="):
+		return errors.New("state.dsn carries no password: it comes from state.auth")
+	case s.MaxOpenConns < 0:
+		return errors.New("state.max_open_conns is positive")
+	}
+	switch s.Auth {
+	case "entra":
+		if identity == "" {
+			return errors.New("state.auth: entra logs in with the service's Azure identity: azure.identity is required")
+		}
+		if s.PasswordEnv != "" || s.PasswordFile != "" {
+			return errors.New("state.auth: entra takes no password")
+		}
+	case "password":
+		if (s.PasswordEnv == "") == (s.PasswordFile == "") {
+			return errors.New("state.auth: password comes from password_env or password_file - one of them")
+		}
+		if s.PasswordEnv != "" && IsSettingVariable(s.PasswordEnv) {
+			return fmt.Errorf("state.password_env names %s, which is read as configuration - give the password a "+
+				"variable of its own", s.PasswordEnv)
+		}
+	default:
+		return errors.New("state.auth is entra or password")
 	}
 	return nil
 }

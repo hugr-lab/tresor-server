@@ -17,6 +17,10 @@ type delegations struct{ s *Store }
 
 func (s *Store) Delegations() state.DelegationStore { return delegations{s} }
 
+// mintKeyColumn is a minted token's key as stored: hex - a key joins its audience and scope with a NUL, which
+// a PostgreSQL text holds not.
+func mintKeyColumn(key string) string { return hex.EncodeToString([]byte(key)) }
+
 func subjectAAD(idHash string) []byte { return []byte("tresor-server/delegation/1\x00" + idHash) }
 
 func tokenAAD(idHash, key string, version int64) []byte {
@@ -36,11 +40,15 @@ func (d delegations) Put(ctx context.Context, g state.Delegation, maxPerActor in
 			return err
 		}
 	}
-	tx, err := s.db.BeginTx(ctx, nil) // SQLite: immediate - the count and the insert are one step
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	// the count and the insert are one step: the actor's grants are locked (SQLite: its transaction is)
+	if err := s.d.Lock(ctx, tx, "tresor-server/grants/"+g.ActorOwner); err != nil {
+		return err
+	}
 	now := time.Now().UnixMicro()
 	if _, err := tx.ExecContext(ctx, s.q(`DELETE FROM delegations WHERE expires_at <= ?`), now); err != nil {
 		return err
@@ -169,7 +177,7 @@ func (d delegations) Token(ctx context.Context, idHash []byte, key string) (*sta
 	var keyID string
 	var sealed []byte
 	err := d.s.db.QueryRowContext(ctx, d.s.q(`SELECT version, failed, data_key_id, sealed FROM delegation_tokens
-		WHERE id_hash = ? AND mint_key = ?`), id, key).Scan(&t.Version, &t.Failed, &keyID, &sealed)
+		WHERE id_hash = ? AND mint_key = ?`), id, mintKeyColumn(key)).Scan(&t.Version, &t.Failed, &keyID, &sealed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, state.ErrNotFound
 	}
@@ -202,9 +210,9 @@ func (d delegations) PutToken(ctx context.Context, idHash []byte, t state.Minted
 	}
 	if t.Version == 1 {
 		_, err := s.db.ExecContext(ctx, s.q(`INSERT INTO delegation_tokens (id_hash, mint_key, version, failed,
-			data_key_id, sealed) VALUES (?, ?, 1, ?, ?, ?)`), id, t.Key, t.Failed, keyID, sealed)
+			data_key_id, sealed) VALUES (?, ?, 1, ?, ?, ?)`), id, mintKeyColumn(t.Key), t.Failed, keyID, sealed)
 		switch {
-		case s.d.Unique(err):
+		case s.d.Unique(err) || s.d.Retryable(err):
 			return state.ErrConflict
 		case s.d.ForeignKey(err):
 			return state.ErrNotFound // the grant is gone
@@ -212,8 +220,8 @@ func (d delegations) PutToken(ctx context.Context, idHash []byte, t state.Minted
 		return err
 	}
 	res, err := s.db.ExecContext(ctx, s.q(`UPDATE delegation_tokens SET version = ?, failed = ?, data_key_id = ?,
-		sealed = ? WHERE id_hash = ? AND mint_key = ? AND version = ?`), t.Version, t.Failed, keyID, sealed, id, t.Key,
-		t.Version-1)
+		sealed = ? WHERE id_hash = ? AND mint_key = ? AND version = ?`), t.Version, t.Failed, keyID, sealed, id,
+		mintKeyColumn(t.Key), t.Version-1)
 	if err != nil {
 		return err
 	}

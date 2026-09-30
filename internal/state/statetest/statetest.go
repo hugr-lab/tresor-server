@@ -414,13 +414,14 @@ func testDelegationLimit(t *testing.T, open Opener) {
 }
 
 func testMintedTokens(t *testing.T, open Opener) {
+	const key = "aud\x00scope" // as the API makes one: the audience and the scope, NUL between
 	d := open(t).First.Delegations()
 	now := time.Now()
 	g := grant("a", "node", "alice", now.Add(time.Hour))
 	if err := d.Put(ctx, g, 10); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Token(ctx, g.IDHash, "aud"); !errors.Is(err, state.ErrNotFound) {
+	if _, err := d.Token(ctx, g.IDHash, key); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("no token yet: %v", err)
 	}
 	put := func(v int64, token, failed string) error {
@@ -428,7 +429,7 @@ func testMintedTokens(t *testing.T, open Opener) {
 		if token != "" {
 			raw = []byte(token)
 		}
-		return d.PutToken(ctx, g.IDHash, state.MintedToken{Key: "aud", Version: v, Token: raw, Failed: failed})
+		return d.PutToken(ctx, g.IDHash, state.MintedToken{Key: key, Version: v, Token: raw, Failed: failed})
 	}
 	if err := put(1, `{"access":"t1"}`, ""); err != nil {
 		t.Fatal(err)
@@ -442,21 +443,21 @@ func testMintedTokens(t *testing.T, open Opener) {
 	if err := put(2, `{"access":"stale"}`, ""); !errors.Is(err, state.ErrConflict) {
 		t.Fatalf("a renewal from a stale version: %v", err)
 	}
-	tok, err := d.Token(ctx, g.IDHash, "aud")
+	tok, err := d.Token(ctx, g.IDHash, key)
 	if err != nil || tok.Version != 2 || string(tok.Token) != `{"access":"t2"}` || tok.Failed != "" {
 		t.Fatalf("the token: %+v %v", tok, err)
 	}
 	if err := put(3, "", "the IdP refused"); err != nil {
 		t.Fatal(err)
 	}
-	if tok, _ := d.Token(ctx, g.IDHash, "aud"); tok.Token != nil || tok.Failed != "the IdP refused" {
+	if tok, _ := d.Token(ctx, g.IDHash, key); tok.Token != nil || tok.Failed != "the IdP refused" {
 		t.Fatalf("a refusal kept: %+v", tok)
 	}
 	// the grant's tokens go with it; a token for a grant that is gone is not stored
 	if _, err := d.Delete(ctx, g.IDHash); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Token(ctx, g.IDHash, "aud"); !errors.Is(err, state.ErrNotFound) {
+	if _, err := d.Token(ctx, g.IDHash, key); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("a token outlives its grant: %v", err)
 	}
 	if err := put(1, `{"access":"x"}`, ""); !errors.Is(err, state.ErrNotFound) {

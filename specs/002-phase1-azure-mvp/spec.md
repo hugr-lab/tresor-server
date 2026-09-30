@@ -180,6 +180,12 @@ The schema (migration `0001`, one SQL file per dialect, applied in `schema_migra
   SQL Server: `sp_getapplock`), so several replicas starting at once apply them once. A binary
   refuses a database whose migration is newer than it knows.
 - No upsert, no JSON functions: portable SQL only.
+- A minted token's key (its audience and scope, NUL between) is stored hex: a PostgreSQL text holds no
+  NUL.
+- What differs per dialect beyond the DDL: how a transaction locks a name (the migrations; an actor's
+  grants counted and inserted) - PostgreSQL `pg_advisory_xact_lock`, SQL Server `sp_getapplock`,
+  SQLite's exclusive write transaction; and which errors mean "run it again" (deadlocks, serialization
+  failures).
 
 **SQLite** (`modernc.org/sqlite`: pure Go, a distroless image, every platform):
 - one replica: development, a laptop, a VM or docker compose;
@@ -458,9 +464,9 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
   - It runs `test/sql/conformance/*` and tresor's `test/sql/reference_server/*`: the ported API must
     pass the reference server's own tests too.
   - On `postgres`, two replicas of the service behind a round-robin proxy. The hook takes one
-    command that is the server, so a small built Go binary (`internal/ci/replicas`, not shipped) is
+    command that is the server, so a small built Go binary (`scripts/ci/replicas`, not shipped) is
     that command: it starts the two replicas, proxies to them, and stops them when it is stopped.
-    Their logs are passed through, so the acl part still finds its request lines. a grant made on one is honoured by
+    Their logs are passed through, so the acl part still finds its request lines. A grant made on one is honoured by
     the other. A Go test covers what that run cannot: a grant's minted token renewed on another
     replica after its subject token has expired.
   - The duckdb-acl part (`TRESOR_ACL_EXTENSION`) is not run here: it needs acl built too.
@@ -475,10 +481,11 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
    the clear, so the envelope comes with it. Conformance on SQLite.
 3. **(c1) delegations**: delegations and their minted tokens in the store, sealed from the start.
 4. **(c2) Key Vault**: the `azurekeyvault` KEK, `rewrap`.
-5. **(d) PostgreSQL and SQL Server**: the two dialects, Entra logins, the suite and conformance on
-   both, two replicas in CI.
-6. **(e) references**: `material`, `azkv`, the allowlist.
-7. **(f) the container and Container Apps**: `tls.offload`, Dockerfile, image CI, the Bicep recipe; the live run.
+5. **(d1) PostgreSQL**: the SQL layer for several writers (a dialect's lock, its retryable errors),
+   the PostgreSQL dialect, Entra login, the suite and conformance on it, two replicas in CI.
+6. **(d2) SQL Server**: its dialect and Entra login, the suite and conformance on it.
+7. **(e) references**: `material`, `azkv`, the allowlist.
+8. **(f) the container and Container Apps**: `tls.offload`, Dockerfile, image CI, the Bicep recipe; the live run.
 
 The docs site (Docusaurus, as tresor's `website/`) comes with or after (f).
 

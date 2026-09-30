@@ -49,8 +49,7 @@ func migrate(ctx context.Context, db *sql.DB, d Dialect) error {
 	if err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)`); err != nil {
+	if _, err := db.ExecContext(ctx, d.Bootstrap); err != nil && !d.Unique(err) { // replicas starting at once
 		return fmt.Errorf("migrations: %w", err)
 	}
 	var newest sql.NullInt64
@@ -78,7 +77,10 @@ func apply(ctx context.Context, db *sql.DB, d Dialect, m migration) error {
 		return err
 	}
 	defer tx.Rollback()
-	// applied meanwhile by another replica starting too: nothing to do
+	// one replica migrates at a time; one that waited finds it applied
+	if err := d.Lock(ctx, tx, "tresor-server/migrate"); err != nil {
+		return err
+	}
 	var n int
 	if err := tx.QueryRowContext(ctx, d.Rebind(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`), m.version).
 		Scan(&n); err != nil || n > 0 {
