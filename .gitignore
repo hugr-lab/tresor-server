@@ -1,0 +1,6 @@
+design/
+/tresor-server
+*.db
+*.db-wal
+*.db-shm
+.env
