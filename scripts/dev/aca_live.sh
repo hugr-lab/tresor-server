@@ -65,7 +65,7 @@ check() {
 	echo "aca_live: DuckDB as the node, through $host"
 	local out
 	out="$(printf "LOAD '%s';
-CREATE SECRET node (TYPE tresor, SCOPE 'tresor:%s', FLOW 'client_credentials', CLIENT_ID '%s', CLIENT_SECRET '%s', ISSUER '%s', SCOPES '%s/.default');
+CREATE SECRET node (TYPE tresor, SCOPE 'tresor:%s', FLOW 'client_credentials', CLIENT_ID '%s', CLIENT_SECRET '%s', ISSUER '%s', OAUTH_SCOPE '%s/.default');
 ATTACH 'tresor:%s' AS corp (SECRET node);
 SELECT 'live:whoami|' || login FROM corp.whoami();
 CREATE OR REPLACE PERSISTENT SECRET aca_inline IN corp (TYPE s3, KEY_ID 'AKIA-ACA-LIVE', SECRET 'inline-live', SCOPE 's3://aca-live-inline');
@@ -83,13 +83,25 @@ SELECT 'live:lookup|' || name FROM which_secret('s3://aca-live-ref/x.parquet', '
 		echo "aca_live: the check did not pass" >&2
 		exit 1
 	}
-	# the reference was read in the vault by the service, at the fetch: its log says so (never the value)
-	if az containerapp logs show -g "$rg" -n tresor-app --tail 300 --format text 2>/dev/null | grep -q 'reference resolved'; then
-		echo "aca_live: the service resolved ref+azkv://$vault/duckdb-aca-live in Key Vault"
-	else
-		echo "aca_live: no 'reference resolved' in the service's recent log" >&2
-		exit 1
-	fi
+	# the reference, read in the vault by the service at each fetch - through the ingress, so across the replicas:
+	# fetched by the protocol with the node's own token (DuckDB's lookup picks a secret by its descriptor; its
+	# material is fetched only when a file system needs it). Compared here, never printed
+	local token ok=0
+	token="$(curl -s -X POST "https://login.microsoftonline.com/$ENTRA_TENANT/oauth2/v2.0/token" -d grant_type=client_credentials \
+		-d "client_id=$ENTRA_NODE_CLIENT_ID" --data-urlencode "client_secret=$ENTRA_NODE_SECRET" \
+		--data-urlencode "scope=$ENTRA_API_URI/.default" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))')"
+	for _ in 1 2 3 4; do
+		curl -s -H "Authorization: Bearer $token" "$url/v1/secrets/aca_ref" | python3 -c '
+import json, sys
+b = json.load(sys.stdin)
+s = b.get("params", {}).get("secret")
+v = s.get("value") if isinstance(s, dict) else s
+sys.exit(0 if v == "aca-live-from-vault" and "secret" in b.get("redact_keys", []) else 1)' && ok=$((ok + 1))
+	done
+	unset token
+	[ "$ok" = 4 ] || { echo "aca_live: the reference resolved in $ok of 4 fetches" >&2; exit 1; }
+	echo "aca_live: the reference resolved in Key Vault at each of 4 fetches, redacted"
+	echo "aca_live: replicas running: $(az containerapp replica list -g "$rg" -n tresor-app --query 'length(@)' -o tsv)"
 	echo "aca_live: the service on Container Apps created, granted and served both secrets - one from Key Vault"
 }
 
