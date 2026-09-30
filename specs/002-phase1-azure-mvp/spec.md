@@ -180,6 +180,16 @@ The schema (migration `0001`, one SQL file per dialect, applied in `schema_migra
   SQL Server: `sp_getapplock`), so several replicas starting at once apply them once. A binary
   refuses a database whose migration is newer than it knows.
 - No upsert, no JSON functions: portable SQL only.
+- **Names as written, in every store**: the API refuses (`422 invalid_secret`) a secret's name or a
+  grant's id that is empty, longer than 200 characters, begins or ends with a space, or holds a
+  control character. Every store keeps what passes as it came; the refusal names the rule, never
+  the name. No protocol change: the protocol lets a service refuse what does not validate.
+- A minted token's key (its audience and scope, NUL between) is stored as its SHA-256, hex: a
+  PostgreSQL text holds no NUL, and a SQL Server index key is short. The AAD names the key itself.
+- What differs per dialect beyond the DDL: how a transaction locks a name (the migrations; an actor's
+  grants counted and inserted) - PostgreSQL `pg_advisory_xact_lock`, SQL Server `sp_getapplock`,
+  SQLite's exclusive write transaction; and which errors mean "run it again" (deadlocks, serialization
+  failures).
 
 **SQLite** (`modernc.org/sqlite`: pure Go, a distroless image, every platform):
 - one replica: development, a laptop, a VM or docker compose;
@@ -201,6 +211,11 @@ The schema (migration `0001`, one SQL file per dialect, applied in `schema_migra
   role is the managed identity's (Azure Database for PostgreSQL Flexible Server).
 - `auth: password`: from `password_env` or `password_file`, read again for each new connection: a
   rotation needs no restart.
+- Off this machine, `sslmode=verify-full` is required: the password (an Entra token) goes over the
+  connection, and pgx's default (`prefer`) falls back to plain text while `require` checks no
+  certificate.
+- The pool: 10 connections unless `max_open_conns` says otherwise (a Burstable server has few), a
+  connection lives 30 minutes, a connect times out after 10 s.
 
 **SQL Server / Azure SQL** (`go-mssqldb`):
 - several replicas;
@@ -209,6 +224,13 @@ The schema (migration `0001`, one SQL file per dialect, applied in `schema_migra
   user is created `FROM EXTERNAL PROVIDER` for the managed identity.
 - `auth: password`: as for PostgreSQL.
 - Snapshot isolation is not needed: the compare-and-set is a single `UPDATE`.
+- Off this machine, `encrypt=true` (or `strict`) with the certificate checked is required: the login
+  goes over the connection.
+- An index key holds 900 bytes (1700 nonclustered): the grants' key is nonclustered, and a minted
+  token's key is stored as its SHA-256 (in every dialect).
+- Names are compared exactly (the protocol). SQL Server's default collation is case-insensitive, so
+  every compared text is `COLLATE Latin1_General_100_BIN2`. It still compares `'a'` and `'a '` as
+  equal, so the API refuses edge spaces (below).
 
 A database password as a `ref+azkv://` reference (spec 001) is a follow-up; phase 1 logs in with
 Entra on Azure.
@@ -313,8 +335,8 @@ The reference server's YAML (unknown keys are errors), minus its `store:`, plus:
 state:
   kind: postgres                 # memory | sqlite | postgres | sqlserver
   # sqlite:    path: /data/tresor.db
-  # postgres:  dsn: host=corp-pg.postgres.database.azure.com dbname=tresor user=tresor-id sslmode=require
-  # sqlserver: dsn: sqlserver://corp-sql.database.windows.net?database=tresor
+  # postgres:  dsn: host=corp-pg.postgres.database.azure.com dbname=tresor user=tresor-id sslmode=verify-full
+  # sqlserver: dsn: sqlserver://corp-sql.database.windows.net?database=tresor&encrypt=true
   auth: entra                    # entra | password (password_env or password_file)
   max_open_conns: 10
 keys:
@@ -458,9 +480,9 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
   - It runs `test/sql/conformance/*` and tresor's `test/sql/reference_server/*`: the ported API must
     pass the reference server's own tests too.
   - On `postgres`, two replicas of the service behind a round-robin proxy. The hook takes one
-    command that is the server, so a small built Go binary (`internal/ci/replicas`, not shipped) is
+    command that is the server, so a small built Go binary (`scripts/ci/replicas`, not shipped) is
     that command: it starts the two replicas, proxies to them, and stops them when it is stopped.
-    Their logs are passed through, so the acl part still finds its request lines. a grant made on one is honoured by
+    Their logs are passed through, so the acl part still finds its request lines. A grant made on one is honoured by
     the other. A Go test covers what that run cannot: a grant's minted token renewed on another
     replica after its subject token has expired.
   - The duckdb-acl part (`TRESOR_ACL_EXTENSION`) is not run here: it needs acl built too.
@@ -475,10 +497,11 @@ Under `deploy/azure-container-apps/`: a Bicep template and a README. A parameter
    the clear, so the envelope comes with it. Conformance on SQLite.
 3. **(c1) delegations**: delegations and their minted tokens in the store, sealed from the start.
 4. **(c2) Key Vault**: the `azurekeyvault` KEK, `rewrap`.
-5. **(d) PostgreSQL and SQL Server**: the two dialects, Entra logins, the suite and conformance on
-   both, two replicas in CI.
-6. **(e) references**: `material`, `azkv`, the allowlist.
-7. **(f) the container and Container Apps**: `tls.offload`, Dockerfile, image CI, the Bicep recipe; the live run.
+5. **(d1) PostgreSQL**: the SQL layer for several writers (a dialect's lock, its retryable errors),
+   the PostgreSQL dialect, Entra login, the suite and conformance on it, two replicas in CI.
+6. **(d2) SQL Server**: its dialect and Entra login, the suite and conformance on it.
+7. **(e) references**: `material`, `azkv`, the allowlist.
+8. **(f) the container and Container Apps**: `tls.offload`, Dockerfile, image CI, the Bicep recipe; the live run.
 
 The docs site (Docusaurus, as tresor's `website/`) comes with or after (f).
 

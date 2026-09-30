@@ -53,7 +53,7 @@ func (k dataKeys) Activate(ctx context.Context, dk keys.DataKey, slot int64) err
 	}
 	if slot == 0 {
 		_, err := tx.ExecContext(ctx, k.s.q(`INSERT INTO active_data_key (id, data_key_id, version) VALUES (1, ?, 1)`), dk.ID)
-		if k.s.d.Unique(err) {
+		if k.s.d.Unique(err) || k.s.d.Retryable(err) {
 			return keys.ErrKeyRace
 		}
 		if err != nil {

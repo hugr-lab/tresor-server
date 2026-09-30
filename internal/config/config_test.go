@@ -129,3 +129,49 @@ func TestKeyVaultConfig(t *testing.T) {
 		t.Fatalf("%v %+v", err, cfg)
 	}
 }
+
+func TestDatabaseServer(t *testing.T) {
+	base := strings.Replace(good, "state: {kind: memory}", "state: {kind: postgres, dsn: 'host=db user=tresor dbname=tresor', auth: password, password_env: TRESOR_TEST_DB_PW}", 1) +
+		"keys: {kind: local, key_env: TRESOR_TEST_KEK}\n"
+	if _, err := Parse([]byte(base)); err != nil {
+		t.Fatal(err)
+	}
+	entra := strings.Replace(base, "auth: password, password_env: TRESOR_TEST_DB_PW", "auth: entra", 1) + "azure: {identity: managed}\n"
+	if _, err := Parse([]byte(entra)); err != nil {
+		t.Fatal(err)
+	}
+	for name, doc := range map[string]string{
+		"no dsn":                  strings.Replace(base, "dsn: 'host=db user=tresor dbname=tresor', ", "", 1),
+		"a password in the dsn":   strings.Replace(base, "dbname=tresor'", "dbname=tresor password=x'", 1),
+		"no auth":                 strings.Replace(base, "auth: password, password_env: TRESOR_TEST_DB_PW", "", 1),
+		"entra with no identity":  strings.Replace(base, "auth: password, password_env: TRESOR_TEST_DB_PW", "auth: entra", 1),
+		"a password from nowhere": strings.Replace(base, ", password_env: TRESOR_TEST_DB_PW", "", 1),
+		"a password in a setting's variable": strings.Replace(base, "password_env: TRESOR_TEST_DB_PW",
+			"password_env: TRESOR_LISTEN", 1),
+		"a dsn for sqlite": strings.Replace(good, "state: {kind: memory}", "state: {kind: sqlite, path: /t.db, dsn: x}", 1) +
+			"keys: {kind: local, key_env: TRESOR_TEST_KEK}\n",
+		"no KEK": strings.Replace(base, "keys: {kind: local, key_env: TRESOR_TEST_KEK}\n", "", 1),
+	} {
+		if _, err := Parse([]byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestDSNHasPassword(t *testing.T) {
+	for dsn, want := range map[string]bool{
+		"postgres://u:secret@h/db":                      true,
+		"postgres://u@h/db?password=secret":             true,
+		"host=h user=u password=secret dbname=db":       true,
+		"host=h user=u password = secret":               true,
+		"sqlserver://h?database=db;Pwd=x":               true,
+		"postgres://u@h/passwords_db?sslmode=disable":   false,
+		"host=h user=password_reader dbname=passwords":  false,
+		"host=h user=u dbname=db sslmode=verify-full":   false,
+		"sqlserver://h?database=password_vault&fedauth": false,
+	} {
+		if got := DSNHasPassword(dsn); got != want {
+			t.Errorf("%s: %v", dsn, got)
+		}
+	}
+}

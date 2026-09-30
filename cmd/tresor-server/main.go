@@ -109,6 +109,25 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger) (state
 			return nil, nil, err
 		}
 		return st, []health.Check{{Name: "keys", Run: st.Envelope().Check}}, nil
+	case "postgres", "sqlserver":
+		wrapper, err := keyWrapper(cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		open, scope := sqlstore.OpenPostgres, sqlstore.ScopePostgres
+		if cfg.State.Kind == "sqlserver" {
+			open, scope = sqlstore.OpenSQLServer, sqlstore.ScopeSQLServer
+		}
+		login, err := databaseLogin(cfg, scope)
+		if err != nil {
+			return nil, nil, err
+		}
+		st, err := open(ctx, cfg.State.DSN, login, cfg.State.MaxOpenConns, wrapper, sqlstore.Options{
+			Log: log, Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}})
+		if err != nil {
+			return nil, nil, err
+		}
+		return st, []health.Check{{Name: "keys", Run: st.Envelope().Check}}, nil
 	}
 	return nil, nil, fmt.Errorf("state.kind %s is not built in", cfg.State.Kind)
 }
@@ -128,6 +147,18 @@ func purgeGrants(ctx context.Context, st state.Store, log *slog.Logger) {
 			}
 		}
 	}
+}
+
+// databaseLogin is how the service logs in to its database server: an Entra token, or a password.
+func databaseLogin(cfg *config.Config, scope string) (sqlstore.Login, error) {
+	if cfg.State.Auth == "entra" {
+		cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
+		if err != nil {
+			return nil, err
+		}
+		return sqlstore.EntraLogin{Credential: cred, Scope: scope}, nil
+	}
+	return sqlstore.PasswordLogin{Env: cfg.State.PasswordEnv, File: cfg.State.PasswordFile}, nil
 }
 
 // keyWrapper is the configured KEK.

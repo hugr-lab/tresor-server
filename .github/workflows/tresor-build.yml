@@ -1,0 +1,73 @@
+# tresor at the pinned commit (scripts/ci/tresor_checkout.sh): the unittest runner, the duckdb CLI and the
+# tresor extension, built on a cache miss only and handed to the conformance jobs as an artifact. Called by
+# ci.yml; the cache is keyed on the pin and this file only, so a change to ci.yml does not rebuild it.
+name: tresor build
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # cache miss only (a new pin), and handed to the conformance jobs as an artifact
+  build:
+    name: tresor build (pinned)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GEN: ninja
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      TRESOR_TEST_HTTPFS: '1'
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_bincache,readwrite'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cached build
+        id: cache
+        uses: actions/cache@v6
+        with:
+          path: tresor-build.tar.gz
+          # the pin and this workflow (the build's env, the tar's list). The unittest runner keeps the absolute
+          # path it was built in: the conformance jobs unpack it at the same $GITHUB_WORKSPACE/_tresor
+          key: tresor-build-linux_amd64-${{ hashFiles('scripts/ci/tresor_checkout.sh', '.github/workflows/tresor-build.yml') }}
+      - name: Check out tresor with its submodules
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: scripts/ci/tresor_checkout.sh _tresor --submodules
+      - name: Install build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache
+      - name: Setup vcpkg
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: _tresor
+        run: make vcpkg-setup
+      - name: Cache vcpkg binary packages
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v6
+        with:
+          path: vcpkg_bincache
+          key: vcpkg-bincache-linux_amd64-${{ hashFiles('scripts/ci/tresor_checkout.sh') }}
+          restore-keys: vcpkg-bincache-linux_amd64-
+      - name: Restore ccache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v6
+        with:
+          path: .ccache
+          key: ccache-tresor-linux_amd64-${{ hashFiles('scripts/ci/tresor_checkout.sh') }}
+          restore-keys: ccache-tresor-linux_amd64-
+      - name: Build tresor
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: _tresor
+        run: |
+          EXT_FLAGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" make
+          ccache -s
+          # the unittest runner links libduckdb through an rpath into build/release/src
+          tar -czf ../tresor-build.tar.gz build/release/test/unittest build/release/duckdb \
+            build/release/extension/tresor/tresor.duckdb_extension build/release/src/libduckdb*.so*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tresor-build
+          path: tresor-build.tar.gz
+          retention-days: 3
+

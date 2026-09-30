@@ -277,13 +277,13 @@ func (s *Store) Update(ctx context.Context, name string,
 			next.Name = name
 			done, err = s.write(ctx, r, next)
 		}
-		if err != nil {
+		if err != nil && !s.d.Retryable(err) {
 			return nil, err
 		}
 		if done {
 			return next, nil
 		}
-		// another writer came first: run fn again on what it wrote
+		// another writer came first (or the database gave the transaction up): run fn again on what is there
 	}
 	return nil, state.ErrConflict
 }
