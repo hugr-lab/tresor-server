@@ -257,6 +257,13 @@ Entra on Azure.
 - **Rotation**: a new KEK version gives a new data key for new writes. Old data keys are rewrapped
   under the new version by `tresor-server rewrap` (a command of the binary). Material is never
   re-encrypted for it.
+  - A data key records the KEK id it was wrapped under: for Key Vault, the key's full id (with its
+    version) and the algorithm (`…/keys/<name>/<version>#RSA-OAEP-256`). The current version is read
+    from the vault at most once a minute.
+  - `rewrap` runs next to the service; it changes each data key compare-and-set.
+  - It moves data keys between versions of one KEK. Moving to another KEK (local to Key Vault) is a
+    follow-up.
+  - A data key of another vault or key is never sent anywhere: it is `ErrSealed`.
 - The `memory` store does not seal: it has nothing at rest. It behaves as the others otherwise (a list
   carries no params).
 - A secret whose params do not open is not rewritten either: an update of it fails, as a read does.
@@ -327,6 +334,8 @@ tls:
 azure:
   identity: managed              # managed | default (DefaultAzureCredential: az CLI for development)
   client_id: ""                  # a user-assigned managed identity
+# `default` is for development: its chain also takes a client secret from the environment
+# (AZURE_CLIENT_SECRET) - a static secret. Production runs `managed`.
 ```
 
 - `state.kind: memory` needs no `keys:`; every other kind refuses to start without it.

@@ -20,9 +20,11 @@ import (
 
 	"github.com/hugr-lab/tresor-server/internal/api"
 	"github.com/hugr-lab/tresor-server/internal/auth"
+	"github.com/hugr-lab/tresor-server/internal/azure"
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/health"
 	"github.com/hugr-lab/tresor-server/internal/keys"
+	"github.com/hugr-lab/tresor-server/internal/keys/azurekeyvault"
 	"github.com/hugr-lab/tresor-server/internal/keys/local"
 	"github.com/hugr-lab/tresor-server/internal/state"
 	"github.com/hugr-lab/tresor-server/internal/state/memory"
@@ -33,14 +35,62 @@ import (
 const readyInterval = 30 * time.Second
 
 func main() {
-	configPath := flag.String("config", "", "the configuration file (optional: TRESOR_CONFIG and TRESOR_<SETTING> "+
-		"variables are read over it)")
-	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	command, args := "serve", os.Args[1:]
+	if len(args) > 0 && args[0] == "rewrap" {
+		command, args = "rewrap", args[1:]
+	}
+	flags := flag.NewFlagSet("tresor-server "+command, flag.ExitOnError)
+	configPath := flags.String("config", "", "the configuration file (optional: TRESOR_CONFIG and TRESOR_<SETTING> "+
+		"variables are read over it)")
+	_ = flags.Parse(args)
+	if flags.NArg() > 0 {
+		// `tresor-server -config x rewrap` must not start the service: the command comes first
+		log.Error("tresor-server: unexpected arguments (usage: tresor-server [rewrap] -config <file>)",
+			"arguments", flags.Args())
+		os.Exit(2)
+	}
+	run := serve
+	if command == "rewrap" {
+		run = rewrap
+	}
 	if err := run(*configPath, log); err != nil {
-		log.Error("tresor-server stopped", "error", err.Error())
+		log.Error("tresor-server "+command+" stopped", "error", err.Error())
 		os.Exit(1)
 	}
+}
+
+// rewrap wraps every data key under the KEK's current version (spec 002): after a rotation of the KEK, its
+// old versions can then be retired. No sealed value is touched. It runs next to the service, whose data keys
+// it changes compare-and-set.
+func rewrap(configPath string, log *slog.Logger) error {
+	cfg, _, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	if cfg.State.Kind == "sqlite" {
+		// a wrong path must not create an empty database
+		if _, err := os.Stat(cfg.State.Path); err != nil {
+			return fmt.Errorf("state.path: %w", err)
+		}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	st, _, err := openState(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	sealed, ok := st.(interface{ Envelope() *keys.Envelope })
+	if !ok {
+		return fmt.Errorf("state.kind %s keeps nothing at rest: nothing to rewrap", cfg.State.Kind)
+	}
+	n, err := sealed.Envelope().Rewrap(ctx)
+	if err != nil {
+		return err
+	}
+	log.Info("data keys rewrapped under the KEK's current version", "count", n)
+	return nil
 }
 
 // openState opens the configured store, and the readiness checks it brings (the KEK's).
@@ -49,7 +99,7 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger) (state
 	case "memory":
 		return memory.New(), nil, nil
 	case "sqlite":
-		wrapper, err := keyWrapper(cfg.Keys)
+		wrapper, err := keyWrapper(cfg)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -81,17 +131,24 @@ func purgeGrants(ctx context.Context, st state.Store, log *slog.Logger) {
 }
 
 // keyWrapper is the configured KEK.
-func keyWrapper(cfg config.Keys) (keys.KeyWrapper, error) {
+func keyWrapper(cfg *config.Config) (keys.KeyWrapper, error) {
+	k := cfg.Keys
 	switch {
-	case cfg.Kind == "local" && cfg.KeyEnv != "":
-		return local.FromEnv(cfg.KeyEnv)
-	case cfg.Kind == "local":
-		return local.FromFile(cfg.KeyFile)
+	case k.Kind == "local" && k.KeyEnv != "":
+		return local.FromEnv(k.KeyEnv)
+	case k.Kind == "local":
+		return local.FromFile(k.KeyFile)
+	case k.Kind == "azurekeyvault":
+		cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
+		if err != nil {
+			return nil, err
+		}
+		return azurekeyvault.New(k.Key, cred)
 	}
-	return nil, fmt.Errorf("keys.kind %s is not built in", cfg.Kind)
+	return nil, fmt.Errorf("keys.kind %s is not built in", k.Kind)
 }
 
-func run(configPath string, log *slog.Logger) error {
+func serve(configPath string, log *slog.Logger) error {
 	cfg, fromEnv, err := config.Load(configPath)
 	if err != nil {
 		return err

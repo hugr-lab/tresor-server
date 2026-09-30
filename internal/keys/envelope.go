@@ -94,6 +94,52 @@ func (e *Envelope) Check(ctx context.Context) error {
 	return nil
 }
 
+// Rewrap wraps every data key under the KEK's current version, where it is not already: after a rotation
+// of the KEK, its old versions can be retired. The values sealed under the data keys are not touched. It
+// goes on past a data key it cannot rewrap: how many were rewrapped, and an error naming each one skipped.
+func (e *Envelope) Rewrap(ctx context.Context) (int, error) {
+	current, err := e.wrapper.Current(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("the KEK: %w", err)
+	}
+	all, err := e.keys.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	var skipped []error
+	for _, dk := range all {
+		if dk.KEKID == current {
+			continue
+		}
+		ok, err := e.rewrapOne(ctx, dk)
+		if err != nil {
+			skipped = append(skipped, fmt.Errorf("data key %s (under %s): %w", dk.ID, dk.KEKID, err))
+			continue
+		}
+		if ok {
+			n++
+		}
+	}
+	if len(skipped) > 0 {
+		return n, fmt.Errorf("%d data keys were not rewrapped: %w", len(skipped), errors.Join(skipped...))
+	}
+	return n, nil
+}
+
+func (e *Envelope) rewrapOne(ctx context.Context, dk DataKey) (bool, error) {
+	dek, err := e.wrapper.Unwrap(ctx, dk.Wrapped, dk.KEKID)
+	if err != nil {
+		return false, err
+	}
+	wrapped, kekID, err := e.wrapper.Wrap(ctx, dek)
+	clear(dek)
+	if err != nil {
+		return false, err
+	}
+	return e.keys.Rewrapped(ctx, dk.ID, dk.KEKID, wrapped, kekID)
+}
+
 // active is the data key new values are sealed with: the active one, or a new one when there is none, it
 // is older than maxAge, or the KEK has a new version.
 func (e *Envelope) active(ctx context.Context) (string, cipher.AEAD, error) {

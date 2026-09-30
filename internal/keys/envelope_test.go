@@ -165,3 +165,25 @@ func TestActivationRace(t *testing.T) {
 		}
 	}
 }
+
+func (s *store) List(context.Context) ([]keys.DataKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []keys.DataKey
+	for _, dk := range s.keys {
+		out = append(out, dk)
+	}
+	return out, nil
+}
+
+func (s *store) Rewrapped(_ context.Context, id, from string, wrapped []byte, kekID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dk, ok := s.keys[id]
+	if !ok || dk.KEKID != from {
+		return false, nil
+	}
+	dk.Wrapped, dk.KEKID = wrapped, kekID
+	s.keys[id] = dk
+	return true, nil
+}

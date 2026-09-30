@@ -36,6 +36,11 @@ type DataKeyStore interface {
 	// Activate stores dk and makes it the active one, compare-and-set on the slot's version (0: none yet).
 	// Another replica that activated one first: ErrKeyRace, and the caller reads the winner's.
 	Activate(ctx context.Context, dk DataKey, slotVersion int64) error
+	// List returns every stored data key (rewrap).
+	List(ctx context.Context) ([]DataKey, error)
+	// Rewrapped replaces a data key's wrap, compare-and-set on the KEK id it was read with; false when
+	// another rewrap came first.
+	Rewrapped(ctx context.Context, id, fromKEKID string, wrapped []byte, kekID string) (bool, error)
 }
 
 var (
