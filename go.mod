@@ -2,6 +2,8 @@ module github.com/hugr-lab/tresor-server
 
 go 1.26.1
 
+toolchain go1.26.8
+
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	gopkg.in/yaml.v3 v3.0.1

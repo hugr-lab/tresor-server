@@ -88,8 +88,9 @@ jobs:
         run: |
           EXT_FLAGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" make
           ccache -s
+          # the unittest runner links libduckdb through an rpath into build/release/src
           tar -czf ../tresor-build.tar.gz build/release/test/unittest build/release/duckdb \
-            build/release/extension/tresor/tresor.duckdb_extension
+            build/release/extension/tresor/tresor.duckdb_extension build/release/src/libduckdb*.so*
       - uses: actions/upload-artifact@v7
         with:
           name: tresor-build
@@ -115,7 +116,9 @@ jobs:
         with:
           name: tresor-build
       - name: Unpack tresor's build
-        run: tar -xzf tresor-build.tar.gz -C _tresor
+        run: |
+          tar -xzf tresor-build.tar.gz -C _tresor
+          _tresor/build/release/test/unittest --help >/dev/null   # it loads: its libraries came along
       - name: tresor's conformance suite and reference-server tests
         run: |
           set -o pipefail   # a failing script must fail the step, whatever the summary line says
