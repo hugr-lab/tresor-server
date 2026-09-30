@@ -291,7 +291,7 @@ func testDelegations(t *testing.T, open Opener) {
 		t.Fatal(err)
 	}
 	if got.ActorOwner != g.ActorOwner || got.ActorClient != g.ActorClient || got.UserOwner != g.UserOwner ||
-		string(got.User) != string(g.User) || got.Subject != nil || !got.ExpiresAt.Equal(g.ExpiresAt.Truncate(time.Microsecond)) {
+		string(got.User) != string(g.User) || got.Subject != nil || got.ExpiresAt.Sub(g.ExpiresAt).Abs() >= time.Microsecond {
 		t.Fatalf("read back %+v", got)
 	}
 	if !got.HasSubject {
