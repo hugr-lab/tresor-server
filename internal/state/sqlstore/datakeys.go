@@ -74,3 +74,32 @@ func (k dataKeys) Activate(ctx context.Context, dk keys.DataKey, slot int64) err
 	}
 	return tx.Commit()
 }
+
+func (k dataKeys) List(ctx context.Context) ([]keys.DataKey, error) {
+	rows, err := k.s.db.QueryContext(ctx, k.s.q(`SELECT id, kek_id, wrapped, created_at FROM data_keys ORDER BY created_at`))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []keys.DataKey
+	for rows.Next() {
+		var dk keys.DataKey
+		var created int64
+		if err := rows.Scan(&dk.ID, &dk.KEKID, &dk.Wrapped, &created); err != nil {
+			return nil, err
+		}
+		dk.CreatedAt = time.UnixMicro(created).UTC()
+		out = append(out, dk)
+	}
+	return out, rows.Err()
+}
+
+func (k dataKeys) Rewrapped(ctx context.Context, id, fromKEKID string, wrapped []byte, kekID string) (bool, error) {
+	res, err := k.s.db.ExecContext(ctx, k.s.q(`UPDATE data_keys SET kek_id = ?, wrapped = ? WHERE id = ? AND kek_id = ?`),
+		kekID, wrapped, id, fromKEKID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}

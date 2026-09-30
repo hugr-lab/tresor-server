@@ -34,7 +34,13 @@ Every setting can come from the environment, over the file: `TRESOR_CONFIG` (a w
   ```yaml
   state: {kind: sqlite, path: /data/tresor.db}
   keys: {kind: local, key_env: TRESOR_KEK}      # 32 bytes, base64: openssl rand -base64 32
+  # or a key in Azure Key Vault / Managed HSM, with the service's managed identity:
+  # keys: {kind: azurekeyvault, key: https://corp-kv.vault.azure.net/keys/tresor-kek}
+  # azure: {identity: managed}                  # default: the az CLI's login, for development
   ```
+
+  After a rotation of the KEK, `tresor-server rewrap -config …` moves the data keys to its current version.
+  `scripts/dev/azure_live.sh up` checks the Key Vault KEK against a real vault.
 
 - `/healthz`: the process is up. `/readyz`: the state store, the KEK and every issuer answer.
 - tresor's conformance suite runs against this service through tresor's `scripts/ci/test_keycloak.sh`:

@@ -105,9 +105,27 @@ func TestStateAndKeys(t *testing.T) {
 		"a KEK in a setting's variable": strings.Replace(withKeys, "key_env: TRESOR_TEST_KEK",
 			"key_env: TRESOR_LISTEN", 1),
 		"a negative duration": strings.Replace(withKeys, "cache_ttl: 1m", "cache_ttl: -1m", 1),
+		"a vault key with no identity": strings.Replace(withKeys, "keys: {kind: local, key_env: TRESOR_TEST_KEK,",
+			"keys: {kind: azurekeyvault, key: 'https://kv.vault.azure.net/keys/k',", 1),
+		"a vault key and a key_env": strings.Replace(withKeys, "keys: {kind: local,", "azure: {identity: default}\nkeys: {kind: azurekeyvault, key: 'https://kv.vault.azure.net/keys/k',", 1),
+		"a vault key over http": strings.Replace(withKeys, "keys: {kind: local, key_env: TRESOR_TEST_KEK,",
+			"azure: {identity: default}\nkeys: {kind: azurekeyvault, key: 'http://kv/keys/k',", 1),
+		"a client id for the default credential": strings.Replace(withKeys, "keys: {kind: local, key_env: TRESOR_TEST_KEK,",
+			"azure: {identity: default, client_id: x}\nkeys: {kind: azurekeyvault, key: 'https://kv.vault.azure.net/keys/k',", 1),
+		"an unknown identity": withKeys + "azure: {identity: secret}\n",
 	} {
 		if _, err := Parse([]byte(doc)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestKeyVaultConfig(t *testing.T) {
+	doc := strings.Replace(good, "state: {kind: memory}", "state: {kind: sqlite, path: /data/t.db}", 1) +
+		"keys: {kind: azurekeyvault, key: 'https://corp-kv.vault.azure.net/keys/tresor-kek'}\n" +
+		"azure: {identity: managed, client_id: 00000000-0000-0000-0000-000000000001}\n"
+	cfg, err := Parse([]byte(doc))
+	if err != nil || cfg.Keys.Key != "https://corp-kv.vault.azure.net/keys/tresor-kek" || cfg.Azure.Identity != "managed" {
+		t.Fatalf("%v %+v", err, cfg)
 	}
 }

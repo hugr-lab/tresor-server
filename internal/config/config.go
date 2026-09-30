@@ -20,6 +20,7 @@ type Config struct {
 	TLS       TLS      `yaml:"tls"`
 	State     State    `yaml:"state"`
 	Keys      Keys     `yaml:"keys"`
+	Azure     Azure    `yaml:"azure"`
 	Issuers   []Issuer `yaml:"issuers"`
 	Policy    Policy   `yaml:"policy"`
 	// Store is the reference server's encrypted file: kept only to refuse a config that still has it (an
@@ -45,11 +46,13 @@ type State struct {
 var StateKinds = []string{"memory", "sqlite"}
 
 // Keys is the KEK the params are sealed under (spec 002): local, a 32-byte key from the environment or a
-// file.
+// file; or azurekeyvault, a key in Key Vault or Managed HSM.
 type Keys struct {
 	Kind    string `yaml:"kind"`
 	KeyEnv  string `yaml:"key_env"`
 	KeyFile string `yaml:"key_file"`
+	// Key is the azurekeyvault key's URL, https://<vault>/keys/<name>, with no version.
+	Key string `yaml:"key"`
 	// DataKeyMaxAge: a data key older than this is replaced for new values (default 30 days).
 	DataKeyMaxAge time.Duration `yaml:"data_key_max_age"`
 	// CacheTTL: how long an unwrapped data key stays in memory (default 5 minutes).
@@ -57,7 +60,14 @@ type Keys struct {
 }
 
 // KeyKinds are the KEKs this build knows.
-var KeyKinds = []string{"local"}
+var KeyKinds = []string{"local", "azurekeyvault"}
+
+// Azure is the service's identity on Azure (spec 002): managed (a managed identity; ClientID names a
+// user-assigned one) or default (DefaultAzureCredential: the az CLI for development).
+type Azure struct {
+	Identity string `yaml:"identity"`
+	ClientID string `yaml:"client_id"`
+}
 
 // Issuer is one identity provider the server accepts tokens from.
 type Issuer struct {
@@ -171,6 +181,15 @@ func (c *Config) validate() error {
 	if err := c.Keys.validate(c.State.Kind != "memory"); err != nil {
 		return err
 	}
+	if c.Keys.Kind == "azurekeyvault" && c.Azure.Identity == "" {
+		return errors.New("keys: azurekeyvault needs azure.identity: managed | default")
+	}
+	if c.Azure.Identity != "" && c.Azure.Identity != "managed" && c.Azure.Identity != "default" {
+		return errors.New("azure.identity is managed or default")
+	}
+	if c.Azure.ClientID != "" && c.Azure.Identity != "managed" {
+		return errors.New("azure.client_id names a user-assigned managed identity: azure.identity: managed")
+	}
 	if len(c.Issuers) == 0 {
 		return errors.New("at least one issuer is required")
 	}
@@ -260,8 +279,18 @@ func (k *Keys) validate(required bool) error {
 	if !slices.Contains(KeyKinds, k.Kind) {
 		return fmt.Errorf("keys.kind is none of %s", strings.Join(KeyKinds, " | "))
 	}
-	if (k.KeyEnv == "") == (k.KeyFile == "") {
-		return errors.New("keys: a local KEK comes from key_env or key_file - one of them")
+	switch k.Kind {
+	case "local":
+		if (k.KeyEnv == "") == (k.KeyFile == "") || k.Key != "" {
+			return errors.New("keys: a local KEK comes from key_env or key_file - one of them")
+		}
+	case "azurekeyvault":
+		if k.Key == "" || k.KeyEnv != "" || k.KeyFile != "" {
+			return errors.New("keys: an azurekeyvault KEK is keys.key, https://<vault>/keys/<name> - nothing else")
+		}
+		if !strings.HasPrefix(k.Key, "https://") {
+			return errors.New("keys.key: an https key URL")
+		}
 	}
 	if k.KeyEnv != "" && IsSettingVariable(k.KeyEnv) {
 		return fmt.Errorf("keys.key_env names %s, which is read as configuration - give the KEK a variable of "+
