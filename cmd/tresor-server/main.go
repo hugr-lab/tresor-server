@@ -2,6 +2,7 @@
 // reference server (tresor specs/003, MIT, the same owner).
 //
 //	tresor-server -config server.yaml
+//	TRESOR_LISTEN=0.0.0.0:8080 TRESOR_STATE__KIND=memory ... tresor-server
 package main
 
 import (
@@ -29,7 +30,8 @@ import (
 const readyInterval = 30 * time.Second
 
 func main() {
-	configPath := flag.String("config", "server.yaml", "the configuration file")
+	configPath := flag.String("config", "", "the configuration file (optional: TRESOR_CONFIG and TRESOR_<SETTING> "+
+		"variables are read over it)")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(*configPath, log); err != nil {
@@ -47,9 +49,12 @@ func openState(cfg config.State) (state.Store, error) {
 }
 
 func run(configPath string, log *slog.Logger) error {
-	cfg, err := config.Load(configPath)
+	cfg, fromEnv, err := config.Load(configPath)
 	if err != nil {
 		return err
+	}
+	if len(fromEnv) > 0 {
+		log.Info("configuration from the environment", "variables", fromEnv) // names, never values
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

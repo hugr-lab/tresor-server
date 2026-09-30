@@ -22,7 +22,11 @@ Go 1.27, no cgo.
 go test ./...                                   # the Go tests (GOWORK=off inside a go.work tree)
 go build -o tresor-server ./cmd/tresor-server
 ./tresor-server -config server.yaml             # the reference server's config, plus state:
+TRESOR_LISTEN=127.0.0.1:8443 TRESOR_STATE__KIND=memory ... ./tresor-server   # or all from the environment
 ```
+
+Every setting can come from the environment, over the file: `TRESOR_CONFIG` (a whole YAML document) or
+`TRESOR_<PATH>` per setting, `__` between levels, the value read as YAML (`TRESOR_POLICY__ADMINS=[role:admins]`).
 
 - `/healthz`: the process is up. `/readyz`: the state store and every issuer answer.
 - tresor's conformance suite runs against this service through tresor's `scripts/ci/test_keycloak.sh`:
