@@ -111,13 +111,14 @@ grants move from the reference server's memory into the store.
 
 ```go
 type DelegationStore interface {
-	Put(ctx context.Context, d Delegation, maxPerActor int) error // ErrTooMany
-	Count(ctx context.Context, actorOwner string) (int, error)    // the pre-check before minting
-	Get(ctx context.Context, idHash []byte) (Delegation, error)   // ErrNotFound; an expired one too
-	Delete(ctx context.Context, idHash []byte) error
-	DeleteWhere(ctx context.Context, actor, userOwner string) (int, error) // DELETE /v1/delegations
+	Put(ctx context.Context, d Delegation, maxPerActor int) error        // ErrTooMany; count and insert in one step
+	Count(ctx context.Context, actorOwner string, now time.Time) (int, error) // the check before minting
+	Get(ctx context.Context, idHash []byte, now time.Time) (*Delegation, error) // ErrNotFound; an expired one too
+	SubjectToken(ctx context.Context, idHash []byte, now time.Time) ([]byte, error) // while it lives
+	Delete(ctx context.Context, idHash []byte) (bool, error)
+	DeleteWhere(ctx context.Context, actorClient, userOwner string) (int, error) // DELETE /v1/delegations
 	// the grant's minted tokens (tresor specs/010), one row per audience and scope
-	Tokens(ctx context.Context, idHash []byte) ([]MintedToken, error)
+	Token(ctx context.Context, idHash []byte, key string) (*MintedToken, error)
 	PutToken(ctx context.Context, idHash []byte, t MintedToken) error // compare-and-set on its version
 	Purge(ctx context.Context, now time.Time) (int, error)
 }
@@ -142,8 +143,16 @@ type DelegationStore interface {
 - **The limit** is per actor (`maxPerActor`, default 10000), not global: one actor cannot use up
   every other's. `Put` counts and inserts under a lock: the transaction on SQLite, an advisory lock
   on PostgreSQL, `sp_getapplock` on SQL Server.
-- Grant rows are written once and deleted. Expired rows and their tokens are purged in the
-  background; a read never returns one.
+- Grant rows are written once and deleted. Expired rows and their tokens are purged every minute
+  (and before each new grant); a read never returns one.
+- A renewal that loses the race to a replica that wrote a failure (it tried the refresh token this
+  one had just spent) writes its good token over the failure, compare-and-set. A renewed token the
+  store cannot keep is tried again, then answered as an outage (503): its refresh token is lost.
+- One replica's renewals of one token are serialised by a lock per grant and audience; a fresh
+  token is served with no lock.
+- **Trust**: whoever can write the database is trusted, as with the secrets' grants. The sealed
+  values are bound to their grant, but its plain columns (the user's principals, the expiries) are
+  not sealed.
 
 ### SQL: three dialects
 

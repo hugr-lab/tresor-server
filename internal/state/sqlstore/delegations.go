@@ -79,17 +79,18 @@ func (d delegations) Get(ctx context.Context, idHash []byte, now time.Time) (*st
 	g := state.Delegation{IDHash: idHash}
 	var user string
 	var expires, subjectExpires int64
+	var hasSubject int
 	err := d.s.db.QueryRowContext(ctx, d.s.q(`SELECT actor_owner, actor_client, actor_issuer, user_owner, user_json,
-		expires_at, subject_expires_at FROM delegations WHERE id_hash = ? AND expires_at > ?`),
-		hex.EncodeToString(idHash), now.UnixMicro()).
-		Scan(&g.ActorOwner, &g.ActorClient, &g.ActorIssuer, &g.UserOwner, &user, &expires, &subjectExpires)
+		expires_at, subject_expires_at, CASE WHEN subject_sealed IS NULL THEN 0 ELSE 1 END
+		FROM delegations WHERE id_hash = ? AND expires_at > ?`), hex.EncodeToString(idHash), now.UnixMicro()).
+		Scan(&g.ActorOwner, &g.ActorClient, &g.ActorIssuer, &g.UserOwner, &user, &expires, &subjectExpires, &hasSubject)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, state.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	g.User = []byte(user)
+	g.User, g.HasSubject = []byte(user), hasSubject == 1
 	g.ExpiresAt, g.SubjectExpiresAt = time.UnixMicro(expires).UTC(), time.UnixMicro(subjectExpires).UTC()
 	return &g, nil
 }
@@ -111,6 +112,18 @@ func (d delegations) SubjectToken(ctx context.Context, idHash []byte, now time.T
 		return nil, err
 	}
 	return d.s.envelope.Open(ctx, keyID, subjectAAD(id), sealed)
+}
+
+func (d delegations) Purge(ctx context.Context, now time.Time) (int, error) {
+	if err := d.s.ready(); err != nil {
+		return 0, err
+	}
+	res, err := d.s.db.ExecContext(ctx, d.s.q(`DELETE FROM delegations WHERE expires_at <= ?`), now.UnixMicro())
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }
 
 func (d delegations) Delete(ctx context.Context, idHash []byte) (bool, error) {

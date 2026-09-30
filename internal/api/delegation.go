@@ -41,6 +41,8 @@ type grant struct {
 	actorIssuer string
 	user        auth.Caller
 	expires     time.Time
+	// keepsSubject: the user's token was kept (sealed) at the exchange, for what is minted later
+	keepsSubject bool
 }
 
 type grantKey struct{}
@@ -73,7 +75,7 @@ func (s *Server) loadGrant(ctx context.Context, id string) (*grant, error) {
 		return nil, errGrantStore
 	}
 	gr := &grant{idHash: d.IDHash, actorOwner: d.ActorOwner, actorClient: d.ActorClient, actorIssuer: d.ActorIssuer,
-		expires: d.ExpiresAt}
+		expires: d.ExpiresAt, keepsSubject: d.HasSubject}
 	if err := json.Unmarshal(d.User, &gr.user); err != nil {
 		return nil, fmt.Errorf("%w: a grant's user does not read", errGrantStore)
 	}
@@ -160,11 +162,14 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 	}
 	expires := s.now().Add(ttl)
 	grants := s.store.Delegations()
-	if n, err := grants.Count(r.Context(), actor.Owner(), s.now()); err != nil || n >= maxGrantsPerActor {
-		// before any exchange at the IdP
-		if err != nil {
-			s.log.Error("delegation grants: the store failed", "error", err.Error())
-		}
+	// before any exchange at the IdP
+	n, err := grants.Count(r.Context(), actor.Owner(), s.now())
+	if err != nil {
+		s.log.Error("delegation grants: the store failed", "error", err.Error())
+		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the delegation grants could not be read")
+		return
+	}
+	if n >= maxGrantsPerActor {
 		problem(w, http.StatusServiceUnavailable, "service_unavailable", "too many delegation grants")
 		return
 	}
@@ -192,11 +197,12 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 	if mayMint { // kept, sealed, for what could not be minted now - only while it lives
 		d.Subject, d.SubjectExpiresAt = []byte(body.SubjectToken), user.ExpiresAt
 	}
-	if err := grants.Put(r.Context(), d, maxGrantsPerActor); err != nil {
-		if !errors.Is(err, state.ErrTooMany) {
-			s.log.Error("delegation grants: the store failed", "error", err.Error())
-		}
+	if err := grants.Put(r.Context(), d, maxGrantsPerActor); errors.Is(err, state.ErrTooMany) {
 		problem(w, http.StatusServiceUnavailable, "service_unavailable", "too many delegation grants")
+		return
+	} else if err != nil {
+		s.log.Error("delegation grants: the store failed", "error", err.Error())
+		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the delegation grant could not be stored")
 		return
 	}
 	for key, res := range minted {

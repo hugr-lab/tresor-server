@@ -29,6 +29,14 @@ func cloneDelegation(d *state.Delegation) *state.Delegation {
 	return &out
 }
 
+func (d *delegations) Purge(_ context.Context, now time.Time) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	before := len(d.grants)
+	d.purge(now)
+	return before - len(d.grants), nil
+}
+
 func (d *delegations) purge(now time.Time) {
 	for k, g := range d.grants {
 		if !now.Before(g.ExpiresAt) {
@@ -84,7 +92,7 @@ func (d *delegations) Get(_ context.Context, idHash []byte, now time.Time) (*sta
 		return nil, state.ErrNotFound
 	}
 	out := cloneDelegation(g)
-	out.Subject = nil
+	out.HasSubject, out.Subject = g.Subject != nil, nil
 	return out, nil
 }
 

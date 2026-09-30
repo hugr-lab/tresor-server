@@ -294,6 +294,9 @@ func testDelegations(t *testing.T, open Opener) {
 		string(got.User) != string(g.User) || got.Subject != nil || !got.ExpiresAt.Equal(g.ExpiresAt.Truncate(time.Microsecond)) {
 		t.Fatalf("read back %+v", got)
 	}
+	if !got.HasSubject {
+		t.Fatal("a kept subject token is not said to be")
+	}
 	if sub, err := d.SubjectToken(ctx, g.IDHash, now); err != nil || string(sub) != "subject-token-a" {
 		t.Fatalf("the subject token: %q %v", sub, err)
 	}
@@ -316,6 +319,9 @@ func testDelegations(t *testing.T, open Opener) {
 	}
 	if _, err := d.SubjectToken(ctx, bare.IDHash, now); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("no subject token kept: %v", err)
+	}
+	if got, _ := d.Get(ctx, bare.IDHash, now); got.HasSubject {
+		t.Fatal("no subject token kept, but said to be")
 	}
 	// another handle (a replica, a restart) honours them
 	if h.Another != nil {
@@ -347,6 +353,25 @@ func testDelegations(t *testing.T, open Opener) {
 	}
 	if _, err := d.DeleteWhere(ctx, "", ""); err == nil {
 		t.Fatal("revoking everything with no filter")
+	}
+	// purge: the expired grants go, with their tokens; a live one stays
+	short, long := grant("s", "p", "u", now.Add(time.Minute)), grant("l", "p", "u", now.Add(time.Hour))
+	for _, gg := range []state.Delegation{short, long} {
+		if err := d.Put(ctx, gg, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.PutToken(ctx, short.IDHash, state.MintedToken{Key: "k", Version: 1, Token: []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := d.Purge(ctx, now.Add(10*time.Minute)); err != nil || n != 1 {
+		t.Fatalf("purge: %d %v", n, err)
+	}
+	if _, err := d.Token(ctx, short.IDHash, "k"); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("a purged grant's token: %v", err)
+	}
+	if _, err := d.Get(ctx, long.IDHash, now); err != nil {
+		t.Fatalf("a live grant purged: %v", err)
 	}
 }
 

@@ -6,10 +6,10 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"net/http"
 	"net/url"
 	"slices"
@@ -88,15 +88,45 @@ type mintResult struct {
 	failed string
 }
 
-// mintLocks serialise one replica's renewals of one grant's token (other replicas are held off by the
-// store's compare-and-set): a fixed set, by hash, so it never grows.
-var mintLocks [64]sync.Mutex
+// mintLocks serialise one replica's renewals of one grant's token for one audience (other replicas are held
+// off by the store's compare-and-set). A lock lives while someone holds or waits for it; waiting ends with
+// the request.
+type mintLocks struct {
+	mu    sync.Mutex
+	locks map[string]*mintLock
+}
 
-func mintLock(idHash []byte, key string) *sync.Mutex {
-	h := fnv.New32a()
-	h.Write(idHash)
-	h.Write([]byte(key))
-	return &mintLocks[h.Sum32()%uint32(len(mintLocks))]
+type mintLock struct {
+	ch   chan struct{}
+	refs int
+}
+
+func (m *mintLocks) lock(ctx context.Context, key string) (unlock func(), err error) {
+	m.mu.Lock()
+	if m.locks == nil {
+		m.locks = map[string]*mintLock{}
+	}
+	l := m.locks[key]
+	if l == nil {
+		l = &mintLock{ch: make(chan struct{}, 1)}
+		m.locks[key] = l
+	}
+	l.refs++
+	m.mu.Unlock()
+	release := func() {
+		m.mu.Lock()
+		if l.refs--; l.refs == 0 {
+			delete(m.locks, key)
+		}
+		m.mu.Unlock()
+	}
+	select {
+	case l.ch <- struct{}{}:
+		return func() { <-l.ch; release() }, nil
+	case <-ctx.Done():
+		release()
+		return nil, ctx.Err()
+	}
 }
 
 // storeMinted stores a grant's minted token (or its refusal) at a version, sealed by the store.
@@ -312,9 +342,16 @@ func (s *Server) mintedToken(r *http.Request, c *auth.Caller, sec *state.Secret)
 // rotated refresh token twice.
 func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope string,
 	fresh func(*mint.Token) bool) (*mint.Token, *mintProblem) {
-	lock := mintLock(gr.idHash, key)
-	lock.Lock()
-	defer lock.Unlock()
+	usable := func(t *mint.Token) bool { return fresh(t) || (t != nil && t.Expiry.IsZero()) }
+	// a fresh token needs no lock
+	if token, _, _, err := s.loadMinted(r.Context(), gr.idHash, key); err == nil && usable(token) {
+		return token, nil
+	}
+	unlock, err := s.mintLocks.lock(r.Context(), hex.EncodeToString(gr.idHash)+"\x00"+key)
+	if err != nil {
+		return nil, unavailableMint("the request ended while the grant's token was being renewed")
+	}
+	defer unlock()
 	// detached from the request: a refresh token the IdP rotated must not be lost with a dropped connection
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), refreshTimeout)
 	defer cancel()
@@ -324,7 +361,7 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 			s.log.Error("a grant's minted token: the store failed", "error", err.Error())
 			return nil, unavailableMint("the grant's token could not be read")
 		}
-		if fresh(token) || (token != nil && token.Expiry.IsZero()) {
+		if usable(token) {
 			return token, nil
 		}
 		client, problem := s.mintClient(ctx, gr.user.Issuer)
@@ -343,7 +380,7 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 					continue // another replica renewed it meanwhile (and spent the refresh token): take its
 				}
 				if mint.IsInvalidGrant(err) {
-					next = mintResult{failed: "the user's session at the identity provider has ended"}
+					next = mintResult{failed: sessionEnded}
 					break
 				}
 				s.log.Warn("renewing a minted token failed", "user", gr.user.Owner(), "audience", audience,
@@ -351,12 +388,14 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 				if !isRefusal(err) {
 					return nil, unavailableMint("the identity provider did not renew the token")
 				}
-				next = mintResult{failed: err.Error()}
+				next = mintResult{failed: "renewing the user's token was refused: " + err.Error()}
 				break
 			}
 			next = mintResult{token: renewed}
 		case failed != "":
-			return nil, refusedMint("minting for the user was refused: " + failed)
+			return nil, refusedMint(refusal(failed))
+		case !gr.keepsSubject:
+			return nil, refusedMint("this grant carries no minted tokens: a new session mints them")
 		default:
 			// nothing minted yet (an outage at the exchange, or a secret granted to the server since): from
 			// the subject token, while it lives
@@ -379,31 +418,64 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 				if !isRefusal(err) && !strings.Contains(err.Error(), "minted a token") {
 					return nil, unavailableMint("the identity provider did not answer")
 				}
-				next = mintResult{failed: err.Error()}
+				next = mintResult{failed: "minting for the user was refused: " + err.Error()}
 				break
 			}
 			next = mintResult{token: minted}
 		}
-		err = s.storeMinted(ctx, gr.idHash, key, version+1, next)
-		if errors.Is(err, state.ErrConflict) {
-			continue // another replica stored one first: read it
+		err = s.storeMintedRetried(ctx, gr.idHash, key, version+1, next)
+		if errors.Is(err, state.ErrConflict) && next.token != nil {
+			// another replica wrote first. When it wrote a failure - it may have tried the refresh token this
+			// replica had just spent - the good token this one holds goes over it
+			if now, failedNow, v, rerr := s.loadMinted(ctx, gr.idHash, key); rerr == nil && now == nil && failedNow != "" {
+				err = s.storeMintedRetried(ctx, gr.idHash, key, v+1, next)
+			}
 		}
-		if errors.Is(err, state.ErrNotFound) {
+		switch {
+		case errors.Is(err, state.ErrConflict):
+			continue // another replica stored a token first: read it
+		case errors.Is(err, state.ErrNotFound):
 			return nil, refusedMint("the delegation grant has been revoked")
-		}
-		if err != nil {
-			s.log.Error("a grant's minted token: the store failed", "error", err.Error())
-			// the token is good for this request; the next one renews again
+		case err != nil:
+			// a renewed refresh token that could not be stored is lost: an outage, said as one
+			s.log.Error("a grant's minted token could not be stored", "error", err.Error())
+			return nil, unavailableMint("the grant's renewed token could not be stored")
 		}
 		if next.token == nil {
-			if strings.HasPrefix(next.failed, "the user's session") {
-				return nil, refusedMint(next.failed)
-			}
-			return nil, refusedMint("minting for the user was refused: " + next.failed)
+			return nil, refusedMint(refusal(next.failed))
 		}
 		return next.token, nil
 	}
 	return nil, unavailableMint("the grant's token kept changing")
+}
+
+const sessionEnded = "the user's session at the identity provider has ended"
+
+// refusal is a kept failure as the caller reads it.
+func refusal(failed string) string {
+	if failed == sessionEnded || strings.HasPrefix(failed, "renewing the user's token was refused") ||
+		strings.HasPrefix(failed, "minting for the user was refused") {
+		return failed
+	}
+	return "minting for the user was refused: " + failed // a refusal kept at the exchange
+}
+
+// storeMintedRetried stores a token, again after a failure that is neither a conflict nor a revoked grant: a
+// renewed refresh token is lost if it is not stored.
+func (s *Server) storeMintedRetried(ctx context.Context, idHash []byte, key string, version int64, res mintResult) error {
+	var err error
+	for attempt := range 3 {
+		err = s.storeMinted(ctx, idHash, key, version, res)
+		if err == nil || errors.Is(err, state.ErrConflict) || errors.Is(err, state.ErrNotFound) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Duration(100*(attempt+1)) * time.Millisecond):
+		}
+	}
+	return err
 }
 
 // bearerOf is the raw bearer token of the request (verified already by authed).

@@ -37,12 +37,13 @@ var (
 
 // Server serves the protocol.
 type Server struct {
-	cfg      *config.Config
-	verifier *auth.Verifier
-	store    state.Store
-	log      *slog.Logger
-	now      func() time.Time
-	direct   directCache // tokens minted for callers reading directly (specs/010)
+	cfg       *config.Config
+	verifier  *auth.Verifier
+	store     state.Store
+	log       *slog.Logger
+	now       func() time.Time
+	direct    directCache
+	mintLocks mintLocks // one replica's renewals of a grant's token, per grant and audience // tokens minted for callers reading directly (specs/010)
 }
 
 // New wires a server; the verifier and the store are the caller's. It reads the store once, to report

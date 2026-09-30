@@ -21,6 +21,8 @@ type Delegation struct {
 	// SubjectToken reads it.
 	Subject          []byte
 	SubjectExpiresAt time.Time
+	// HasSubject: a subject token was kept (Get sets it; Subject itself stays out).
+	HasSubject bool
 }
 
 // MintedToken is one of a grant's minted tokens (tresor specs/010): the user's, for one audience and scope.
@@ -59,4 +61,7 @@ type DelegationStore interface {
 	// PutToken stores t, compare-and-set: from version 0 (none yet) or from t.Version-1. Another replica
 	// that wrote first: ErrConflict, and the caller reads its token.
 	PutToken(ctx context.Context, idHash []byte, t MintedToken) error
+	// Purge removes the expired grants and their tokens: nothing of a grant stays at rest past its
+	// expiry. How many.
+	Purge(ctx context.Context, now time.Time) (int, error)
 }
