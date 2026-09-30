@@ -102,6 +102,25 @@ func TestReferencesRefused(t *testing.T) {
 			t.Errorf("%s: %d %s", name, r.status, r.body)
 		}
 	}
+	// shapes a client reads otherwise than this service, or near misses: refused, never stored as literals
+	for name, param := range map[string]string{
+		"VALUE in capitals":   `{"type":"VARCHAR","VALUE":"ref+azkv://evil-vault/x","value":"lit"}`,
+		"TYPE in capitals":    `{"type":"BLOB","TYPE":"VARCHAR","value":"ref+azkv://corp-vault/lake-s3"}`,
+		"a repeated key":      `{"type":"VARCHAR","value":"ref+azkv://evil-vault/x","value":"lit"}`,
+		"REF+ in capitals":    `"REF+azkv://evil-vault/x"`,
+		"a space before ref+": `" ref+azkv://evil-vault/x"`,
+	} {
+		withVault(f, &kvSecrets{}, azkv.Allow{Vault: "corp-vault", Prefixes: []string{"lake-"}})
+		doc := `{"type":"s3","provider":"config","params":{"secret":` + param + `},"redact_keys":[]}`
+		if r := f.do("PUT", "/v1/secrets/x", f.admin, doc); r.status != 422 {
+			t.Errorf("%s: %d %s", name, r.status, r.body)
+		}
+	}
+	// a scheme that is not one is not quoted back: it may be a value written by mistake
+	doc := strings.Replace(refSecret, "ref+azkv://corp-vault/lake-s3", "ref+HUNTER2value://x", 1)
+	if r := f.do("PUT", "/v1/secrets/x", f.admin, doc); r.status != 422 || strings.Contains(string(r.body), "HUNTER2") {
+		t.Errorf("a scheme quoted back: %d %s", r.status, r.body)
+	}
 	// no material: configured - every reference refused, never stored as a literal
 	f.srv.material = nil
 	if r := f.do("PUT", "/v1/secrets/x", f.admin, refSecret); r.status != 422 {

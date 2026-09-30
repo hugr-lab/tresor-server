@@ -72,11 +72,19 @@ live() {
 	# a secret of this run's: a random value, set in the vault; the test compares it by hash only
 	value="$(openssl rand -hex 24)"
 	sha="$(printf '%s' "$value" | shasum -a 256 | cut -d' ' -f1)"
+	set_ok=0
 	for _ in $(seq 30); do
-		az keyvault secret set --vault-name "$vault" -n duckdb-live-ref --value "$value" -o none 2>/dev/null && break
+		if az keyvault secret set --vault-name "$vault" -n duckdb-live-ref --value "$value" -o none 2>/dev/null; then
+			set_ok=1
+			break
+		fi
 		sleep 10 # the Secrets Officer role takes a while to reach the vault
 	done
 	unset value
+	[ "$set_ok" = 1 ] || {
+		echo "azure_live: the test secret could not be set in $vault after 5 minutes" >&2
+		exit 1
+	}
 	echo "azure_live: resolving ref+azkv://$vault/duckdb-live-ref"
 	(cd "$root" && GOWORK=off TRESOR_LIVE_VAULT="$vault" TRESOR_LIVE_SECRET=duckdb-live-ref TRESOR_LIVE_SECRET_SHA="$sha" \
 		go test -tags live -count=1 -run TestLive -v ./internal/material/azurekeyvault)

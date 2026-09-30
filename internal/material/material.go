@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -77,26 +78,30 @@ func readParam(raw json.RawMessage) param {
 	if json.Unmarshal(raw, &s) == nil {
 		return param{text: s, isStr: true, typ: "VARCHAR"}
 	}
-	var typed struct {
-		Type  string          `json:"type"`
-		Value json.RawMessage `json:"value"`
-	}
-	if json.Unmarshal(raw, &typed) != nil {
+	// exactly the keys type and value, as written (the API refuses any other shape)
+	var typed map[string]json.RawMessage
+	if json.Unmarshal(raw, &typed) != nil || len(typed) != 2 || typed["type"] == nil || typed["value"] == nil {
 		return param{}
 	}
-	p := param{typed: true, typ: typed.Type}
-	if json.Unmarshal(typed.Value, &p.text) == nil {
+	p := param{typed: true}
+	if json.Unmarshal(typed["type"], &p.typ) != nil {
+		return param{}
+	}
+	if json.Unmarshal(typed["value"], &p.text) == nil {
 		p.isStr = true
 	}
 	return p
 }
 
-// parse splits a reference's text: its scheme and the rest.
+var schemeName = regexp.MustCompile(`^[a-z0-9]{1,16}$`)
+
+// parse splits a reference's text: its scheme and the rest. The text is named in no error: a scheme that is
+// not one may be a value written by mistake.
 func (r *Resolver) parse(text string) (Source, Ref, error) {
 	rest := strings.TrimPrefix(text, Prefix)
 	scheme, where, ok := strings.Cut(rest, "://")
-	if !ok || scheme == "" {
-		return nil, Ref{}, fmt.Errorf("%w: ref+<scheme>://...", ErrInvalid)
+	if !ok || !schemeName.MatchString(scheme) {
+		return nil, Ref{}, fmt.Errorf("%w: ref+<scheme>://..., the scheme in lower-case letters and digits", ErrInvalid)
 	}
 	var src Source
 	if r != nil {
@@ -125,7 +130,14 @@ func (r *Resolver) CheckWrite(provider string, params map[string]json.RawMessage
 	slices.Sort(keys)
 	for _, key := range keys {
 		p := readParam(params[key])
-		if !p.isStr || !strings.HasPrefix(p.text, Prefix) {
+		if !p.isStr {
+			continue
+		}
+		if !strings.HasPrefix(p.text, Prefix) {
+			// a near miss (REF+, a space before it) would be kept as text: an administrator's typo said, not stored
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(p.text)), Prefix) {
+				return nil, fmt.Errorf("%w: parameter %s: a reference is written exactly ref+<scheme>://...", ErrInvalid, key)
+			}
 			continue
 		}
 		if !strings.EqualFold(p.typ, "VARCHAR") {

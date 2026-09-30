@@ -94,7 +94,10 @@ type AzKVAllow struct {
 	Prefixes []string `yaml:"prefixes"`
 }
 
-var azkvVault = regexp.MustCompile(`^[0-9A-Za-z-]{3,24}$`)
+var (
+	azkvVault = regexp.MustCompile(`^[0-9A-Za-z-]{3,24}$`)
+	dnsSuffix = regexp.MustCompile(`^(\.[a-z0-9-]+)+$`)
+)
 
 // Azure is the service's identity on Azure (spec 002): managed (a managed identity; ClientID names a
 // user-assigned one) or default (DefaultAzureCredential: the az CLI for development).
@@ -239,11 +242,11 @@ func (c *Config) validate() error {
 				return fmt.Errorf("material.azkv.allow[%d].vault: a vault's name, 3 to 24 letters, digits or dashes", i)
 			}
 		}
-		if kv.CacheTTL < 0 {
-			return errors.New("material.azkv.cache_ttl is positive")
+		if kv.CacheTTL < 0 || kv.CacheTTL > 5*time.Minute {
+			return errors.New("material.azkv.cache_ttl is 0 to 5m: the longest a value may be read stale")
 		}
-		if kv.DNSSuffix != "" && !strings.HasPrefix(kv.DNSSuffix, ".") {
-			return errors.New("material.azkv.dns_suffix begins with a dot (.vault.azure.net)")
+		if kv.DNSSuffix != "" && !dnsSuffix.MatchString(kv.DNSSuffix) {
+			return errors.New("material.azkv.dns_suffix is a domain's suffix (.vault.azure.net)")
 		}
 	}
 	if len(c.Issuers) == 0 {

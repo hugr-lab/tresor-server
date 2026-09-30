@@ -524,6 +524,31 @@ type secretBody struct {
 }
 
 // validParams: every value a string or {type, value} (protocol, Material).
+// duplicateKeys says whether a JSON object repeats a key (a map keeps only one of them).
+func duplicateKeys(raw json.RawMessage) bool {
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return true
+		}
+		k, _ := t.(string)
+		if seen[k] {
+			return true
+		}
+		seen[k] = true
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func validParams(params map[string]json.RawMessage, redact []string) error {
 	for key, raw := range params {
 		if key == "" {
@@ -536,13 +561,15 @@ func validParams(params map[string]json.RawMessage, redact []string) error {
 		if json.Unmarshal(raw, &str) == nil {
 			continue
 		}
-		var typed struct {
-			Type  string          `json:"type"`
-			Value json.RawMessage `json:"value"`
+		// exactly the keys type and value, as written: Go's decoder would match "VALUE" too, and take the last
+		// of repeated keys - a shape a client reads otherwise than this service
+		var typed map[string]json.RawMessage
+		if json.Unmarshal(raw, &typed) != nil || len(typed) != 2 || typed["type"] == nil || typed["value"] == nil {
+			return fmt.Errorf("parameter %q is neither a string nor {type, value}", key)
 		}
-		dec := json.NewDecoder(strings.NewReader(string(raw)))
-		dec.DisallowUnknownFields()
-		if dec.Decode(&typed) != nil || typed.Type == "" || typed.Value == nil || string(typed.Value) == "null" {
+		var typ string
+		if json.Unmarshal(typed["type"], &typ) != nil || typ == "" || string(typed["value"]) == "null" ||
+			duplicateKeys(raw) {
 			return fmt.Errorf("parameter %q is neither a string nor {type, value}", key)
 		}
 	}
