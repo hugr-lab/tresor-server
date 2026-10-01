@@ -25,6 +25,9 @@ type Config struct {
 	Material  Material `yaml:"material"`
 	Issuers   []Issuer `yaml:"issuers"`
 	Policy    Policy   `yaml:"policy"`
+	// Audit and Telemetry are spec 005's: what the audit records, and whether spans continue tresor's trace.
+	Audit     Audit     `yaml:"audit"`
+	Telemetry Telemetry `yaml:"telemetry"`
 	// Store is the reference server's encrypted file: kept only to refuse a config that still has it (an
 	// empty `store:` too: see load)
 	Store any `yaml:"store"`
@@ -65,6 +68,20 @@ type State struct {
 	// Kept stable, so a restore still verifies.
 	Instance string `yaml:"instance"`
 }
+
+// Audit is what the audit records (spec 005): all (the default), changes (no successful read) or off.
+type Audit struct {
+	Level string `yaml:"level"`
+}
+
+// Telemetry: OpenTelemetry takes its standard environment (OTEL_*); only what the service decides is here.
+type Telemetry struct {
+	// Traces: spans under tresor's trace (the default); false leaves the audit's trace_id only.
+	Traces *bool `yaml:"traces"`
+}
+
+// TracesOn says whether spans are made: on unless set false.
+func (t Telemetry) TracesOn() bool { return t.Traces == nil || *t.Traces }
 
 // StateKinds are the stores this build knows.
 // k8sPrefix is how a Kubernetes Secret's name may start.
@@ -312,6 +329,11 @@ func (c *Config) validate() error {
 	if c.State.PasswordRef != "" && c.Material.admits(c.State.PasswordRef) {
 		return errors.New("state.password_ref is within material's allowlist: an administrator could read the " +
 			"database's password through a reference - keep it in a namespace, a vault or a name no allowlist admits")
+	}
+	switch c.Audit.Level {
+	case "", "all", "changes", "off":
+	default:
+		return errors.New("audit.level is all, changes or off")
 	}
 	if len(c.Issuers) == 0 {
 		return errors.New("at least one issuer is required")

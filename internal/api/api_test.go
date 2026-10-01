@@ -16,6 +16,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/state"
 	"github.com/hugr-lab/tresor-server/internal/state/memory"
 	"github.com/hugr-lab/tresor-server/internal/testidp"
+	"github.com/hugr-lab/tresor-server/internal/traced"
 )
 
 type fixture struct {
@@ -72,7 +73,8 @@ policy:
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(f.logs, nil))
-	if f.srv, err = New(context.Background(), cfg, auth.NewVerifier(cfg.Issuers), memory.New(), log); err != nil {
+	// the store as the service runs it: traced (spec 005)
+	if f.srv, err = New(context.Background(), cfg, auth.NewVerifier(cfg.Issuers), traced.Store(memory.New()), log); err != nil {
 		t.Fatal(err)
 	}
 	f.server.Config.Handler = f.srv.Handler()

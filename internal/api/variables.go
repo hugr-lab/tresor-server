@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/hugr-lab/tresor-server/internal/audit"
 	"github.com/hugr-lab/tresor-server/internal/material"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
@@ -90,8 +91,11 @@ func (s *Server) getVariable(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the variable's reference did not resolve")
 		return
 	}
+	o := observed(r)
+	o.event.Version = full.Version
 	for _, res := range resolved { // where and which version, never the value
 		s.log.Info("reference resolved", "variable", v.Name, "ref", res.Ref.String(), "version", res.Version)
+		o.event.Refs = append(o.event.Refs, audit.Ref{Param: res.Param, Ref: res.Ref.String(), Version: res.Version})
 	}
 	var value string
 	if err := json.Unmarshal(params["value"], &value); err != nil {

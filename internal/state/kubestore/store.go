@@ -25,8 +25,11 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/state"
+	"github.com/hugr-lab/tresor-server/internal/telemetry"
 )
 
 const (
@@ -237,6 +240,7 @@ func (s *Store) List(ctx context.Context) ([]*state.Secret, error) {
 		sec, err := s.verified(ctx, o)
 		if errors.Is(err, keys.ErrSealed) {
 			// one bad resource never fails a list (spec 002): left out, and logged
+			telemetry.Add(ctx, telemetry.StateLeftOut, attribute.String("kind", s.space.kind.name))
 			s.log.Error("an entry's resource was changed behind the store: left out", "resource", o.Metadata.Name,
 				"error", err.Error())
 			continue
@@ -326,6 +330,7 @@ func (s *Store) Update(ctx context.Context, name string,
 			return next, nil
 		}
 		// another writer came first: run fn again on what is there
+		telemetry.Add(ctx, telemetry.StateConflicts, attribute.String("operation", "update"))
 	}
 	return nil, state.ErrConflict
 }

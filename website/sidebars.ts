@@ -12,6 +12,7 @@ const sidebars: SidebarsConfig = {
     'azure-container-apps',
     'kubernetes',
     'operations',
+    'observability',
     'security',
     'development',
   ],

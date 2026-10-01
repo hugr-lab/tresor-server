@@ -17,8 +17,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/state"
+	"github.com/hugr-lab/tresor-server/internal/telemetry"
 )
 
 // maxAttempts bounds Update's compare-and-set retries.
@@ -314,6 +317,7 @@ func (s *Store) Update(ctx context.Context, name string,
 			return next, nil
 		}
 		// another writer came first (or the database gave the transaction up): run fn again on what is there
+		telemetry.Add(ctx, telemetry.StateConflicts, attribute.String("operation", "update"))
 	}
 	return nil, state.ErrConflict
 }

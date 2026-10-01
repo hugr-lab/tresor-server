@@ -127,3 +127,15 @@ The service's own identity on Azure: for Key Vault, and for a database login by 
 
 `default` is for development. Its chain also takes a client secret from the environment
 (`AZURE_CLIENT_SECRET`), which is a static secret. Production runs `managed` (Container Apps) or `workload` (AKS).
+
+### `audit`, `telemetry`
+
+See [Observability](observability.md).
+
+| Setting | |
+| --- | --- |
+| `audit.level` | `all` (default), `changes` (no successful read), or `off`. |
+| `telemetry.traces` | `true` (default): spans under tresor's trace. `false`: the audit's `trace_id` only. |
+
+OpenTelemetry's export uses its standard variables: `OTEL_EXPORTER_OTLP_ENDPOINT` (nothing is exported
+without one), `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SDK_DISABLED`.

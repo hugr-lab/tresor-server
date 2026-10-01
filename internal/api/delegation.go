@@ -226,6 +226,7 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.log.Info("delegation granted", "actor", client, "user", user.Owner(), "expires", expires.UTC())
+	observed(r).event.Detail, observed(r).event.Target = "exchanged", user.Owner() // the grant is for whom
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": id, "subject": user.Subject, "actor": client, "expires_at": expires.UTC().Format(time.RFC3339),
 	})
@@ -256,6 +257,7 @@ func (s *Server) revokeGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("delegation grants revoked", "by", c.Owner(), "actor", actor, "subject", subject, "count", n)
+	observed(r).event.Detail = "revoked"
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": n})
 }
 
@@ -275,6 +277,7 @@ func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the grant could not be revoked")
 		return
 	}
+	observed(r).event.Detail = "revoked"
 	w.WriteHeader(http.StatusNoContent)
 }
 

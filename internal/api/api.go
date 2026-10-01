@@ -22,6 +22,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/hugr-lab/tresor-server/internal/audit"
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/keys"
@@ -49,6 +50,7 @@ type Server struct {
 	direct    directCache        // tokens minted for callers reading directly (specs/010)
 	mintLocks mintLocks          // one replica's renewals of a grant's token, per grant and audience
 	material  *material.Resolver // references (ref+...): nil refuses them all
+	audit     *audit.Auditor     // spec 005: nil records nothing
 }
 
 // New wires a server; the verifier and the store are the caller's. It reads the store once, to report
@@ -122,11 +124,18 @@ func (s *Server) Handler() http.Handler {
 
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status  int
+	problem string
+	wrote   bool // an answer was written: a handler that returned without one gave up
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	r.wrote = true
+	return r.ResponseWriter.Write(b)
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
+	r.status, r.wrote = code, true
 	r.ResponseWriter.WriteHeader(code)
 }
 
@@ -143,6 +152,11 @@ func (s *Server) logged(next http.Handler) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		start := time.Now()
 		holder := &auth.Caller{}
+		r, o, span := s.begin(r, w)
+		defer func() { // a panic too: the span ends, the request is counted and audited (as not answered)
+			o.problem, o.answered = rec.problem, rec.wrote
+			s.finish(r, o, span, rec.status, time.Since(start))
+		}()
 		next.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), loggedCallerKey{}, holder)))
 		attrs := []any{"method", r.Method, "path", loggedPath(r.URL.Path), "status", rec.status,
 			"subject", holder.Subject, "ms", time.Since(start).Milliseconds()}
@@ -194,6 +208,13 @@ func loggedPath(path string) string {
 // authed verifies the bearer token; a failure is 401 unauthenticated with the reason in the log only.
 func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		o := observed(r)
+		o.pattern = r.Pattern
+		// the name as asked, when it could be one (the audit is not a sink for whatever a path holds)
+		if name := r.PathValue("name"); name != "" && validName("", name) == nil {
+			_, o.event.Entry = s.of(r)
+			o.event.Name = name
+		}
 		// the scheme is case-insensitive (RFC 9110 §11.1)
 		header := r.Header.Get("Authorization")
 		scheme, raw, ok := strings.Cut(header, " ")
@@ -211,10 +232,12 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 			// a server acting for a user: its own token proved who it is, the grant says for whom
 			user, gr, err := s.delegated(r, caller)
 			if errors.Is(err, errGrantStore) {
+				o.event.Actor = caller.Client()
 				grantStoreProblem(w, err, "the delegation grant could not be read")
 				return
 			}
 			if err != nil {
+				o.event.Actor = caller.Client()
 				s.log.Warn("delegation refused", "actor", caller.Owner(), "reason", err.Error())
 				problem(w, http.StatusUnauthorized, "unauthenticated", "the delegation grant is not valid for this caller")
 				return
@@ -229,6 +252,7 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 			}
 			*holder = auth.Caller{Subject: subject}
 		}
+		o.caller = caller
 		next(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, caller)))
 	}
 }
@@ -241,6 +265,9 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 
 // problem is an RFC 9457 error with a type from the protocol's list.
 func problem(w http.ResponseWriter, status int, kind, detail string) {
+	if rec, ok := w.(*statusRecorder); ok {
+		rec.problem = kind // the audit's reason
+	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"type": kind, "title": kind, "status": status, "detail": detail})
@@ -523,9 +550,11 @@ func (s *Server) getSecret(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusServiceUnavailable, "service_unavailable", "a reference of the secret did not resolve")
 		return
 	}
+	var refs []audit.Ref
 	for _, res := range resolved { // where and which version, never the value
 		s.log.Info("reference resolved", "secret", sec.Name, "param", res.Param, "ref", res.Ref.String(),
 			"version", res.Version)
+		refs = append(refs, audit.Ref{Param: res.Param, Ref: res.Ref.String(), Version: res.Version})
 	}
 	if params == nil {
 		params = map[string]json.RawMessage{}
@@ -556,6 +585,8 @@ func (s *Server) getSecret(w http.ResponseWriter, r *http.Request) {
 			body["expires_at"] = token.Expiry.UTC().Format(time.RFC3339)
 		}
 	}
+	o := observed(r) // what was served, once it is
+	o.event.Version, o.event.Refs = sec.Version, refs
 	w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(sec.Version, 10)))
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, body)
@@ -777,8 +808,11 @@ func (s *Server) upsert(w http.ResponseWriter, r *http.Request, name string, cre
 	default:
 		w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(saved.Version, 10)))
 		status := http.StatusOK
+		o := observed(r)
+		o.event.Version, o.event.Detail = saved.Version, "replaced"
 		if isNew {
 			status = http.StatusCreated
+			o.event.Detail = "created"
 		}
 		writeJSON(w, status, s.describe(r, saved, s.verbs(c, saved)))
 	}
@@ -866,6 +900,7 @@ func (s *Server) patchSecret(w http.ResponseWriter, r *http.Request) {
 		return current, nil
 	})
 	if ok {
+		observed(r).event.Version = saved.Version
 		writeJSON(w, http.StatusOK, s.describe(r, saved, s.verbs(callerOf(r), saved)))
 	}
 }
@@ -912,6 +947,7 @@ func (s *Server) putGrant(w http.ResponseWriter, r *http.Request) {
 		if !(isRole && role != "") && !(isGroup && group != "") {
 			return nil, fmt.Errorf("%w: a grant names a role: or a group: principal", errInvalid)
 		}
+		observed(r).event.Target = body.Principal // a principal, checked
 		if len(body.Verbs) != 1 || body.Verbs[0] != "use" {
 			return nil, fmt.Errorf("%w: a grant gives use, and only use", errInvalid)
 		}
@@ -943,6 +979,7 @@ func (s *Server) deleteGrant(w http.ResponseWriter, r *http.Request) {
 		for _, g := range current.Grants {
 			if g.ID == id {
 				found = true
+				observed(r).event.Target = g.Principal
 				continue
 			}
 			kept = append(kept, g)
