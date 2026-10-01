@@ -106,36 +106,81 @@ still needs the KEK.
 On the Kubernetes store, a secret's descriptor and grants, and a delegation grant's actor and user, are
 not sealed. Whoever can write the resources could make the service decrypt for them: a grant of `use` to
 their own role, a forged delegation grant for an administrator. Write access to a namespace is easier to
-get than write access to a database. Two guards, both on by default.
+get than write access to a database. Three guards.
 
-**A MAC over every field that is not sealed:**
-- HMAC-SHA256, its key derived from the resource's data key (HKDF-SHA256, info `tresor-server/mac/1`): no
-  MAC without the KEK.
-- Over a canonical encoding (length-prefixed fields, in a fixed order) of:
+#### A root only the KEK's holder can compute
+
+An RSA KEK wraps with its **public** key: anyone who has it can make a data key that unwraps. A data key's
+unwrapping proves nothing, and on every store a writer could plant one and seal material of their choice
+under it. So the service derives a **root** from the KEK, which only the KEK's holder can compute:
+
+| KEK | The root |
+| --- | --- |
+| Key Vault RSA | a deterministic signature (RS256, PKCS#1 v1.5) of a fixed label, made in the vault |
+| Managed HSM AES | a deterministic wrap (A256KW) of a fixed label |
+| local | HMAC-SHA256 of a fixed label under the local key |
+
+- The root is per KEK version (the version is in the label), never stored, kept in memory for
+  `keys.cache_ttl` with the data keys - one TTL: when the service loses its KEK rights, it stops within it.
+- **Every data key is authenticated**, on every store: a tag, HMAC under the root, over its id, its wrapped
+  bytes and its KEK id. A data key whose tag does not match is refused (`ErrSealed`). This closes a planted
+  data key on the SQL stores too.
+- **The MAC key** (below) is derived from the root, with the installation's id
+  (`state.instance`, default the namespace's name; kept stable, so a restore still verifies): a resource
+  moved from another installation that shares the KEK (dev and prod) does not verify.
+- **The right it needs**: Key Vault `sign` on the KEK, beside get, wrapKey and unwrapKey. No built-in role
+  gives exactly that (*Key Vault Crypto Service Encryption User* has no `sign`; *Key Vault Crypto User*
+  gives encrypt and decrypt too): the recipes make a **custom role** with these four data actions, on the
+  one key.
+
+#### A MAC over every field that is not sealed
+
+- HMAC-SHA256 under the MAC key, over a canonical encoding:
+  - the resource's kind and the format's version first;
+  - every field length-prefixed, every list count-prefixed in a defined order (scope and redact keys as
+    written, grants by id, verbs as written), absent and empty told apart, times as int64 nanoseconds;
   - a `TresorSecret`: its name, row id, type, provider, scope, redact keys, comment, owner, version,
     times, grants, data key id;
   - a `TresorGrant`: its id hash, actor (owner, client, issuer), user, expiries, data key id;
   - a `TresorMintedToken`: its grant, key, version, refusal, data key id;
-  - a `TresorActor`, `TresorKeyring`: their counter, their active key and slot version (the keyring's MAC
-    under the KEK-wrapped key it names).
-- Written with every write; checked on every read - a list and a descriptor too. A MAC that does not match
-  is `500 service_error` (tresor spec 016): never a descriptor, never material.
-- The MAC keys stay in memory for an hour (the data keys for sealing keep `keys.cache_ttl`): a KEK outage
-  shorter than that leaves the store answering.
-- It does not stop a **rollback**: a whole older object, its MAC valid then, can be put back - a grant
-  revoked since, back again. No counter outside the writer's reach exists in the API. A delegation grant's
-  expiry bounds it (8 hours at most); for a secret's grants, the admission policy is the guard.
+  - a `TresorActor`: its actor and counter; the `TresorKeyring`: its active key and slot version.
+- **What the MAC covers decides; the metadata is checked against it.** On every read the store recomputes
+  the resource's name and labels from the MACed fields and refuses a mismatch (a relabelled grant would
+  slip past revocation and the per-actor count). A resource with a `deletionTimestamp`, or a finalizer or
+  an owner reference the service did not set, is treated as gone - or refused, for a secret.
+- **Checked before it is used**: on every read, and before `fn` runs in `Update` and before the actor's
+  counter is moved - so a tampered resource is never re-MACed by the next honest write.
+- **What a failure answers**:
+  - a `Describe` or a `Get`: `500 service_error` (tresor spec 016), never a descriptor, never material;
+  - a list: the resource is left out, and logged and counted - one bad resource never fails a list
+    (spec 002);
+  - a KEK that does not answer while a check needs it: `503`, not 500.
+- It does not stop a **rollback** - a whole older object put back, its MAC valid then: a revoked grant back
+  again, a deleted secret back, an actor's counter back, a spent minted token back (which may make the IdP
+  revoke the token's whole family). A delegation grant's expiry bounds it (8 hours at most). The admission
+  policy is the guard; without it (`admissionPolicy.enabled: false`, or a stolen ServiceAccount token)
+  there is none, and the service warns at start. A replayed keyring can only be an older one: the age and
+  KEK-version check on the active data key stays.
 - A hand edit (`kubectl edit`) makes the resource unreadable, as meant. A backup restored (Velero) or a
-  move to another cluster with the same KEK keeps it.
+  move with the same KEK and `state.instance` keeps it.
+- The purge also sweeps minted tokens whose grant is gone (a stripped label or owner reference would
+  leave them otherwise).
 
-**A ValidatingAdmissionPolicy** (Kubernetes 1.30+), in the chart:
-- only the service's ServiceAccount may create, update or delete `tresor.hugr-lab.io` resources; anyone
-  else - a namespace's admin, a CI, a hand edit - is refused by the API server;
-- it does not stop a cluster admin (who can remove it), nor a stolen ServiceAccount token: the MAC does;
-- it is cluster-scoped: installing it needs cluster rights; `admissionPolicy.enabled: false` for an older
+#### A ValidatingAdmissionPolicy (Kubernetes 1.30+), in the chart
+
+- On `tresor.hugr-lab.io`, `resources: ["*", "*/*"]`, operations CREATE, UPDATE, DELETE,
+  `matchPolicy: Equivalent`, `failurePolicy: Fail`, the binding's `validationActions: [Deny]`.
+- Allowed: the service's ServiceAccount; for DELETE only, the garbage collector and the namespace
+  controller (`system:serviceaccount:kube-system:generic-garbage-collector`,
+  `...:namespace-controller`) - or a namespace could not be deleted. A deletecollection is admitted as one
+  DELETE per object.
+- It does not stop a cluster admin, who can remove it or delete the CRDs (which deletes every resource),
+  nor a stolen ServiceAccount token: the MAC does, but for a rollback.
+- It is cluster-scoped: installing it needs cluster rights; `admissionPolicy.enabled: false` for an older
   cluster, or an install with no such rights.
 
-The SQL stores keep no MAC: writing a database is fewer people's. It can come there later, as a setting.
+The SQL stores keep no MAC (writing a database is fewer people's; a setting later), but their data keys
+are authenticated by the root.
 
 ### Kubernetes Secrets as a material source: `ref+k8s://`
 
@@ -230,13 +275,15 @@ development).
 
 ### The PRs
 
-1. **(a) the Kubernetes store**: the CRDs, `state.kind: kubernetes`, the MAC, the suite on envtest,
+1. **(a0) the root**: the KEK's `Derive` (RSA sign, AES wrap, local HMAC), data keys authenticated on
+   every store, `keys.cache_ttl` for all; the custom role in the Container Apps recipe.
+2. **(a) the Kubernetes store**: the CRDs, `state.kind: kubernetes`, the MAC, the suite on envtest,
    conformance on it.
-2. **(b) `ref+k8s://`**: the source, its allowlist, `state.password_ref`.
-3. **(c) workload identity**: `azure.identity: workload`.
-4. **(d) the Helm chart**: every state store, the admission policy; lint, template, kind installs in CI
+3. **(b) `ref+k8s://`**: the source, its allowlist, `state.password_ref`.
+4. **(c) workload identity**: `azure.identity: workload`.
+5. **(d) the Helm chart**: every state store, the admission policy; lint, template, kind installs in CI
    (the Kubernetes store, and PostgreSQL in the cluster); the OCI chart from a tag.
-5. **(e) docs and the live run**: a Kubernetes page on the site; AKS with the Kubernetes store, Key Vault
+6. **(e) docs and the live run**: a Kubernetes page on the site; AKS with the Kubernetes store, Key Vault
    by workload identity, the chart.
 
 ## Enforcement & security
@@ -262,8 +309,11 @@ development).
 ## Testing
 
 - The StateStore suite on envtest (CI), as on the SQL stores. The Kubernetes-only cases:
-  - a resource changed behind the store (a grant added, a user changed), and an older object put back:
-    the MAC refuses the first, the test records the second;
+  - a resource changed behind the store (a grant added, a user changed, a label changed, a finalizer
+    added): refused; an older object put back: recorded as passing (the policy is the guard);
+  - a data key planted with the RSA public key: refused, on every store;
+  - a resource moved from another installation: refused;
+  - a list with one tampered resource: the others listed;
   - a name that is no DNS subdomain;
   - the size and grant limits;
   - a delete that finds the secret changed (its preconditions);
@@ -271,8 +321,8 @@ development).
   - the label selectors, the `TresorActor` counter under racing puts.
 - tresor's conformance suite on the Kubernetes store, two replicas.
 - `ref+k8s` against a real Secret on envtest.
-- The chart on kind in CI: the Kubernetes store, the admission policy refusing a hand write; PostgreSQL in
-  the cluster, its password by `ref+k8s`.
+- The chart on kind in CI: the Kubernetes store, the admission policy refusing a hand write and letting the
+  garbage collector delete; PostgreSQL in the cluster, its password by `ref+k8s`.
 - Live, by hand: AKS with the Kubernetes store, Key Vault by workload identity, the chart from ghcr.io.
 
 ## Alternatives considered
@@ -300,6 +350,9 @@ development).
 - **The API group**: `tresor.hugr-lab.io`.
 - **Integrity**: the MAC and the admission policy, both, on the Kubernetes store; no MAC on the SQL stores
   for now.
+- **After the review of the MAC**: a root only the KEK's holder computes; data keys authenticated by it on
+  every store; the KEK needs `sign` (a custom role: get, wrapKey, unwrapKey, sign) - the Container Apps
+  recipe changes with it.
 - **The live run**: AKS with the Kubernetes store only.
 - **The chart**: in this repository, `deploy/helm/tresor-server`, published to
   `oci://ghcr.io/hugr-lab/charts`. It deploys the service on any state store, SQL included.
