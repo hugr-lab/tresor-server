@@ -3,6 +3,8 @@ package keys_test
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"errors"
 	"sync"
 	"testing"
@@ -218,5 +220,59 @@ func TestMAC(t *testing.T) {
 	// a KEK that does not answer is no forgery
 	if err := keys.NewEnvelope(unreachable{}, st, keys.Options{}).Verify(ctx, id, []byte("resource"), mac); err == nil || errors.Is(err, keys.ErrSealed) {
 		t.Fatalf("an unreachable KEK: %v", err)
+	}
+}
+
+// a data key's creation time is in its tag: moved forward to keep it active for ever, it is not authentic
+func TestCreationTimeAuthenticated(t *testing.T) {
+	st := newStore()
+	e := keys.NewEnvelope(wrapper(t, 1), st, keys.Options{})
+	id, sealed, err := e.Seal(ctx, nil, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dk := st.keys[id]
+	dk.CreatedAt = dk.CreatedAt.Add(10 * 365 * 24 * time.Hour)
+	st.keys[id] = dk
+	if _, err := keys.NewEnvelope(wrapper(t, 1), st, keys.Options{}).Open(ctx, id, nil, sealed); !errors.Is(err, keys.ErrSealed) {
+		t.Fatalf("a creation time moved: %v", err)
+	}
+}
+
+// a data key tagged before the creation time was in the tag (v1) still opens, is never the active one, and
+// rewrap tags it anew
+func TestTagV1(t *testing.T) {
+	st := newStore()
+	w := wrapper(t, 1)
+	e := keys.NewEnvelope(w, st, keys.Options{})
+	id, sealed, err := e.Seal(ctx, nil, []byte("old"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dk := st.keys[id]
+	root, err := w.Root(ctx, dk.KEKID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := hmac.New(sha256.New, root)
+	m.Write([]byte("tresor-server/data-key/1\x00" + dk.ID + "\x00" + dk.KEKID + "\x00"))
+	m.Write(dk.Wrapped)
+	dk.Tag = m.Sum(nil)
+	st.keys[id] = dk
+	fresh := keys.NewEnvelope(w, st, keys.Options{})
+	if plain, err := fresh.Open(ctx, id, nil, sealed); err != nil || string(plain) != "old" {
+		t.Fatalf("a v1 data key: %v", err)
+	}
+	if next, _, err := fresh.Seal(ctx, nil, []byte("new")); err != nil || next == id {
+		t.Fatalf("a v1 data key stays active: %s %v", next, err)
+	}
+	if n, err := keys.NewEnvelope(w, st, keys.Options{}).Rewrap(ctx, false, nil); err != nil || n != 1 {
+		t.Fatalf("rewrap: %d %v", n, err)
+	}
+	if n, err := keys.NewEnvelope(w, st, keys.Options{}).Rewrap(ctx, false, nil); err != nil || n != 0 {
+		t.Fatalf("a second rewrap: %d %v", n, err)
+	}
+	if plain, err := keys.NewEnvelope(w, st, keys.Options{}).Open(ctx, id, nil, sealed); err != nil || string(plain) != "old" {
+		t.Fatalf("after rewrap: %v", err)
 	}
 }

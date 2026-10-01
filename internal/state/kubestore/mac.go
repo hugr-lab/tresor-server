@@ -70,9 +70,13 @@ type dataKeySpec struct {
 	CreatedAt int64  `json:"createdAt"`
 }
 
+// keyringSpec is the active data key (named active), or the installation's mark (named installation: its
+// instance, MACed).
 type keyringSpec struct {
 	DataKeyID string `json:"dataKeyID"`
 	Slot      int64  `json:"slot"`
+	Instance  string `json:"instance,omitempty"`
+	MAC       []byte `json:"mac,omitempty"`
 }
 
 // canon is the canonical encoding a MAC is over: the format and the kind first, the installation's id, then
@@ -172,5 +176,13 @@ func (a *actorSpec) canonical(instance string) []byte {
 	c.str(a.ActorOwner)
 	c.i64(a.Counter)
 	c.str(a.DataKeyID)
+	return *c
+}
+
+func (k *keyringSpec) canonical(instance string) []byte {
+	c := newCanon(kindKeyring, instance)
+	c.str(installationName)
+	c.str(k.Instance)
+	c.str(k.DataKeyID)
 	return *c
 }

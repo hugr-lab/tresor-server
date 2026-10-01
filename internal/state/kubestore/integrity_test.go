@@ -127,6 +127,30 @@ func TestAnotherInstallation(t *testing.T) {
 	}
 }
 
+// a wrong KEK or instance is not ready: the installation's mark does not verify
+func TestInstallationMark(t *testing.T) {
+	ns := namespace(t)
+	s := openIn(t, ns, kek(t, 1), "dev")
+	if err := s.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := openIn(t, ns, kek(t, 1), "dev").Ping(ctx); err != nil {
+		t.Fatalf("another replica: %v", err)
+	}
+	for what, other := range map[string]*Store{"another instance": openIn(t, ns, kek(t, 1), "prod"),
+		"another KEK": openIn(t, ns, kek(t, 2), "dev")} {
+		if err := other.Ping(ctx); err == nil || !strings.Contains(err.Error(), "another installation") {
+			t.Fatalf("%s: %v", what, err)
+		}
+	}
+	edit(t, ns, kindKeyring, installationName, func(u *unstructured.Unstructured) {
+		unstructured.SetNestedField(u.Object, "prod", "spec", "instance")
+	})
+	if err := openIn(t, ns, kek(t, 1), "prod").Ping(ctx); err == nil {
+		t.Fatal("a mark changed by hand passes")
+	}
+}
+
 // the MAC does not stop a rollback - a whole older object put back: the admission policy is the guard
 func TestRollbackPasses(t *testing.T) {
 	ns := namespace(t)
@@ -278,5 +302,23 @@ func TestPurgeOrphanTokens(t *testing.T) {
 	}
 	if left, _ := s.tokens.list(ctx, ""); len(left) != 0 {
 		t.Fatalf("%d tokens outlive their grant", len(left))
+	}
+}
+
+// the zero time is kept as none: a grant with no subject token reads back with no subject expiry
+func TestZeroTime(t *testing.T) {
+	d := openIn(t, namespace(t), kek(t, 1), "").Delegations()
+	now := time.Now()
+	g := state.Delegation{IDHash: []byte("hash-1"), ActorOwner: "subject:iss|node", ActorClient: "client:node",
+		UserOwner: "subject:iss|alice", User: []byte(`{}`), ExpiresAt: now.Add(time.Hour)}
+	if err := d.Put(ctx, g, 10); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := d.Get(ctx, g.IDHash, now); err != nil || !got.SubjectExpiresAt.IsZero() {
+		t.Fatalf("no subject expiry: %v %v", got.SubjectExpiresAt, err)
+	}
+	g.IDHash, g.ActorOwner = []byte("hash-2"), "subject:iss|\xff"
+	if err := d.Put(ctx, g, 10); err == nil {
+		t.Fatal("a value not UTF-8 was stored")
 	}
 }

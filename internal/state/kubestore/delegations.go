@@ -84,12 +84,16 @@ func (d delegations) checkActor(ctx context.Context, o *object[actorSpec], owner
 
 // Put stores a grant under the actor's limit with no lock: it reads the actor's counter, counts the actor's
 // live grants, creates the grant, then moves the counter on at the version it read. A put that raced another
-// loses the counter's compare-and-set, deletes the grant it made, and runs again.
+// loses the counter's compare-and-set, deletes the grant it made, and runs again. The limit is never passed;
+// under racing puts near it, one may be refused while another's grant, about to be deleted, still counts -
+// the SQL stores' lock does not do that.
 func (d delegations) Put(ctx context.Context, g state.Delegation, maxPerActor int) error {
 	s := d.s
 	spec := grantSpec{IDHash: g.IDHash, ActorOwner: g.ActorOwner, ActorClient: g.ActorClient, ActorIssuer: g.ActorIssuer,
-		UserOwner: g.UserOwner, User: string(g.User), ExpiresAt: g.ExpiresAt.UnixNano(),
-		SubjectExpiresAt: g.SubjectExpiresAt.UnixNano()}
+		UserOwner: g.UserOwner, User: string(g.User), ExpiresAt: nanos(g.ExpiresAt), SubjectExpiresAt: nanos(g.SubjectExpiresAt)}
+	if err := validUTF8(spec.ActorOwner, spec.ActorClient, spec.ActorIssuer, spec.UserOwner, spec.User); err != nil {
+		return err
+	}
 	var err error
 	if g.Subject != nil {
 		spec.DataKeyID, spec.SubjectSealed, err = s.envelope.Seal(ctx, subjectAAD(g.IDHash), g.Subject)
@@ -103,7 +107,7 @@ func (d delegations) Put(ctx context.Context, g state.Delegation, maxPerActor in
 		return err
 	}
 	name := grantName(g.IDHash)
-	for range maxAttempts {
+	for range maxPutAttempts {
 		actor, err := s.actors.get(ctx, actorName(g.ActorOwner))
 		if err != nil {
 			return err
@@ -201,8 +205,8 @@ func (d delegations) Get(ctx context.Context, idHash []byte, now time.Time) (*st
 	}
 	g := &o.Spec
 	return &state.Delegation{IDHash: idHash, ActorOwner: g.ActorOwner, ActorClient: g.ActorClient, ActorIssuer: g.ActorIssuer,
-		UserOwner: g.UserOwner, User: []byte(g.User), ExpiresAt: time.Unix(0, g.ExpiresAt).UTC(),
-		SubjectExpiresAt: time.Unix(0, g.SubjectExpiresAt).UTC(), HasSubject: g.SubjectSealed != nil}, nil
+		UserOwner: g.UserOwner, User: []byte(g.User), ExpiresAt: fromNanos(g.ExpiresAt),
+		SubjectExpiresAt: fromNanos(g.SubjectExpiresAt), HasSubject: g.SubjectSealed != nil}, nil
 }
 
 func (d delegations) SubjectToken(ctx context.Context, idHash []byte, now time.Time) ([]byte, error) {
@@ -347,6 +351,9 @@ func (d delegations) PutToken(ctx context.Context, idHash []byte, t state.Minted
 		return state.ErrNotFound // the grant is gone
 	}
 	spec := tokenSpec{IDHash: idHash, Key: []byte(t.Key), Version: t.Version, Failed: t.Failed}
+	if err := validUTF8(t.Failed); err != nil {
+		return err
+	}
 	if t.Token != nil {
 		spec.DataKeyID, spec.Sealed, err = s.envelope.Seal(ctx, tokenAAD(idHash, t.Key, t.Version), t.Token)
 	} else {

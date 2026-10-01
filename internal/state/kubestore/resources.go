@@ -31,20 +31,23 @@ type kind struct {
 }
 
 var (
-	kindSecret   = kind{"TresorSecret", "tresorsecrets"}
-	kindGrant    = kind{"TresorGrant", "tresorgrants"}
-	kindToken    = kind{"TresorMintedToken", "tresormintedtokens"}
-	kindActor    = kind{"TresorActor", "tresoractors"}
-	kindDataKey  = kind{"TresorDataKey", "tresordatakeys"}
-	kindKeyring  = kind{"TresorKeyring", "tresorkeyrings"}
-	allKinds     = []kind{kindSecret, kindGrant, kindToken, kindActor, kindDataKey, kindKeyring}
-	labelPrefix  = Group + "/"
-	labelActor   = labelPrefix + "actor-owner"
-	labelClient  = labelPrefix + "actor-client"
-	labelUser    = labelPrefix + "user"
-	labelGrant   = labelPrefix + "grant"
-	keyringName  = "active"
-	listPageSize = int64(500)
+	kindSecret  = kind{"TresorSecret", "tresorsecrets"}
+	kindGrant   = kind{"TresorGrant", "tresorgrants"}
+	kindToken   = kind{"TresorMintedToken", "tresormintedtokens"}
+	kindActor   = kind{"TresorActor", "tresoractors"}
+	kindDataKey = kind{"TresorDataKey", "tresordatakeys"}
+	kindKeyring = kind{"TresorKeyring", "tresorkeyrings"}
+	allKinds    = []kind{kindSecret, kindGrant, kindToken, kindActor, kindDataKey, kindKeyring}
+	labelPrefix = Group + "/"
+	labelActor  = labelPrefix + "actor-owner"
+	labelClient = labelPrefix + "actor-client"
+	labelUser   = labelPrefix + "user"
+	labelGrant  = labelPrefix + "grant"
+	keyringName = "active"
+	// installationName is the installation's mark: MACed with its instance, it tells a wrong KEK or instance
+	// at readiness, not by every resource failing to verify.
+	installationName = "installation"
+	listPageSize     = int64(500)
 )
 
 // object is a custom resource as the store reads and writes it: everything it keeps is in its spec.

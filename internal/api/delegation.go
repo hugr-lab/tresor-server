@@ -24,6 +24,7 @@ import (
 
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
+	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
@@ -53,8 +54,18 @@ func grantOf(r *http.Request) *grant {
 	return gr
 }
 
-// errGrantStore: the store did not answer - 503, not a refusal.
+// errGrantStore: the store did not answer - 503, not a refusal; or, with keys.ErrSealed, a grant it holds does
+// not verify (changed behind it) - 500 (grantStoreProblem).
 var errGrantStore = errors.New("the delegation grants could not be read")
+
+// grantStoreProblem answers errGrantStore.
+func grantStoreProblem(w http.ResponseWriter, err error, detail string) {
+	if errors.Is(err, keys.ErrSealed) {
+		problem(w, http.StatusInternalServerError, "service_error", "a delegation grant the service holds does not verify")
+		return
+	}
+	problem(w, http.StatusServiceUnavailable, "service_unavailable", detail)
+}
 
 func hashGrantID(id string) []byte {
 	sum := sha256.Sum256([]byte(id))
@@ -72,12 +83,15 @@ func (s *Server) loadGrant(ctx context.Context, id string) (*grant, error) {
 	}
 	if err != nil {
 		s.log.Error("delegation grants: the store failed", "error", err.Error())
+		if errors.Is(err, keys.ErrSealed) {
+			return nil, fmt.Errorf("%w: %w", errGrantStore, keys.ErrSealed)
+		}
 		return nil, errGrantStore
 	}
 	gr := &grant{idHash: d.IDHash, actorOwner: d.ActorOwner, actorClient: d.ActorClient, actorIssuer: d.ActorIssuer,
 		expires: d.ExpiresAt, keepsSubject: d.HasSubject}
 	if err := json.Unmarshal(d.User, &gr.user); err != nil {
-		return nil, fmt.Errorf("%w: a grant's user does not read", errGrantStore)
+		return nil, fmt.Errorf("%w: a grant's user does not read: %w", errGrantStore, keys.ErrSealed)
 	}
 	return gr, nil
 }
@@ -249,7 +263,7 @@ func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
 	c := callerOf(r)
 	gr, err := s.loadGrant(r.Context(), r.PathValue("id"))
 	if err != nil {
-		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the grant could not be read")
+		grantStoreProblem(w, err, "the grant could not be read")
 		return
 	}
 	if gr == nil || c.Actor != "" || (gr.actorOwner != c.Owner() && !s.isAdmin(c)) {

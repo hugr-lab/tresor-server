@@ -8,7 +8,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
@@ -41,34 +41,40 @@ func up(crds, kubeconfig, namespace string) {
 	env := &envtest.Environment{CRDDirectoryPaths: []string{crds}, ErrorIfCRDPathMissing: true}
 	cfg, err := env.Start()
 	if err != nil {
+		env.Stop() // whatever of it started
 		log.Fatalf("kubeenv: %v", err)
 	}
-	defer env.Stop()
+	// from here, a failure stops the API server first: it must not outlive this process
+	fatal := func(err error) {
+		env.Stop()
+		log.Fatalf("kubeenv: %v", err)
+	}
 	ctx := context.Background()
 	cs := kubernetes.NewForConfigOrDie(cfg)
 	if _, err := cs.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}},
 		metav1.CreateOptions{}); err != nil {
-		log.Fatalf("kubeenv: %v", err)
+		fatal(err)
 	}
 	user, err := env.AddUser(envtest.User{Name: "tresor-server", Groups: []string{"system:masters"}}, nil)
 	if err != nil {
-		log.Fatalf("kubeenv: %v", err)
+		fatal(err)
 	}
 	raw, err := user.KubeConfig()
 	if err != nil {
-		log.Fatalf("kubeenv: %v", err)
+		fatal(err)
 	}
 	// written whole, then renamed: the kubeconfig's existence says the API server is ready
 	if err := os.WriteFile(kubeconfig+".tmp", raw, 0o600); err != nil {
-		log.Fatalf("kubeenv: %v", err)
+		fatal(err)
 	}
 	if err := os.Rename(kubeconfig+".tmp", kubeconfig); err != nil {
-		log.Fatalf("kubeenv: %v", err)
+		fatal(err)
 	}
 	log.Printf("kubeenv: an API server at %s, namespace %s", cfg.Host, namespace)
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	<-sig
+	env.Stop()
 }
 
 func clear(kubeconfig, namespace, text string) {
@@ -87,8 +93,7 @@ func clear(kubeconfig, namespace, text string) {
 			log.Fatalf("kubeenv: %s: %v", resource, err)
 		}
 		for _, item := range list.Items {
-			data, _ := json.Marshal(item.Object)
-			if strings.Contains(string(data), text) {
+			if holds(item.Object, text) {
 				log.Fatalf("kubeenv: %s %s holds the text in the clear", resource, item.GetName())
 			}
 		}
@@ -98,4 +103,29 @@ func clear(kubeconfig, namespace, text string) {
 		log.Fatal("kubeenv: the store holds no resources")
 	}
 	fmt.Printf("kubeenv: %d resources, none holds the text in the clear\n", total)
+}
+
+// holds: a string of v holds text - as it is, or base64-decoded (the byte fields: sealed values, keys).
+func holds(v any, text string) bool {
+	switch v := v.(type) {
+	case string:
+		if strings.Contains(v, text) {
+			return true
+		}
+		raw, err := base64.StdEncoding.DecodeString(v)
+		return err == nil && strings.Contains(string(raw), text)
+	case map[string]any:
+		for _, e := range v {
+			if holds(e, text) {
+				return true
+			}
+		}
+	case []any:
+		for _, e := range v {
+			if holds(e, text) {
+				return true
+			}
+		}
+	}
+	return false
 }

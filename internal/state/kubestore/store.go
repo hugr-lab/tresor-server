@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,6 +32,8 @@ import (
 const (
 	// maxAttempts bounds Update's compare-and-set retries.
 	maxAttempts = 8
+	// maxPutAttempts bounds a delegation grant's put: all of one actor's racing puts share one counter.
+	maxPutAttempts = 16
 	// maxObject is the most a secret's object may weigh: etcd holds ~1.5 MiB, and a store is no blob store.
 	maxObject = 256 << 10
 	// maxGrants is the most grants one secret holds.
@@ -107,6 +110,8 @@ func Open(ctx context.Context, cfg *rest.Config, wrapper keys.KeyWrapper, opts O
 // checkSchema: the API server serves every resource of the version the store knows - by discovery, which needs
 // no cluster-scope right. Otherwise the service does not start.
 func checkSchema(ctx context.Context, cfg *rest.Config) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	hc, err := rest.HTTPClientFor(cfg)
 	if err != nil {
 		return err
@@ -168,7 +173,7 @@ func (s *Store) verified(ctx context.Context, o *object[secretSpec]) (*state.Sec
 	}
 	sec := &state.Secret{Name: sp.Name, Type: sp.Type, Provider: sp.Provider, Scope: sp.Scope, RedactKeys: sp.RedactKeys,
 		Comment: sp.Comment, Owner: sp.Owner, Version: sp.Version,
-		CreatedAt: time.Unix(0, sp.CreatedAt).UTC(), UpdatedAt: time.Unix(0, sp.UpdatedAt).UTC()}
+		CreatedAt: fromNanos(sp.CreatedAt), UpdatedAt: fromNanos(sp.UpdatedAt)}
 	if sp.Grants != nil {
 		sec.Grants = make([]state.Grant, len(sp.Grants))
 		for i, g := range sp.Grants {
@@ -311,6 +316,14 @@ func (s *Store) Update(ctx context.Context, name string,
 // write creates next (o nil) or replaces o by it, compare-and-set on o's resourceVersion; false when another
 // writer came first.
 func (s *Store) write(ctx context.Context, o *object[secretSpec], next *state.Secret) (bool, error) {
+	strs := append([]string{next.Name, next.Type, next.Provider, next.Comment, next.Owner}, next.Scope...)
+	strs = append(strs, next.RedactKeys...)
+	for _, g := range next.Grants {
+		strs = append(append(strs, g.ID, g.Principal), g.Verbs...)
+	}
+	if err := validUTF8(strs...); err != nil {
+		return false, err
+	}
 	if len(next.Grants) > maxGrants {
 		return false, fmt.Errorf("%w: secret %s: more than %d grants", state.ErrTooLarge, next.Name, maxGrants)
 	}
@@ -337,7 +350,7 @@ func (s *Store) write(ctx context.Context, o *object[secretSpec], next *state.Se
 	}
 	sp.Name, sp.Type, sp.Provider, sp.Scope, sp.RedactKeys = next.Name, next.Type, next.Provider, next.Scope, next.RedactKeys
 	sp.Comment, sp.Owner, sp.Version = next.Comment, next.Owner, next.Version
-	sp.CreatedAt, sp.UpdatedAt = next.CreatedAt.UnixNano(), next.UpdatedAt.UnixNano()
+	sp.CreatedAt, sp.UpdatedAt = nanos(next.CreatedAt), nanos(next.UpdatedAt)
 	if next.Grants != nil {
 		sp.Grants = make([]secretGrant, len(next.Grants))
 		for i, g := range next.Grants {
@@ -366,12 +379,75 @@ func (s *Store) write(ctx context.Context, o *object[secretSpec], next *state.Se
 	return err == nil, err
 }
 
-// Ping says whether the API server answers, and serves the store's resources.
+// Ping says whether the API server answers, and whether the namespace is this installation's: its mark
+// verifies under the KEK and state.instance. A wrong KEK or instance is not ready, rather than serving an empty
+// list with every resource refused.
 func (s *Store) Ping(ctx context.Context) error {
-	_, err := s.secrets.ri.List(ctx, metav1.ListOptions{Limit: 1})
-	return err
+	if _, err := s.secrets.ri.List(ctx, metav1.ListOptions{Limit: 1}); err != nil {
+		return err
+	}
+	return s.checkInstallation(ctx)
+}
+
+// checkInstallation verifies the installation's mark, made by the first replica to look.
+func (s *Store) checkInstallation(ctx context.Context) error {
+	for range maxAttempts {
+		o, err := s.keyrings.get(ctx, installationName)
+		if err != nil {
+			return err
+		}
+		if o == nil {
+			spec := keyringSpec{Instance: s.instance}
+			if spec.DataKeyID, err = s.envelope.ActiveID(ctx); err != nil {
+				return err
+			}
+			if spec.MAC, err = s.envelope.MAC(ctx, spec.DataKeyID, spec.canonical(s.instance)); err != nil {
+				return err
+			}
+			_, err = s.keyrings.create(ctx, &object[keyringSpec]{Metadata: meta(installationName), Spec: spec})
+			if apierrors.IsAlreadyExists(err) {
+				continue
+			}
+			return err
+		}
+		sp := &o.Spec
+		err = s.check(ctx, installationName, sp.Instance == s.instance && untouched(o.Metadata, ""), sp.DataKeyID,
+			sp.canonical(s.instance), sp.MAC)
+		if errors.Is(err, keys.ErrSealed) {
+			return fmt.Errorf("namespace %s was written by another installation, or under another KEK: state.instance "+
+				"and keys must be the ones that wrote it (%w)", s.ns, err)
+		}
+		return err
+	}
+	return state.ErrConflict
 }
 
 func (s *Store) Close() error { return nil }
 
 var _ state.Store = (*Store)(nil)
+
+// nanos is a time as stored: int64 nanoseconds, 0 for none (the zero time is no int64 of nanoseconds).
+func nanos(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
+}
+
+func fromNanos(n int64) time.Time {
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n).UTC()
+}
+
+// validUTF8: JSON - and so the API server - would replace what is not UTF-8, and the resource would then not
+// verify: refused before it is written.
+func validUTF8(ss ...string) error {
+	for _, s := range ss {
+		if !utf8.ValidString(s) {
+			return errors.New("a value to store is not UTF-8")
+		}
+	}
+	return nil
+}

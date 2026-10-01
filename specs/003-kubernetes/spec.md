@@ -79,7 +79,9 @@ never part of a secret's write.
 - **The per-actor limit**: a `TresorActor` counter, compare-and-set. A put reads it, counts the actor's live
   grants by label, creates the grant, then moves the counter on at the version read; on a conflict it
   deletes the grant it made and runs again. No lock, no clock. A replica that dies between the two leaves
-  a grant no caller holds: it counts until it expires.
+  a grant no caller holds: it counts until it expires. The limit is never passed; under racing puts near
+  it, one may be refused while another's grant, about to be deleted, still counts (the SQL stores' lock does
+  not do that). A put runs at most 16 times.
 - Expired grants and their tokens are purged every minute, as on the SQL stores.
 
 **Data keys**: a data key is created first, then `TresorKeyring` is moved on compare-and-set on its slot
@@ -124,9 +126,12 @@ under it. So the service derives a **root** from the KEK, which only the KEK's h
 
 - The root is per KEK version (the version is in the label), never stored, kept in memory for
   `keys.cache_ttl` with the data keys - one TTL: when the service loses its KEK rights, it stops within it.
-- **Every data key is authenticated**, on every store: a tag, HMAC under the root, over its id, its wrapped
-  bytes and its KEK id. A data key whose tag does not match is refused (`ErrSealed`). This closes a planted
-  data key on the SQL stores too.
+- **Every data key is authenticated**, on every store: a tag, HMAC under the root, over its id, its KEK id,
+  its creation time (to the microsecond) and its wrapped bytes. A data key whose tag does not match is
+  refused (`ErrSealed`). This closes a planted data key on the SQL stores too. The creation time decides
+  when a data key is replaced: in the tag, no writer of the store keeps one active for ever.
+- **Tags from (a0)** (format 1, no creation time): the data key still opens, is never the active one (a new
+  one is made), and `rewrap` tags it anew.
 - **Keys from before**: no tag, refused until tagged. `tresor-server rewrap -tag-untagged` tags them once,
   at the upgrade, and logs each; a routine `rewrap` never tags a key with none (one planted since has none
   either).
@@ -157,16 +162,21 @@ under it. So the service derives a **root** from the KEK, which only the KEK's h
 - A resource with nothing sealed (a grant with no subject token, a refusal, a counter) is MACed under the
   active data key.
 - **No MAC on the data keys and the keyring**: a data key is authenticated by its tag; the keyring only
-  names one, and one planted is refused by its tag. A keyring or a data key's age put back is a rollback
-  (below): the age and KEK-version check on the active data key bounds it.
+  names one, and one planted is refused by its tag. A keyring changed to name another authentic data key:
+  that key's age (in its tag) and KEK version decide whether it seals, as for any active key.
+- **The installation's mark**: a `TresorKeyring` named `installation` holds the instance, MACed. Readiness
+  (the `state` check) verifies it, and the first replica to look makes it. A wrong KEK or `state.instance`
+  is not ready - not a service that lists nothing because every resource fails to verify.
 - **What the MAC covers decides; the metadata is checked against it.** On every read the store recomputes
   the resource's name and labels from the MACed fields and refuses a mismatch (a relabelled grant would
-  slip past revocation and the per-actor count). A resource with a `deletionTimestamp`, or a finalizer or
-  an owner reference the service did not set, is treated as gone - or refused, for a secret.
+  slip past revocation and the per-actor count). A resource with a `deletionTimestamp` is treated as gone
+  (a secret: refused); one with a finalizer or an owner reference the service did not set is refused.
 - **Checked before it is used**: on every read, and before `fn` runs in `Update` and before the actor's
   counter is moved - so a tampered resource is never re-MACed by the next honest write.
 - **What a failure answers**:
-  - a `Describe` or a `Get`: `500 service_error` (tresor spec 016), never a descriptor, never material;
+  - a `Describe` or a `Get`: `500 service_error` (tresor spec 016) to an administrator, never a
+    descriptor, never material; to anyone else the `404` of a missing secret - no one can be shown to hold
+    a verb on it, and its existence does not leak (but during a KEK outage, `503` for a name that exists);
   - a list: the resource is left out, and logged - one bad resource never fails a list (spec 002); a
     delegation grant changed is not counted toward its actor's limit;
   - a delegation grant or a minted token: `500` where it is used, never honoured;
@@ -176,14 +186,15 @@ under it. So the service derives a **root** from the KEK, which only the KEK's h
   revoke the token's whole family). A delegation grant's expiry bounds it (8 hours at most). The admission
   policy is the guard; without it (`admissionPolicy.enabled: false`, or a stolen ServiceAccount token)
   there is none. The service cannot see the policy (that needs a cluster-scope right): the chart's notes
-  warn when it is off. A replayed keyring can only be an older one: the age and
-  KEK-version check on the active data key stays.
+  warn when it is off.
 - A hand edit (`kubectl edit`) makes the resource unreadable, as meant. A secret changed behind the store is
   refused to every request, a delete included (its grants cannot be trusted to say who may delete it): an
   operator deletes its resource by hand, past the admission policy.
 - A revocation (`DeleteWhere`) and the purge delete what the labels select, a changed resource included: a
-  delete gives no one anything. A backup restored (Velero) or a
-  move with the same KEK and `state.instance` keeps it.
+  delete gives no one anything.
+- A backup restored (Velero) or a move with the same KEK and `state.instance` verifies. Minted tokens do
+  not survive it: their owner references name the grants' old UIDs, and the garbage collector deletes them
+  (they are minted again).
 - The purge also sweeps minted tokens whose grant is gone (a stripped label or owner reference would
   leave them otherwise).
 
@@ -387,3 +398,4 @@ development).
 - AWS IRSA and GCP Workload Identity (phase 4).
 - The MAC on the SQL stores, as a setting.
 - Metrics: a count of the resources a list left out.
+- `TresorActor` counters are never deleted: one per actor ever seen.

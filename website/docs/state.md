@@ -103,9 +103,12 @@ keys: {kind: local, key_file: /run/secrets/kek}
 - **Names are hashes** (`s-…`, `g-…`): any secret name works, whatever its case or characters.
 - **What is not sealed is authenticated.** A secret's descriptor and grants, a delegation grant's actor and
   user: a MAC under a data key, which only the KEK's holder can make. A resource changed by hand
-  (`kubectl edit`) is refused - `500 service_error` - and a list leaves it out. A resource moved from
-  another installation does not verify either: `state.instance` (the namespace by default) is in every MAC.
-  Keep it stable: a backup restored with the same KEK and instance verifies.
+  (`kubectl edit`) is refused - `500 service_error` to an administrator, `404` to anyone else - and a list
+  leaves it out. A resource moved from another installation does not verify either: `state.instance` (the
+  namespace by default) is in every MAC. Keep it stable: a backup restored with the same KEK and instance
+  verifies (minted tokens are minted again).
+- **A wrong KEK or instance is not ready**: the `installation` keyring holds the instance, MACed, and
+  readiness verifies it.
 - **Limits**: a secret's resource at most 256 KiB, at most 1000 grants (`422` otherwise).
 - **In a pod**, the service reaches the API by its ServiceAccount; outside one, by `KUBECONFIG`, and then
   `state.namespace` is required.

@@ -3,7 +3,6 @@ package kubestore
 import (
 	"context"
 	"fmt"
-	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
@@ -16,7 +15,7 @@ type dataKeys struct{ s *Store }
 
 func toDataKey(o *object[dataKeySpec]) keys.DataKey {
 	return keys.DataKey{ID: o.Spec.ID, KEKID: o.Spec.KEKID, Wrapped: o.Spec.Wrapped, Tag: o.Spec.Tag,
-		CreatedAt: time.Unix(0, o.Spec.CreatedAt).UTC()}
+		CreatedAt: fromNanos(o.Spec.CreatedAt)}
 }
 
 // read reads one data key's resource; nil when there is none, or its name and id do not match (the tag
@@ -68,7 +67,7 @@ func (k dataKeys) Activate(ctx context.Context, dk keys.DataKey, slot int64) err
 		return fmt.Errorf("data key id %q makes no resource name", dk.ID)
 	}
 	if _, err := k.s.dataKeys.create(ctx, &object[dataKeySpec]{Metadata: meta(name), Spec: dataKeySpec{
-		ID: dk.ID, KEKID: dk.KEKID, Wrapped: dk.Wrapped, Tag: dk.Tag, CreatedAt: dk.CreatedAt.UnixNano()}}); err != nil {
+		ID: dk.ID, KEKID: dk.KEKID, Wrapped: dk.Wrapped, Tag: dk.Tag, CreatedAt: nanos(dk.CreatedAt)}}); err != nil {
 		return err
 	}
 	if slot == 0 {
@@ -123,5 +122,5 @@ func (k dataKeys) Rewrapped(ctx context.Context, id, fromKEKID string, wrapped [
 		}
 		return err == nil, err
 	}
-	return false, nil
+	return false, fmt.Errorf("data key %s kept changing under its rewrap", id)
 }

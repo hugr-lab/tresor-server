@@ -22,7 +22,7 @@ spec:
     schema:
       openAPIV3Schema:
         type: object
-        description: 'The active data key (one, named active). Written by tresor-server only (spec 003): a hand edit makes it unreadable.'
+        description: 'The active data key (one, named active); the installation''s mark (one, named installation). Written by tresor-server only (spec 003): a hand edit makes it unreadable.'
         required:
         - spec
         properties:
@@ -43,3 +43,9 @@ spec:
               slot:
                 type: integer
                 format: int64
+              instance:
+                type: string
+              mac:
+                type: string
+                format: byte
+                nullable: true
