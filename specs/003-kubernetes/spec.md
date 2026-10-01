@@ -1,6 +1,6 @@
 # Spec 003: phase 3 - Kubernetes
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-01
 - **Author**: hugr lab
 
@@ -14,8 +14,11 @@ cluster.
   allowlist. It also gives a database its password.
 - **Workload identity**: on AKS, the pod's federated identity reaches Key Vault (the KEK, `ref+azkv`) and an
   Azure database. No secret of the service's own.
+- **Integrity of what is not sealed**: on the Kubernetes store, a MAC under the data key over every field
+  that is not sealed, and an admission policy that lets only the service write its resources.
 - **A Helm chart**: the Deployment, the Service, an Ingress, a PodDisruptionBudget, the ServiceAccount and
-  its RBAC, the CRDs.
+  its RBAC, the CRDs, the admission policy. It deploys the service on any state store: the Kubernetes
+  store, or SQL (PostgreSQL, SQL Server, SQLite).
 
 No protocol change.
 
@@ -98,6 +101,42 @@ right needed), that its group serves the version it knows; otherwise it does not
 **Material is never in a resource in the clear**: sealed, or a reference. Whoever can read the resources
 still needs the KEK.
 
+### Integrity of what is not sealed
+
+On the Kubernetes store, a secret's descriptor and grants, and a delegation grant's actor and user, are
+not sealed. Whoever can write the resources could make the service decrypt for them: a grant of `use` to
+their own role, a forged delegation grant for an administrator. Write access to a namespace is easier to
+get than write access to a database. Two guards, both on by default.
+
+**A MAC over every field that is not sealed:**
+- HMAC-SHA256, its key derived from the resource's data key (HKDF-SHA256, info `tresor-server/mac/1`): no
+  MAC without the KEK.
+- Over a canonical encoding (length-prefixed fields, in a fixed order) of:
+  - a `TresorSecret`: its name, row id, type, provider, scope, redact keys, comment, owner, version,
+    times, grants, data key id;
+  - a `TresorGrant`: its id hash, actor (owner, client, issuer), user, expiries, data key id;
+  - a `TresorMintedToken`: its grant, key, version, refusal, data key id;
+  - a `TresorActor`, `TresorKeyring`: their counter, their active key and slot version (the keyring's MAC
+    under the KEK-wrapped key it names).
+- Written with every write; checked on every read - a list and a descriptor too. A MAC that does not match
+  is `500 service_error` (tresor spec 016): never a descriptor, never material.
+- The MAC keys stay in memory for an hour (the data keys for sealing keep `keys.cache_ttl`): a KEK outage
+  shorter than that leaves the store answering.
+- It does not stop a **rollback**: a whole older object, its MAC valid then, can be put back - a grant
+  revoked since, back again. No counter outside the writer's reach exists in the API. A delegation grant's
+  expiry bounds it (8 hours at most); for a secret's grants, the admission policy is the guard.
+- A hand edit (`kubectl edit`) makes the resource unreadable, as meant. A backup restored (Velero) or a
+  move to another cluster with the same KEK keeps it.
+
+**A ValidatingAdmissionPolicy** (Kubernetes 1.30+), in the chart:
+- only the service's ServiceAccount may create, update or delete `tresor.hugr-lab.io` resources; anyone
+  else - a namespace's admin, a CI, a hand edit - is refused by the API server;
+- it does not stop a cluster admin (who can remove it), nor a stolen ServiceAccount token: the MAC does;
+- it is cluster-scoped: installing it needs cluster rights; `admissionPolicy.enabled: false` for an older
+  cluster, or an install with no such rights.
+
+The SQL stores keep no MAC: writing a database is fewer people's. It can come there later, as a setting.
+
 ### Kubernetes Secrets as a material source: `ref+k8s://`
 
 `ref+k8s://<namespace>/<secret>/<key>`, a parameter's whole VARCHAR value.
@@ -131,6 +170,12 @@ still needs the KEK.
 
 ### The Helm chart: `deploy/helm/tresor-server`
 
+- **Any state store**, chosen in values:
+  - `kubernetes` (default): no database; the CRDs, the admission policy;
+  - `postgres`, `sqlserver`: a database outside the cluster, or in it. Logged in by workload identity
+    (`auth: entra`) or a password from a Kubernetes Secret (`state.password_ref: ref+k8s://...`, read at
+    each new connection); several replicas;
+  - `sqlite`: one replica on a PersistentVolumeClaim.
 - **Deployment**:
   - the image, `TRESOR_*` settings from values, probes on `/healthz` and `/readyz`;
   - non-root, a read-only root filesystem, an emptyDir `/tmp`;
@@ -148,6 +193,7 @@ still needs the KEK.
     namespaces.
 - **CRDs** in the chart's `crds/`: installed once, never deleted with a release - and never upgraded by
   Helm. An upgrade that changes them says so: `kubectl apply --server-side -f crds/` first.
+- **The admission policy** and its binding, with the Kubernetes store (`admissionPolicy.enabled`).
 - **values.yaml**: the issuers, the policy, the state, the keys, the material - typed as the service's
   configuration.
 - Published as an OCI chart, `oci://ghcr.io/hugr-lab/charts/tresor-server`, from a tag.
@@ -184,12 +230,14 @@ development).
 
 ### The PRs
 
-1. **(a) the Kubernetes store**: the CRDs, `state.kind: kubernetes`, the suite on envtest, conformance on
-   it.
+1. **(a) the Kubernetes store**: the CRDs, `state.kind: kubernetes`, the MAC, the suite on envtest,
+   conformance on it.
 2. **(b) `ref+k8s://`**: the source, its allowlist, `state.password_ref`.
 3. **(c) workload identity**: `azure.identity: workload`.
-4. **(d) the Helm chart**: lint, template, kind install in CI; the OCI chart from a tag.
-5. **(e) docs**: a Kubernetes page on the site; a live run on AKS, if the owner wants one.
+4. **(d) the Helm chart**: every state store, the admission policy; lint, template, kind installs in CI
+   (the Kubernetes store, and PostgreSQL in the cluster); the OCI chart from a tag.
+5. **(e) docs and the live run**: a Kubernetes page on the site; AKS with the Kubernetes store, Key Vault
+   by workload identity, the chart.
 
 ## Enforcement & security
 
@@ -203,19 +251,19 @@ development).
   - nothing at cluster scope.
 - **etcd at rest**: the resources hold only sealed values and hashes. Kubernetes' encryption at rest adds
   to it; it is not relied on.
-- **Who can write the resources is trusted**, as whoever can write the database. A secret's grants and a
-  delegation grant's user and actor are not sealed: writing them can give anyone `use`, or forge a grant.
-  - The service runs in a namespace of its own. Write access to its resources, and the right to create
-    pods there (a pod could run as its ServiceAccount), go to the service and the platform's operators
-    only. The chart's README says so.
-  - A MAC over the unsealed fields, under the data key, would make a forgery need the KEK (see the open
-    questions).
+- **What is not sealed is checked**: the MAC makes a forged or changed resource need the KEK; the admission
+  policy keeps everyone but the service from writing at all. Left: a rollback to a whole older object
+  (bounded for delegation grants by their expiry), by a cluster admin or with the service's own token.
+- **The namespace**: the service runs in one of its own. The right to create pods there (a pod could run
+  as its ServiceAccount) goes to the platform's operators only. The chart's README says so.
 - **No static secret** with workload identity; a local KEK in a Kubernetes Secret only where there is no
   KMS.
 
 ## Testing
 
 - The StateStore suite on envtest (CI), as on the SQL stores. The Kubernetes-only cases:
+  - a resource changed behind the store (a grant added, a user changed), and an older object put back:
+    the MAC refuses the first, the test records the second;
   - a name that is no DNS subdomain;
   - the size and grant limits;
   - a delete that finds the secret changed (its preconditions);
@@ -223,8 +271,9 @@ development).
   - the label selectors, the `TresorActor` counter under racing puts.
 - tresor's conformance suite on the Kubernetes store, two replicas.
 - `ref+k8s` against a real Secret on envtest.
-- The chart on kind in CI.
-- Live, by hand, if the owner wants it: AKS with workload identity, Key Vault, the chart.
+- The chart on kind in CI: the Kubernetes store, the admission policy refusing a hand write; PostgreSQL in
+  the cluster, its password by `ref+k8s`.
+- Live, by hand: AKS with the Kubernetes store, Key Vault by workload identity, the chart from ghcr.io.
 
 ## Alternatives considered
 
@@ -246,19 +295,17 @@ development).
   protocol, by administrators, with the protocol's checks; a resource applied by hand would skip them.
   Possible later, as its own spec.
 
-## Open questions
+## Decisions (2026-10-01)
 
-- **The API group**: `tresor.hugr-lab.io`?
-- **A MAC over the unsealed fields** (a secret's descriptor and grants, a delegation grant's user and
-  actor), under the data key: a forgery would need the KEK. The price: with the KEK down, past the data
-  keys' 5-minute cache, descriptors stop answering too. Now, for the Kubernetes store only, for every
-  store, or later?
-- **A live run on AKS**: wanted, and with which store - the Kubernetes store alone, or also PostgreSQL /
-  Azure SQL through workload identity?
-- **The chart's home**: this repository (`deploy/helm/tresor-server`), published to
-  `oci://ghcr.io/hugr-lab/charts`?
+- **The API group**: `tresor.hugr-lab.io`.
+- **Integrity**: the MAC and the admission policy, both, on the Kubernetes store; no MAC on the SQL stores
+  for now.
+- **The live run**: AKS with the Kubernetes store only.
+- **The chart**: in this repository, `deploy/helm/tresor-server`, published to
+  `oci://ghcr.io/hugr-lab/charts`. It deploys the service on any state store, SQL included.
 
 ## Follow-ups
 
 - An operator for GitOps (resources applied by hand, checked as the protocol checks a write).
 - AWS IRSA and GCP Workload Identity (phase 4).
+- The MAC on the SQL stores, as a setting.
