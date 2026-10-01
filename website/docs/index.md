@@ -29,7 +29,7 @@ what an organization runs:
   the service keeps only wrapped data keys.
 - **Material left where it is.** A secret's parameter can be a reference, `ref+azkv://corp-vault/lake-s3`:
   the value stays in Azure Key Vault, and is read at each fetch. A rotation there reaches DuckDB at once.
-- **No password of its own.** On Azure the service is a managed identity: Key Vault, Azure SQL and Azure
+- **No password of its own.** On Azure the service is a managed identity or a workload identity: Key Vault, Azure SQL and Azure
   Database for PostgreSQL log it in by Entra token.
 - **One container.** A distroless image, and a recipe for Azure Container Apps.
 

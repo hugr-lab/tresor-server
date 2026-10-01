@@ -131,8 +131,9 @@ var (
 	dnsSuffix = regexp.MustCompile(`^(\.[a-z0-9-]+)+$`)
 )
 
-// Azure is the service's identity on Azure (spec 002): managed (a managed identity; ClientID names a
-// user-assigned one) or default (DefaultAzureCredential: the az CLI for development).
+// Azure is the service's identity on Azure (specs 002, 003): managed (a managed identity; ClientID names a
+// user-assigned one), workload (AKS workload identity; ClientID overrides the webhook's) or default
+// (DefaultAzureCredential: the az CLI for development).
 type Azure struct {
 	Identity string `yaml:"identity"`
 	ClientID string `yaml:"client_id"`
@@ -267,13 +268,13 @@ func (c *Config) validate() error {
 		return err
 	}
 	if c.Keys.Kind == "azurekeyvault" && c.Azure.Identity == "" {
-		return errors.New("keys: azurekeyvault needs azure.identity: managed | default")
+		return errors.New("keys: azurekeyvault needs azure.identity: managed | workload | default")
 	}
-	if c.Azure.Identity != "" && c.Azure.Identity != "managed" && c.Azure.Identity != "default" {
-		return errors.New("azure.identity is managed or default")
+	if c.Azure.Identity != "" && c.Azure.Identity != "managed" && c.Azure.Identity != "workload" && c.Azure.Identity != "default" {
+		return errors.New("azure.identity is managed, workload or default")
 	}
-	if c.Azure.ClientID != "" && c.Azure.Identity != "managed" {
-		return errors.New("azure.client_id names a user-assigned managed identity: azure.identity: managed")
+	if c.Azure.ClientID != "" && c.Azure.Identity != "managed" && c.Azure.Identity != "workload" {
+		return errors.New("azure.client_id names a user-assigned managed identity (managed) or the federated one (workload)")
 	}
 	if kv := c.Material.AzKV; len(kv.Allow) > 0 || kv.CacheTTL != 0 || kv.DNSSuffix != "" {
 		if len(kv.Allow) == 0 {

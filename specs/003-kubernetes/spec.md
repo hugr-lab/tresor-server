@@ -250,6 +250,9 @@ are authenticated by the root.
   labelled `azure.workload.identity/use: "true"`, whose ServiceAccount carries the
   `azure.workload.identity/client-id` annotation.
 - Key Vault (the KEK, `ref+azkv`), Azure SQL and Azure Database for PostgreSQL then log in with no secret.
+- `azure.client_id` overrides the webhook's `AZURE_CLIENT_ID`: that identity needs a federated credential for
+  the ServiceAccount's subject and the cluster's issuer. A pod with no workload identity injected, or no
+  token mounted, stops at start, naming the label and the annotation to set.
 - On other clouds the same shape follows in phase 4 (AWS IRSA, GCP Workload Identity).
 - The local KEK on Kubernetes: a Kubernetes Secret mounted as a file (`keys.key_file`) - a static secret, for
   clusters with no KMS.
@@ -321,7 +324,7 @@ development).
 2. **(a) the Kubernetes store** (landed): the CRDs, `state.kind: kubernetes`, the MAC, the suite on envtest,
    conformance on it.
 3. **(b) `ref+k8s://`** (landed): the source, its allowlist, `state.password_ref`.
-4. **(c) workload identity**: `azure.identity: workload`.
+4. **(c) workload identity** (landed): `azure.identity: workload`.
 5. **(d) the Helm chart**: every state store, the admission policy; lint, template, kind installs in CI
    (the Kubernetes store, and PostgreSQL in the cluster); the OCI chart from a tag.
 6. **(e) docs and the live run**: a Kubernetes page on the site; AKS with the Kubernetes store, Key Vault

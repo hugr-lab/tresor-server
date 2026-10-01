@@ -19,7 +19,8 @@ page covers what the service adds.
 - **References are an administrator's**, within the allowlist, checked at the write and again at each
   resolution.
 - **Every write is compare-and-set**, so several replicas never lose or cross a write.
-- **No password of the service's own** on Azure: a managed identity for Key Vault and the database.
+- **No password of the service's own** on Azure: a managed identity (Container Apps) or workload identity
+  (AKS) for Key Vault and the database.
 - **Transport**: HTTPS (or TLS at the ingress, `tls.offload`); to PostgreSQL `sslmode=verify-full`, to SQL
   Server `encrypt=true`, with the certificate checked, off the local machine.
 
