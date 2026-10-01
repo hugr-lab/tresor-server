@@ -12,6 +12,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/hugr-lab/tresor-server/internal/audit"
+	"github.com/hugr-lab/tresor-server/internal/material"
+	azkv "github.com/hugr-lab/tresor-server/internal/material/azurekeyvault"
 	"github.com/hugr-lab/tresor-server/internal/traced"
 )
 
@@ -220,5 +222,77 @@ func TestAuditMint(t *testing.T) {
 	_ = json.Unmarshal(r.body, &minted)
 	if token, _ := minted["params"].(map[string]any)["token"].(string); token != "" && strings.Contains(buf.String(), token) {
 		t.Fatal("the minted token is in the audit")
+	}
+}
+
+// minted at a grant's exchange: for the user, under the server - not the server as the principal; the exchange
+// names whom the grant is for
+func TestAuditMintAtExchange(t *testing.T) {
+	f := newFixture(t, "")
+	buf := audited(f, audit.All)
+	node := f.idp.Service(t, "duckdb-secrets", "node", "nodes")
+	f.do("PUT", "/v1/secrets/echo", f.admin, mintedSecret)
+	f.do("PUT", "/v1/secrets/echo/grants/n", f.admin, `{"principal":"role:nodes","verbs":["use"]}`)
+	if g, r := f.grantFor(node, f.alice); g == "" {
+		t.Fatalf("exchange: %d %s", r.status, r.body)
+	}
+	es := events(t, buf)
+	m := find(es, audit.KindMint, "ok", "")
+	if m == nil || !strings.Contains(m.Principal, "alice") || m.Actor != "client:node" || m.TraceID != "" {
+		t.Fatalf("the mint at the exchange: %+v", es)
+	}
+	ex := find(es, audit.KindDelegation, "ok", "")
+	if ex == nil || ex.Detail != "exchanged" || !strings.Contains(ex.Target, "alice") {
+		t.Fatalf("the exchange: %+v", ex)
+	}
+}
+
+// what a request may put in the audit before it is authenticated, or validated, is bounded
+func TestAuditBounded(t *testing.T) {
+	f := newFixture(t, "")
+	buf := audited(f, audit.All)
+	long := strings.Repeat("n", 5000)
+	f.do("GET", "/v1/secrets/"+long, "", "")
+	f.do("PUT", "/v1/secrets/lake", f.admin, s3Secret)
+	f.do("PUT", "/v1/secrets/lake/grants/a", f.admin, `{"principal":"`+long+`","verbs":["use"]}`)
+	es := events(t, buf)
+	if d := find(es, audit.KindRead, "denied", ""); d == nil || d.Reason != "unauthenticated" {
+		t.Fatalf("an unauthenticated read with a name no name can be: %+v", es)
+	}
+	if g := find(es, audit.KindGrant, "invalid", "lake"); g == nil || g.Target != "" {
+		t.Fatalf("an invalid grant's principal recorded: %+v", g)
+	}
+	if strings.Contains(buf.String(), long) {
+		t.Fatal("the audit holds what was never a name or a principal")
+	}
+}
+
+// a reference's read has its own span, under the request's
+func TestSpanOfAReference(t *testing.T) {
+	exp := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp), sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(prev); _ = tp.Shutdown(context.Background()) })
+	f := newFixture(t, "")
+	v := &kvSecrets{values: map[string]string{"lake-s3": "hunter2-from-the-vault"}}
+	f.srv.material = material.New(traced.Source(azkv.NewWithGetter([]azkv.Allow{{Vault: "corp-vault", Prefixes: []string{"lake-"}}},
+		func(string) (azkv.Getter, error) { return v, nil }, azkv.Options{})))
+	f.do("PUT", "/v1/secrets/lake", f.admin, refSecret)
+	f.do("PUT", "/v1/secrets/lake/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	f.do("GET", "/v1/secrets/lake", f.alice, "", "traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	found := false
+	for _, s := range exp.GetSpans() {
+		if s.Name == "material.resolve" {
+			found = true
+			for _, a := range s.Attributes {
+				if strings.Contains(a.Value.Emit(), "hunter2") || strings.Contains(a.Value.Emit(), "lake-s3") {
+					t.Fatalf("a span's attribute holds what it read: %v", a)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no span for the reference")
 	}
 }

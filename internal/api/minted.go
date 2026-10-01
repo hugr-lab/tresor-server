@@ -272,7 +272,7 @@ func (s *Server) mintAtGrant(ctx context.Context, user *auth.Caller, subject str
 			if err == nil {
 				err = s.checkMinted(token, target[0])
 			}
-			s.auditMint(ctx, target[0], "minted", err)
+			s.auditMint(ctx, user, actor, target[0], "minted", err)
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -323,7 +323,7 @@ func (s *Server) mintedToken(r *http.Request, c *auth.Caller, sec *state.Secret)
 	if err == nil {
 		err = s.checkMinted(token, audience)
 	}
-	s.auditMint(r.Context(), audience, "minted", err)
+	s.auditMint(r.Context(), c, nil, audience, "minted", err)
 	if err != nil {
 		s.log.Warn("minting for the caller failed", "caller", c.Owner(), "audience", audience, "reason", err.Error())
 		if isRefusal(err) || strings.Contains(err.Error(), "minted a token") {
@@ -387,7 +387,7 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 			if err == nil {
 				err = s.checkMinted(renewed, audience)
 			}
-			s.auditMint(ctx, audience, "refreshed", err)
+			s.auditMint(ctx, callerOf(r), nil, audience, "refreshed", err)
 			if err != nil {
 				if _, _, now, rerr := s.loadMinted(ctx, gr.idHash, key); rerr == nil && now != version {
 					continue // another replica renewed it meanwhile (and spent the refresh token): take its
@@ -425,7 +425,7 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 			if err == nil {
 				err = s.checkMinted(minted, audience)
 			}
-			s.auditMint(ctx, audience, "minted", err)
+			s.auditMint(ctx, callerOf(r), nil, audience, "minted", err)
 			if err != nil {
 				s.log.Warn("minting for the grant's user failed", "user", gr.user.Owner(), "audience", audience,
 					"reason", err.Error())

@@ -64,11 +64,17 @@ func (s *store) Get(ctx context.Context, name string) (*state.Secret, error) {
 func (s *store) Update(ctx context.Context, name string, fn func(*state.Secret) (*state.Secret, error)) (*state.Secret, error) {
 	ctx, sp := span(ctx, "state.update", s.attr())
 	attempts := 0
+	var refused error // fn's own answer (a precondition, a refusal): no failure of the store
 	out, err := s.Store.Update(ctx, name, func(cur *state.Secret) (*state.Secret, error) {
 		attempts++
-		return fn(cur)
+		next, err := fn(cur)
+		refused = err
+		return next, err
 	})
 	sp.SetAttributes(attribute.Int("tresor.attempts", attempts))
+	if err != nil && errors.Is(err, refused) {
+		err = nil
+	}
 	end(sp, ignoreNotFound(err))
 	return out, err
 }

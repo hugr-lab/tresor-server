@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
@@ -43,7 +42,7 @@ func Setup(ctx context.Context, opts Options) (shutdown func(context.Context) er
 	if strings.EqualFold(os.Getenv("OTEL_SDK_DISABLED"), "true") {
 		return noop, nil
 	}
-	traces, metrics, logs := endpoint("TRACES"), endpoint("METRICS"), endpoint("LOGS")
+	traces, metrics, logs := wanted("TRACES"), wanted("METRICS"), wanted("LOGS")
 	if !traces && !metrics && !logs {
 		return noop, nil
 	}
@@ -52,11 +51,9 @@ func Setup(ctx context.Context, opts Options) (shutdown func(context.Context) er
 			return nil, fmt.Errorf("OTEL_EXPORTER_OTLP_%sPROTOCOL is %s: this build exports http/protobuf only", signal, p)
 		}
 	}
-	if os.Getenv("OTEL_SERVICE_NAME") == "" {
-		os.Setenv("OTEL_SERVICE_NAME", "tresor-server") // the resource reads it
-	}
-	res, err := resource.New(ctx, resource.WithFromEnv(), resource.WithTelemetrySDK(),
-		resource.WithAttributes(semconv.ServiceVersion(opts.Version)))
+	// the defaults first: OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES, read after, win
+	res, err := resource.New(ctx, resource.WithAttributes(semconv.ServiceName("tresor-server"),
+		semconv.ServiceVersion(opts.Version)), resource.WithFromEnv(), resource.WithTelemetrySDK())
 	if err != nil {
 		return nil, fmt.Errorf("telemetry: the resource: %w", err)
 	}
@@ -78,7 +75,8 @@ func Setup(ctx context.Context, opts Options) (shutdown func(context.Context) er
 			return nil, fmt.Errorf("telemetry: metrics: %w", err)
 		}
 		mp := sdkmetric.NewMeterProvider(sdkmetric.WithResource(res),
-			sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp, sdkmetric.WithInterval(30*time.Second))))
+			// the interval from OTEL_METRIC_EXPORT_INTERVAL (an explicit one would override it), 60 s by default
+			sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp)))
 		otel.SetMeterProvider(mp)
 		stops = append(stops, mp.Shutdown)
 	}
@@ -100,7 +98,10 @@ func Setup(ctx context.Context, opts Options) (shutdown func(context.Context) er
 	}, nil
 }
 
-// endpoint: an OTLP endpoint is set for the signal, or for all.
-func endpoint(signal string) bool {
+// wanted: an OTLP endpoint is set for the signal, or for all, and OTEL_<SIGNAL>_EXPORTER is not none.
+func wanted(signal string) bool {
+	if strings.EqualFold(os.Getenv("OTEL_"+signal+"_EXPORTER"), "none") {
+		return false
+	}
 	return os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" || os.Getenv("OTEL_EXPORTER_OTLP_"+signal+"_ENDPOINT") != ""
 }

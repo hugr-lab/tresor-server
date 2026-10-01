@@ -139,7 +139,6 @@ func (s *Server) delegated(r *http.Request, actor *auth.Caller) (*auth.Caller, *
 // --- grants ------------------------------------------------------------------------------------------
 
 func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
-	observed(r).event.Detail = "exchanged"
 	actor := callerOf(r)
 	if actor.Actor != "" {
 		problem(w, http.StatusForbidden, "actor_not_allowed", "a grant is exchanged with the server's own token only")
@@ -227,6 +226,7 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.log.Info("delegation granted", "actor", client, "user", user.Owner(), "expires", expires.UTC())
+	observed(r).event.Detail, observed(r).event.Target = "exchanged", user.Owner() // the grant is for whom
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": id, "subject": user.Subject, "actor": client, "expires_at": expires.UTC().Format(time.RFC3339),
 	})
@@ -236,7 +236,6 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 // admin revokes every grant matching the filters (at least one); anyone else revokes the grants made
 // for themselves - a user ends every session a server holds for them.
 func (s *Server) revokeGrants(w http.ResponseWriter, r *http.Request) {
-	observed(r).event.Detail = "revoked"
 	c := callerOf(r)
 	if c.Actor != "" {
 		problem(w, http.StatusForbidden, "actor_not_allowed", "grants are revoked with the caller's own token")
@@ -258,11 +257,11 @@ func (s *Server) revokeGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("delegation grants revoked", "by", c.Owner(), "actor", actor, "subject", subject, "count", n)
+	observed(r).event.Detail = "revoked"
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": n})
 }
 
 func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
-	observed(r).event.Detail = "revoked"
 	c := callerOf(r)
 	gr, err := s.loadGrant(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -278,6 +277,7 @@ func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the grant could not be revoked")
 		return
 	}
+	observed(r).event.Detail = "revoked"
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -59,10 +59,11 @@ line up:
 | `mint` | a token minted or refreshed for a caller (`token_exchange`) | `ok`, `refused` (the IdP's), `error` |
 
 - **Who:**
-  - `principal`: the caller as the protocol spells it (`subject:<issuer>|<sub>`), or `client:<id>` for a
-    service;
+  - `principal`: the caller as the protocol spells it (`subject:<issuer>|<sub>`), a service's too: its
+    `client:<id>` is among its roles;
   - `actor`: the server acting under a delegation grant, when one does; never the grant's id;
-  - `roles`: the caller's roles and groups that decided it.
+  - `roles`: the principals that decided it: the caller's, or under a delegation grant the actor's own
+    (specs/009).
 - **What:**
   - `entry`: `secret` or `variable`;
   - `name`: the entry's name;
@@ -101,7 +102,7 @@ To OTLP, each event is an OpenTelemetry log record:
   - the store (`state.get`, `state.update` with its attempts, `state.list`);
   - the KEK (`kek.wrap`, `kek.unwrap`, `kek.root`);
   - a reference (`material.resolve`, with the scheme);
-  - the identity provider (`idp.jwks`, `idp.exchange`).
+  - the identity provider (`idp.token`: an exchange or a refresh; a JWKS fetch is not spanned).
 - A malformed `traceparent` is ignored (the protocol). `tracestate` and `baggage` are not read.
 
 ### Metrics
@@ -175,6 +176,15 @@ The chart passes them through `env`; the Container Apps recipe documents a colle
   with no principal.
 - The decorators in `internal/traced` wrap the store, the KEK and the reference sources. The mint client
   spans its IdP call (`idp.token`) itself.
+- The event's `span_id` is the service's span when one is recorded, else the caller's. With no
+  `traceparent` there are no ids, on stdout or on the OTLP record.
+- A request that ends with no answer, because its context was cancelled or its handler panicked, is
+  recorded as `error`, `reason: abandoned`.
+- What is recorded before authentication or validation is bounded. A path's name is recorded only if it
+  could be a name; a grant's target only once its principal is valid.
+- Under a delegation grant a mint event's principal is the user and its actor is the server, at the
+  exchange too. The exchange's `target` is the user it is for.
+- `tresor.audit.dropped` has no attributes. `OTEL_<SIGNAL>_EXPORTER=none` turns a signal off.
 - Checked live against an OpenTelemetry Collector (debug exporter). Under a sampled `traceparent`, the trace
   arrived with its span named by route, along with the metrics and the audit's log record. stdout had the
   JSON line with the `trace_id`.

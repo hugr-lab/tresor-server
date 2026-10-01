@@ -126,10 +126,16 @@ type statusRecorder struct {
 	http.ResponseWriter
 	status  int
 	problem string
+	wrote   bool // an answer was written: a handler that returned without one gave up
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	r.wrote = true
+	return r.ResponseWriter.Write(b)
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
+	r.status, r.wrote = code, true
 	r.ResponseWriter.WriteHeader(code)
 }
 
@@ -147,9 +153,11 @@ func (s *Server) logged(next http.Handler) http.Handler {
 		start := time.Now()
 		holder := &auth.Caller{}
 		r, o, span := s.begin(r, w)
+		defer func() { // a panic too: the span ends, the request is counted and audited (as not answered)
+			o.problem, o.answered = rec.problem, rec.wrote
+			s.finish(r, o, span, rec.status, time.Since(start))
+		}()
 		next.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), loggedCallerKey{}, holder)))
-		o.problem = rec.problem
-		s.finish(r, o, span, rec.status, time.Since(start))
 		attrs := []any{"method", r.Method, "path", loggedPath(r.URL.Path), "status", rec.status,
 			"subject", holder.Subject, "ms", time.Since(start).Milliseconds()}
 		// the caller's trace (protocol, Tracing): its ids, so the line can be found from the client's trace
@@ -202,7 +210,8 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		o := observed(r)
 		o.pattern = r.Pattern
-		if name := r.PathValue("name"); name != "" {
+		// the name as asked, when it could be one (the audit is not a sink for whatever a path holds)
+		if name := r.PathValue("name"); name != "" && validName("", name) == nil {
 			_, o.event.Entry = s.of(r)
 			o.event.Name = name
 		}
@@ -223,10 +232,12 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 			// a server acting for a user: its own token proved who it is, the grant says for whom
 			user, gr, err := s.delegated(r, caller)
 			if errors.Is(err, errGrantStore) {
+				o.event.Actor = caller.Client()
 				grantStoreProblem(w, err, "the delegation grant could not be read")
 				return
 			}
 			if err != nil {
+				o.event.Actor = caller.Client()
 				s.log.Warn("delegation refused", "actor", caller.Owner(), "reason", err.Error())
 				problem(w, http.StatusUnauthorized, "unauthenticated", "the delegation grant is not valid for this caller")
 				return
@@ -539,12 +550,11 @@ func (s *Server) getSecret(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusServiceUnavailable, "service_unavailable", "a reference of the secret did not resolve")
 		return
 	}
-	o := observed(r)
-	o.event.Version = sec.Version
+	var refs []audit.Ref
 	for _, res := range resolved { // where and which version, never the value
 		s.log.Info("reference resolved", "secret", sec.Name, "param", res.Param, "ref", res.Ref.String(),
 			"version", res.Version)
-		o.event.Refs = append(o.event.Refs, audit.Ref{Param: res.Param, Ref: res.Ref.String(), Version: res.Version})
+		refs = append(refs, audit.Ref{Param: res.Param, Ref: res.Ref.String(), Version: res.Version})
 	}
 	if params == nil {
 		params = map[string]json.RawMessage{}
@@ -575,6 +585,8 @@ func (s *Server) getSecret(w http.ResponseWriter, r *http.Request) {
 			body["expires_at"] = token.Expiry.UTC().Format(time.RFC3339)
 		}
 	}
+	o := observed(r) // what was served, once it is
+	o.event.Version, o.event.Refs = sec.Version, refs
 	w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(sec.Version, 10)))
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, body)
@@ -924,7 +936,6 @@ func (s *Server) putGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	observed(r).event.Target = body.Principal
 	if err := validName("the grant's id", id); err != nil {
 		problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
 		return
@@ -936,6 +947,7 @@ func (s *Server) putGrant(w http.ResponseWriter, r *http.Request) {
 		if !(isRole && role != "") && !(isGroup && group != "") {
 			return nil, fmt.Errorf("%w: a grant names a role: or a group: principal", errInvalid)
 		}
+		observed(r).event.Target = body.Principal // a principal, checked
 		if len(body.Verbs) != 1 || body.Verbs[0] != "use" {
 			return nil, fmt.Errorf("%w: a grant gives use, and only use", errInvalid)
 		}

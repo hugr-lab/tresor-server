@@ -31,6 +31,8 @@ Container Apps, AKS and Log Analytics collect stdout with no set-up.
 - **`outcome`** is `ok`, `denied`, `invalid`, `precondition`, `refused` (the IdP's) or `error`. A refusal
   or an error also has a `reason`, in the protocol's terms (`no_verb`, `not_found`, `unauthenticated`, …).
 - **`principal`** is the caller. **`actor`** is the server acting for the caller under a delegation grant.
+  **`roles`** are the principals that decided: under a grant, the server's own.
+- **A request that ended with no answer**, cancelled or failed inside, is `error`, with `reason: abandoned`.
 - **An invisible name**: the caller gets the protocol's `404`, and the audit records the name with
   `denied`. Whoever reads the audit sees every name, and who used it.
 - **`audit.level`**:
@@ -52,7 +54,7 @@ The service's spans **only continue tresor's trace**: it never starts one.
   - the state store;
   - the KEK (Key Vault);
   - a reference's source;
-  - the identity provider.
+  - the identity provider's token endpoint (`idp.token`).
 - With no sampled `traceparent`, there are no spans.
 - Spans are named by route (`GET /v1/secrets/{name}`), never by an entry's name.
 - `telemetry.traces: false` turns them off. The audit keeps the `trace_id` either way.
@@ -62,7 +64,8 @@ The service's spans **only continue tresor's trace**: it never starts one.
 | Metric | |
 | --- | --- |
 | `tresor.server.requests`, `tresor.server.duration` | by route and status class |
-| `tresor.audit.events`, `tresor.audit.dropped` | by kind and outcome; counted at every audit level |
+| `tresor.audit.events` | by kind and outcome; counted at every audit level |
+| `tresor.audit.dropped` | events a writer failed to write |
 | `tresor.kek.operations`, `tresor.kek.duration` | wrap, unwrap, root, by outcome |
 | `tresor.references` | by scheme and outcome |
 | `tresor.mint` | by outcome |

@@ -28,10 +28,14 @@ func WithAudit(a *audit.Auditor) Option { return func(s *Server) { s.audit = a }
 
 // observation is what one request did, filled as it is served.
 type observation struct {
-	pattern string       // the route matched (authed); "" for one no audited route serves
-	caller  *auth.Caller // once authenticated
-	problem string       // the problem document's type, if one was answered
-	event   audit.Event  // what the handlers say: the entry, its name, a target, a version, references
+	pattern  string       // the route matched (authed); "" for one no audited route serves
+	caller   *auth.Caller // once authenticated
+	problem  string       // the problem document's type, if one was answered
+	answered bool         // something was written: a handler that returned without an answer gave up
+	event    audit.Event  // what the handlers say: the entry, its name, a target, a version, references
+	// the trace an event belongs to: the caller's (a well-formed traceparent), the service's own span when one
+	// is recorded under it, else the caller's span; none without a traceparent
+	trace trace.SpanContext
 }
 
 type observationKey struct{}
@@ -87,18 +91,51 @@ func requestID() string {
 	return hex.EncodeToString(raw)
 }
 
-// begin starts a request's observation and its span: a child of a sampled traceparent, or none recorded (the
-// sampler never samples a root).
+// begin starts a request's observation and its span: a child of a sampled, well-formed traceparent, or none
+// recorded (the sampler never samples a root). The traceparent alone is read, version 00 as the protocol says.
 func (s *Server) begin(r *http.Request, w http.ResponseWriter) (*http.Request, *observation, trace.Span) {
 	o := &observation{}
 	o.event.RequestID = requestID()
 	w.Header().Set("X-Request-Id", o.event.RequestID)
-	// the W3C trace context only: the protocol defines traceparent and nothing else (tracestate, baggage)
-	carrier := propagation.MapCarrier{"traceparent": r.Header.Get("traceparent")}
-	ctx := propagation.TraceContext{}.Extract(r.Context(), carrier)
+	ctx := r.Context()
+	header := r.Header.Get("traceparent")
+	if _, _, ok := traceIDs(header); ok {
+		ctx = propagation.TraceContext{}.Extract(ctx, propagation.MapCarrier{"traceparent": header})
+		o.trace = trace.SpanContextFromContext(ctx) // the caller's
+	}
 	ctx, span := telemetry.Tracer().Start(ctx, "HTTP "+r.Method, trace.WithSpanKind(trace.SpanKindServer))
+	if span.IsRecording() {
+		o.trace = span.SpanContext() // the service's own, under the caller's
+	}
 	ctx = context.WithValue(ctx, observationKey{}, o)
 	return r.WithContext(ctx), o, span
+}
+
+// who is the event's principal, actor and the roles that decided: under a delegation grant the actor's own
+// (specs/009), else the caller's.
+func who(c *auth.Caller) (principal, actor string, roles []string) {
+	if c == nil {
+		return "", "", nil
+	}
+	ps := c.Principals
+	if c.Actor != "" {
+		ps = c.ActorPrincipals
+	}
+	for _, p := range ps {
+		if !strings.HasPrefix(p, "subject:") {
+			roles = append(roles, p)
+		}
+	}
+	return c.Owner(), c.Actor, roles
+}
+
+// emit writes e with the request's trace: the ids on the event, the context on its OTLP record.
+func (s *Server) emit(ctx context.Context, o *observation, e audit.Event) {
+	if o.trace.IsValid() {
+		e.TraceID, e.SpanID = o.trace.TraceID().String(), o.trace.SpanID().String()
+	}
+	// never the made-up ids of a span nobody records: the record carries the trace the event belongs to, or none
+	s.audit.Emit(trace.ContextWithSpanContext(ctx, o.trace), e)
 }
 
 // finish ends the span, counts the request, and emits the audit event of an audited route.
@@ -112,6 +149,10 @@ func (s *Server) finish(r *http.Request, o *observation, span trace.Span, status
 	telemetry.Requests.Add(ctx, 1, metricAttrs(attribute.String("route", route), attribute.String("status_class", class)))
 	telemetry.Duration.Record(ctx, took.Seconds(), metricAttrs(attribute.String("route", route)))
 	kind := auditKinds[o.pattern]
+	result := outcome(status)
+	if !o.answered {
+		result, o.problem = "error", "abandoned" // the request ended (or the handler panicked) with no answer
+	}
 	if span.IsRecording() {
 		span.SetName(route)
 		span.SetAttributes(attribute.String("http.route", route), attribute.Int("http.response.status_code", status))
@@ -119,9 +160,9 @@ func (s *Server) finish(r *http.Request, o *observation, span trace.Span, status
 			span.SetAttributes(attribute.String("tresor.entry", o.event.Entry))
 		}
 		if kind != "" {
-			span.SetAttributes(attribute.String("tresor.outcome", outcome(status)))
+			span.SetAttributes(attribute.String("tresor.outcome", result))
 		}
-		if status >= 500 {
+		if status >= 500 || !o.answered {
 			span.SetStatus(codes.Error, o.problem)
 		}
 	}
@@ -130,36 +171,24 @@ func (s *Server) finish(r *http.Request, o *observation, span trace.Span, status
 		return
 	}
 	e := o.event
-	e.Kind, e.Outcome = kind, outcome(status)
+	e.Kind, e.Outcome = kind, result
 	if e.Outcome != "ok" {
 		e.Reason = o.problem
 	}
-	if c := o.caller; c != nil {
-		e.Principal, e.Actor = c.Owner(), c.Actor
-		for _, p := range c.Principals {
-			if !strings.HasPrefix(p, "subject:") {
-				e.Roles = append(e.Roles, p)
-			}
-		}
+	if o.caller != nil {
+		e.Principal, e.Actor, e.Roles = who(o.caller)
 	}
-	// the caller's trace (correlation only): its id, and the span the event belongs to - the service's own when
-	// it records one, else the caller's
-	if traceID, spanID, ok := traceIDs(r.Header.Get("traceparent")); ok {
-		e.TraceID, e.SpanID = traceID, spanID
-		if sc := span.SpanContext(); span.IsRecording() && sc.IsValid() {
-			e.SpanID = sc.SpanID().String()
-		}
-	}
-	s.audit.Emit(trace.ContextWithSpanContext(ctx, span.SpanContext()), e)
+	s.emit(ctx, o, e)
 }
 
 func metricAttrs(kv ...attribute.KeyValue) metric.MeasurementOption {
 	return metric.WithAttributes(kv...)
 }
 
-// auditMint records a token minted (or refreshed) for the request's caller at its IdP: the audience is the
-// event's target; a refusal by the IdP is "refused", anything else that failed "error". Never the token.
-func (s *Server) auditMint(ctx context.Context, audience, detail string, err error) {
+// auditMint records a token minted (or refreshed) for user, under actor when a server acts for them: the
+// audience is the event's target; a refusal by the IdP is "refused", anything else that failed "error". Never
+// the token.
+func (s *Server) auditMint(ctx context.Context, user, actor *auth.Caller, audience, detail string, err error) {
 	o := observedIn(ctx)
 	e := audit.Event{Kind: audit.KindMint, Outcome: "ok", Detail: detail, Target: audience, Entry: o.event.Entry,
 		Name: o.event.Name, RequestID: o.event.RequestID}
@@ -170,11 +199,9 @@ func (s *Server) auditMint(ctx context.Context, audience, detail string, err err
 		e.Outcome = "error"
 	}
 	telemetry.Add(ctx, telemetry.Mints, attribute.String("outcome", e.Outcome))
-	if c := o.caller; c != nil {
-		e.Principal, e.Actor = c.Owner(), c.Actor
+	e.Principal, e.Actor, e.Roles = who(user)
+	if actor != nil {
+		e.Actor = actor.Client()
 	}
-	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
-		e.TraceID, e.SpanID = sc.TraceID().String(), sc.SpanID().String()
-	}
-	s.audit.Emit(ctx, e)
+	s.emit(ctx, o, e)
 }
