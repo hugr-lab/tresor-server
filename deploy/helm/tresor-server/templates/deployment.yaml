@@ -1,7 +1,5 @@
+{{- include "tresor.validate" . }}
 {{- $kind := include "tresor.stateKind" . }}
-{{- if not (has $kind (list "memory" "sqlite" "postgres" "sqlserver" "kubernetes")) }}
-{{- fail "config.state.kind is memory, sqlite, postgres, sqlserver or kubernetes" }}
-{{- end }}
 {{- $scheme := ternary "HTTPS" "HTTP" (ne .Values.tlsSecret "") }}
 apiVersion: apps/v1
 kind: Deployment
@@ -10,8 +8,8 @@ metadata:
   labels: {{- include "tresor.labels" . | nindent 4 }}
 spec:
   replicas: {{ include "tresor.replicas" . }}
-  {{- if eq $kind "sqlite" }}
-  strategy: {type: Recreate}   # one writer: the old pod lets go of the database first
+  {{- if has $kind (list "sqlite" "memory") }}
+  strategy: {type: Recreate}   # one replica: the old pod lets go first
   {{- end }}
   selector:
     matchLabels: {{- include "tresor.selectorLabels" . | nindent 6 }}
@@ -81,8 +79,8 @@ spec:
         - name: kek
           secret:
             secretName: {{ .Values.localKEK.secretName }}
-            items: [{key: {{ .Values.localKEK.key }}, path: {{ .Values.localKEK.key }}}]
-            defaultMode: 0400
+            items: [{key: {{ .Values.localKEK.key | quote }}, path: {{ .Values.localKEK.key | quote }}}]
+            defaultMode: 0400   # the pod's user reads it as its owner group (fsGroup)
         {{- end }}
         {{- if .Values.tlsSecret }}
         - name: tls

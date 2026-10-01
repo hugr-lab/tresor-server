@@ -20,7 +20,7 @@ spec:
       http:
         paths:
           {{- range (.paths | default (list "/")) }}
-          - path: {{ . }}
+          - path: {{ . | quote }}
             pathType: Prefix
             backend:
               service:

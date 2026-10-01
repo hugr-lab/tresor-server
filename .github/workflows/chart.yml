@@ -34,14 +34,17 @@ jobs:
           go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: helm lint
-        run: helm lint --strict deploy/helm/tresor-server
+        run: helm lint --strict deploy/helm/tresor-server -f deploy/helm/tresor-server/ci/test-values.yaml
       - name: kubeconform (every state store)
+        shell: bash   # -eo pipefail: a render that fails fails the step
         run: |
           for kind in kubernetes postgres sqlserver sqlite memory; do
-            helm template t deploy/helm/tresor-server -n tresor --set config.state.kind=$kind \
+            helm template t deploy/helm/tresor-server -n tresor -f deploy/helm/tresor-server/ci/test-values.yaml \
+              --set config.state.kind=$kind --set tlsSecret=tls --set networkPolicy.enabled=true \
               --set ingress.enabled=true --set-json 'ingress.hosts=[{"host":"t.example.com"}]' \
-              --set localKEK.secretName=kek --set tlsSecret=tls \
-              | kubeconform -strict -summary -kubernetes-version 1.30.0 -
+              --set-json 'networkPolicy.from=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ingress"}}}]' \
+              >"rendered-$kind.yaml"
+            kubeconform -strict -summary -kubernetes-version 1.30.0 "rendered-$kind.yaml"
           done
       - name: kind (the Kubernetes store, PostgreSQL)
         run: scripts/ci/kind.sh
@@ -56,11 +59,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: azure/setup-helm@v5
+      - name: helm lint
+        run: helm lint --strict deploy/helm/tresor-server -f deploy/helm/tresor-server/ci/test-values.yaml
+      # the image of the same tag (image.yml) is built beside this: the chart names it before it may exist, so a
+      # release is installed once both runs passed
       - name: helm package and push
         env:
           TAG: ${{ github.ref_name }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
         run: |
           version="${TAG#v}"
-          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "$TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
           helm package deploy/helm/tresor-server --version "$version" --app-version "$TAG" -d out
           helm push "out/tresor-server-$version.tgz" oci://ghcr.io/hugr-lab/charts

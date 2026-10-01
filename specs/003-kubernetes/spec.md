@@ -192,7 +192,7 @@ under it. So the service derives a **root** from the KEK, which only the KEK's h
   operator deletes its resource by hand, past the admission policy.
 - A revocation (`DeleteWhere`) and the purge delete what the labels select, a changed resource included: a
   delete gives no one anything.
-- A backup restored (Velero) or a move with the same KEK and `state.instance` verifies. Minted tokens do
+- A backup restored (Velero; with the admission policy's binding removed for it) or a move with the same KEK and `state.instance` verifies. Minted tokens do
   not survive it: their owner references name the grants' old UIDs, and the garbage collector deletes them
   (they are minted again).
 - The purge also sweeps minted tokens whose grant is gone (a stripped label or owner reference would
@@ -202,10 +202,13 @@ under it. So the service derives a **root** from the KEK, which only the KEK's h
 
 - On `tresor.hugr-lab.io`, `resources: ["*/*"]` (every resource and subresource; the API server refuses `"*"` beside it), operations CREATE, UPDATE, DELETE,
   `matchPolicy: Equivalent`, `failurePolicy: Fail`, the binding's `validationActions: [Deny]`.
-- Allowed: the service's ServiceAccount; for DELETE only, the garbage collector and the namespace
-  controller (`system:serviceaccount:kube-system:generic-garbage-collector`,
-  `...:namespace-controller`) - or a namespace could not be deleted. A deletecollection is admitted as one
-  DELETE per object.
+- Allowed: the service's ServiceAccount; for DELETE only, the garbage collector on minted tokens (the one kind
+  with an owner reference) and the namespace controller while the namespace is being deleted
+  (`namespaceObject.metadata.deletionTimestamp`) - or a namespace could not be deleted. A deletecollection
+  is admitted as one DELETE per object. A wider exemption would let a holder of a controller's token delete
+  the data keys: every sealed value lost.
+- A restore (Velero) writes as another account: the binding is removed for its duration. Two releases in one
+  namespace would lock each other out.
 - It does not stop a cluster admin, who can remove it or delete the CRDs (which deletes every resource),
   nor a stolen ServiceAccount token: the MAC does, but for a rollback.
 - It is cluster-scoped: installing it needs cluster rights; `admissionPolicy.enabled: false` for an older
@@ -293,13 +296,17 @@ are authenticated by the root.
     release's namespace.
   - A `preStop` sleep (the kubelet's own: the image has no shell): the endpoints drop the pod before it
     stops serving.
-  - The policy also lets `system:kube-controller-manager` delete: a controller manager that runs without
-    per-controller credentials.
+  - The policy also lets `system:kube-controller-manager` delete, in the same two cases: a controller manager
+    that runs without per-controller credentials.
+  - A render the service would refuse fails (no issuer, no KEK, a SQLite path off the volume, the namespace's
+    default ServiceAccount, the release's namespace in `material.k8s.allow`); `memory` runs one replica.
+  - An optional NetworkPolicy: with `tls.offload` only the ingress controller should reach the plain HTTP.
   - CI on kind:
     - a CA of the run's, an OIDC issuer (nginx, static discovery and JWKS), PostgreSQL with TLS;
     - two installs, each checked through the protocol (`scripts/ci/kind.sh`);
-    - the policy checked by server dry runs: denied for the cluster's admin, admitted as the garbage
-      collector and the namespace controller.
+    - the policy checked by server dry runs: a hand write, a delete, a rollback (an UPDATE) and a
+      controller's delete outside its case are denied; the namespace's deletion completes;
+    - `ref+k8s` from another namespace, and a delete, through the protocol.
 
 ### Configuration
 

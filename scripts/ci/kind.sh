@@ -12,9 +12,11 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 cluster="${TRESOR_KIND_CLUSTER:-tresor-ci}"
 work="$(mktemp -d)"
 pids=()
+created=""
 cleanup() {
 	for p in ${pids[@]+"${pids[@]}"}; do kill "$p" 2>/dev/null || true; done
-	if [ -z "${TRESOR_KIND_KEEP:-}" ]; then kind delete cluster --name "$cluster" >/dev/null 2>&1 || true; fi
+	# only a cluster this run made
+	if [ -n "$created" ] && [ -z "${TRESOR_KIND_KEEP:-}" ]; then kind delete cluster --name "$cluster" >/dev/null 2>&1 || true; fi
 	rm -rf "$work"
 }
 trap cleanup EXIT
@@ -26,6 +28,7 @@ helm() { command helm --kube-context "kind-$cluster" "$@"; }
 
 echo "kind: the cluster and the image"
 kind create cluster --name "$cluster" --wait 120s
+created=1
 docker build -q -t tresor-server:ci --build-arg VERSION=ci "$root" >/dev/null
 kind load docker-image tresor-server:ci --name "$cluster"
 
@@ -137,8 +140,6 @@ extraVolumeMounts: [{name: ca, mountPath: /etc/tresor-ca, readOnly: true}]
 resources: {requests: {cpu: 10m, memory: 32Mi}}
 config:
   public_url: https://$release.example.com
-  tls: {offload: true}
-  keys: {kind: local, key_file: /var/run/tresor/kek/key}
   issuers:
     - {issuer: $issuer, audience: duckdb-secrets, roles_claim: roles}
   policy: {admins: [role:secrets_admin]}
@@ -150,9 +151,10 @@ EOF
 	fi
 }
 
-# smoke <release> <namespace>: through the protocol, by a port-forward on a free local port
+# smoke <release> <namespace> [<ref> <value>]: through the protocol, by a port-forward on a free local port
 smoke() {
-	kubectl -n "$2" port-forward "svc/$1-tresor-server" :80 >"$work/$1.forward" &
+	# not the kubectl function: $! must be the port-forward itself
+	command kubectl --context "kind-$cluster" -n "$2" port-forward "svc/$1-tresor-server" :80 >"$work/$1.forward" &
 	pids+=($!)
 	local port=""
 	for _ in $(seq 30); do
@@ -160,12 +162,15 @@ smoke() {
 		[ -n "$port" ] && curl -sf "http://127.0.0.1:$port/readyz" >/dev/null && break
 		sleep 1
 	done
-	"$work/kindcheck" smoke "$work/idp" "$issuer" "http://127.0.0.1:$port"
+	"$work/kindcheck" smoke "$work/idp" "$issuer" "http://127.0.0.1:$port" "${@:3}"
 }
 
-echo "kind: the Kubernetes store, the admission policy"
-install t tresor --set config.state.kind=kubernetes
-smoke t tresor
+echo "kind: the Kubernetes store, ref+k8s from another namespace, the admission policy"
+kubectl create namespace data
+kubectl -n data create secret generic duckdb-lake --from-literal=secret=from-a-kubernetes-secret
+install t tresor --set config.state.kind=kubernetes \
+	--set-json 'config.material={"k8s":{"allow":[{"namespace":"data","prefixes":["duckdb-"]}]}}'
+smoke t tresor ref+k8s://data/duckdb-lake/secret from-a-kubernetes-secret
 kubectl -n tresor get tresor
 # a hand write is refused; the service's own resources stay as written
 if kubectl -n tresor apply -f - 2>"$work/denied" <<'EOF'; then
@@ -178,20 +183,30 @@ EOF
 	exit 1
 fi
 grep -q "only tresor-server writes its resources" "$work/denied" || { cat "$work/denied" >&2; exit 1; }
-if kubectl -n tresor delete tresorkeyring active --dry-run=server 2>/dev/null; then
-	echo "kind: a hand delete was admitted" >&2
-	exit 1
-fi
-# the garbage collector and the namespace controller may delete (a dry run: admission runs, nothing goes)
-kubectl -n tresor delete tresorkeyring active --dry-run=server \
-	--as=system:serviceaccount:kube-system:generic-garbage-collector
-kubectl -n tresor delete tresorkeyring active --dry-run=server \
-	--as=system:serviceaccount:kube-system:namespace-controller
-echo "kind: the admission policy refuses a hand write and lets the garbage collector delete"
+# denied: name the policy (dry runs: admission runs, nothing changes)
+denied() {
+	if "$@" --dry-run=server >/dev/null 2>"$work/denied"; then
+		echo "kind: admitted: $*" >&2
+		exit 1
+	fi
+	grep -q "only tresor-server writes its resources" "$work/denied" || { cat "$work/denied" >&2; exit 1; }
+}
+denied kubectl -n tresor delete tresorkeyring active
+# a rollback is an UPDATE: an older copy put back
+kubectl -n tresor get tresorkeyring active -o json >"$work/keyring.json"
+denied kubectl -n tresor replace -f "$work/keyring.json"
+# the garbage collector deletes minted tokens only; the namespace controller only in a namespace being deleted
+denied kubectl -n tresor delete tresorkeyring active --as=system:serviceaccount:kube-system:generic-garbage-collector
+denied kubectl -n tresor delete tresorkeyring active --as=system:serviceaccount:kube-system:namespace-controller
+echo "kind: the admission policy refuses a hand write, a rollback, and a controller's delete outside its case"
 
 echo "kind: PostgreSQL, its password from a Kubernetes Secret"
 install p tresor-pg --set config.state.kind=postgres \
 	--set-string "config.state.dsn=host=pg.db.svc user=postgres dbname=postgres sslmode=verify-full sslrootcert=/etc/tresor-ca/ca.crt" \
 	--set config.state.auth=password --set config.state.password_ref=ref+k8s://db/pg/password
 smoke p tresor-pg
+
+echo "kind: the Kubernetes store's namespace deleted: the namespace controller deletes its resources"
+# the policy stays (cluster-scoped): a namespace that would not delete would hang here
+kubectl delete namespace tresor --timeout 120s
 echo "kind: passed"

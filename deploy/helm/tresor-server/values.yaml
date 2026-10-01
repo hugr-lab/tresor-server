@@ -8,25 +8,23 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# Replicas: kubernetes, postgres and sqlserver serve with several; sqlite with one (always).
+# Replicas: kubernetes, postgres and sqlserver serve with several; sqlite and memory with one (always).
 replicas: 2
 
-# The service's configuration (server.yaml). listen is the chart's (0.0.0.0:8080); with state.kind sqlite,
-# state.path defaults to the volume's.
+# The service's configuration (server.yaml). The chart sets listen (:8080) and derives, when they are unset:
+# tls (offload; tlsSecret's files when set), keys (local, from localKEK), state.path (sqlite: the volume's).
+# Settings belong here, not in env: the RBAC, the policy and the volumes are derived from this.
 config:
   public_url: https://tresor.example.com
-  tls: {offload: true}     # TLS at the ingress; or tlsSecret below, for the pod itself
   state:
     kind: kubernetes       # memory | sqlite | postgres | sqlserver | kubernetes
-  keys:
-    kind: local            # a local KEK: localKEK below; or azurekeyvault with workloadIdentity
-    key_file: /var/run/tresor/kek/key
-  issuers: []
+  # keys: {kind: azurekeyvault, key: https://<vault>.vault.azure.net/keys/<key>}   # with workloadIdentity
+  issuers: []              # required
   policy:
     admins: []
 
-# A local KEK from a Secret (32 bytes, base64): mounted at /var/run/tresor/kek/<key>. A static secret, for
-# clusters with no KMS.
+# A local KEK from a Secret (32 bytes, base64): mounted at /var/run/tresor/kek/<key>, and config.keys set to
+# it when unset. A static secret, for clusters with no KMS.
 localKEK:
   secretName: ""
   key: key
@@ -34,8 +32,8 @@ localKEK:
 # A kubernetes.io/tls Secret the pod serves with itself (tls.cert, tls.key set to it); empty: tls.offload.
 tlsSecret: ""
 
-# Extra environment: a client secret (exchange.client_secret_env), SSL_CERT_FILE for a private CA, TRESOR_*
-# settings.
+# Extra environment: a client secret (exchange.client_secret_env), SSL_CERT_FILE for a private CA. Not
+# TRESOR_* settings: they would change what the chart derived its RBAC and volumes from.
 env: []
 envFrom: []
 extraVolumes: []
@@ -76,6 +74,12 @@ pdb:
   enabled: true
   minAvailable: 1
 
+# With tls.offload the pod serves plain HTTP: let only the ingress controller reach it. from: the
+# NetworkPolicy's peers (e.g. [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}]).
+networkPolicy:
+  enabled: false
+  from: []
+
 # sqlite: the volume at /var/lib/tresor (the database, its WAL and shared memory).
 sqlite:
   size: 1Gi
@@ -93,6 +97,7 @@ podSecurityContext:
   runAsUser: 65532
   runAsGroup: 65532
   fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
   seccompProfile: {type: RuntimeDefault}
 securityContext:
   allowPrivilegeEscalation: false

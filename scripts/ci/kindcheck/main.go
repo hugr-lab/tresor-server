@@ -1,8 +1,10 @@
 // kindcheck is the chart's CI helper (scripts/ci/kind.sh), not shipped:
 //
 //	kindcheck issuer <dir> <issuer>        an OIDC issuer's static files: its discovery, its JWKS, its key
-//	kindcheck smoke <dir> <issuer> <url>   through the protocol: an administrator writes a secret and grants
-//	                                       its use, a user reads it - the service is up on its store
+//	kindcheck smoke <dir> <issuer> <url> [<ref> <value>]
+//	                                       through the protocol: an administrator writes a secret and grants
+//	                                       its use, a user reads it, the administrator deletes it - the service
+//	                                       is up on its store; with a reference, one that reads <value>
 package main
 
 import (
@@ -33,7 +35,9 @@ func main() {
 	case len(os.Args) == 4 && os.Args[1] == "issuer":
 		issuer(os.Args[2], os.Args[3])
 	case len(os.Args) == 5 && os.Args[1] == "smoke":
-		smoke(os.Args[2], os.Args[3], os.Args[4])
+		smoke(os.Args[2], os.Args[3], os.Args[4], "", "")
+	case len(os.Args) == 7 && os.Args[1] == "smoke":
+		smoke(os.Args[2], os.Args[3], os.Args[4], os.Args[5], os.Args[6])
 	default:
 		log.Fatal("usage: kindcheck issuer <dir> <issuer> | kindcheck smoke <dir> <issuer> <url>")
 	}
@@ -71,7 +75,7 @@ func token(dir, iss, sub string, roles ...string) string {
 	return t
 }
 
-func smoke(dir, iss, url string) {
+func smoke(dir, iss, url, ref, want string) {
 	admin, user := token(dir, iss, "admin", "secrets_admin"), token(dir, iss, "alice", "analysts")
 	call := func(method, path, tok, body string, want int) string {
 		req, err := http.NewRequest(method, strings.TrimSuffix(url, "/")+path, bytes.NewBufferString(body))
@@ -95,7 +99,19 @@ func smoke(dir, iss, url string) {
 		log.Fatal("kindcheck: the user's read holds no material")
 	}
 	call("GET", "/v1/secrets/lake", token(dir, iss, "bob", "others"), "", 404)
-	fmt.Println("kindcheck: a secret written, granted and read through the protocol")
+	call("DELETE", "/v1/secrets/lake", admin, "", 204)
+	call("GET", "/v1/secrets/lake", user, "", 404)
+	fmt.Println("kindcheck: a secret written, granted, read and deleted through the protocol")
+	if ref == "" {
+		return
+	}
+	call("PUT", "/v1/secrets/byref", admin, `{"type":"s3","provider":"config","scope":["s3://ref"],
+		"params":{"key_id":"AKIA","secret":"`+ref+`"},"redact_keys":[]}`, 201)
+	call("PUT", "/v1/secrets/byref/grants/analysts", admin, `{"principal":"role:analysts","verbs":["use"]}`, 200)
+	if got := call("GET", "/v1/secrets/byref", user, "", 200); !strings.Contains(got, want) {
+		log.Fatal("kindcheck: the reference did not read its value")
+	}
+	fmt.Println("kindcheck: a reference resolved at the read")
 }
 
 func must(err error) {

@@ -14,5 +14,9 @@ copy back (a revoked grant, a deleted secret): the MAC refuses a changed resourc
 {{- end }}
 {{- end }}
 
-Whoever can create pods in {{ .Release.Namespace }} can run as the service's ServiceAccount: keep that right
-to the platform's operators.
+Whoever can create pods in {{ .Release.Namespace }}, create a token for the service's ServiceAccount or
+impersonate it can act as the service: keep these rights to the platform's operators.
+{{- if and (.Values.config.tls | default dict).offload (not .Values.networkPolicy.enabled) }}
+
+The pod serves plain HTTP (tls.offload): networkPolicy.from can let only the ingress controller reach it.
+{{- end }}
