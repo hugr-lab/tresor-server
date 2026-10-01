@@ -94,6 +94,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/secrets/{name}/grants", s.authed(s.listGrants))
 	mux.HandleFunc("PUT /v1/secrets/{name}/grants/{id}", s.authed(s.putGrant))
 	mux.HandleFunc("DELETE /v1/secrets/{name}/grants/{id}", s.authed(s.deleteGrant))
+	// spec 004 (tresor spec 018): variables - the secrets' rules (names, grants, conditional writes), their own
+	// namespace, chosen by the route matched (of)
+	mux.HandleFunc("GET /v1/variables", s.authed(s.listVariables))
+	mux.HandleFunc("GET /v1/variables/{name}", s.authed(s.getVariable))
+	mux.HandleFunc("PUT /v1/variables/{name}", s.authed(s.putVariable))
+	mux.HandleFunc("DELETE /v1/variables/{name}", s.authed(s.deleteSecret))
+	mux.HandleFunc("PATCH /v1/variables/{name}", s.authed(s.patchSecret))
+	mux.HandleFunc("GET /v1/variables/{name}/grants", s.authed(s.listGrants))
+	mux.HandleFunc("PUT /v1/variables/{name}/grants/{id}", s.authed(s.putGrant))
+	mux.HandleFunc("DELETE /v1/variables/{name}/grants/{id}", s.authed(s.deleteGrant))
 	mux.HandleFunc("POST /v1/delegations", s.authed(s.exchange))
 	mux.HandleFunc("DELETE /v1/delegations/{id}", s.authed(s.revokeGrant))
 	mux.HandleFunc("DELETE /v1/delegations", s.authed(s.revokeGrants))
@@ -323,9 +333,10 @@ func (s *Server) mayCreate(c *auth.Caller, name string) bool {
 // that does not verify (the Kubernetes store) is 500 to an administrator only: no one else can be shown to hold
 // a verb on it.
 func (s *Server) visible(w http.ResponseWriter, r *http.Request, c *auth.Caller, name string) (*state.Secret, []string, bool) {
-	sec, err := s.store.Describe(r.Context(), name) // no material: a permission needs none
+	ns, kind := s.of(r)
+	sec, err := ns.Describe(r.Context(), name) // no material: a permission needs none
 	if errors.Is(err, keys.ErrSealed) && !s.isAdmin(c) {
-		s.log.Error("store read failed", "secret", name, "error", err.Error())
+		s.log.Error("store read failed", kind, name, "error", err.Error())
 		err = state.ErrNotFound
 	}
 	if err != nil && !errors.Is(err, state.ErrNotFound) {
@@ -338,8 +349,25 @@ func (s *Server) visible(w http.ResponseWriter, r *http.Request, c *auth.Caller,
 			return sec, verbs, true
 		}
 	}
-	problem(w, http.StatusNotFound, "not_found", fmt.Sprintf("no secret %q", name))
+	problem(w, http.StatusNotFound, "not_found", fmt.Sprintf("no %s %q", kind, name))
 	return nil, nil, false
+}
+
+// of answers the namespace a request addresses (spec 004), and what to call one of its entries - from the route
+// it matched, never from its path: a secret's name may hold "/v1/variables" (percent-encoded on the wire).
+func (s *Server) of(r *http.Request) (state.Store, string) {
+	if strings.Contains(r.Pattern, " /v1/variables") {
+		return s.store.Variables(), "variable"
+	}
+	return s.store, "secret"
+}
+
+// describe is an entry as the protocol describes it: a secret's descriptor, or a variable's.
+func (s *Server) describe(r *http.Request, sec *state.Secret, verbs []string) map[string]any {
+	if _, kind := s.of(r); kind == "variable" {
+		return variableDescriptor(sec, verbs)
+	}
+	return descriptor(sec, verbs)
 }
 
 // unavailable answers a store that failed: 503, the reason in the log only. A secret too large for the store
@@ -388,7 +416,7 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 		"api":      strings.TrimRight(s.cfg.PublicURL, "/"),
 		"issuers":  issuers,
 		"capabilities": map[string]bool{
-			"write": true, "annotate": true, "dynamic": false, "delegation": true,
+			"write": true, "annotate": true, "dynamic": false, "delegation": true, "variables": true,
 		},
 	})
 }
@@ -658,7 +686,29 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.RedactKeys = redact
-	// If-None-Match: "*" (CREATE) fails on any existing secret; with an ETag, on that version only
+	now := s.now()
+	s.upsert(w, r, name, func() *state.Secret {
+		return &state.Secret{
+			Type: body.Type, Provider: body.Provider, Scope: body.Scope, Params: body.Params,
+			RedactKeys: body.RedactKeys, Comment: deref(body.Comment), Owner: c.Owner(),
+			CreatedAt: now, UpdatedAt: now, Version: 1,
+		}
+	}, func(next *state.Secret) {
+		next.Type, next.Provider, next.Scope = body.Type, body.Provider, body.Scope
+		next.Params, next.RedactKeys = body.Params, body.RedactKeys
+		if body.Comment != nil {
+			next.Comment = *body.Comment
+		}
+	})
+}
+
+// upsert is a PUT of a secret or a variable (spec 004): created under the caller's create, or replaced under
+// its update, as the preconditions allow. If-None-Match: "*" (CREATE) fails on any existing entry; with an
+// ETag, on that version only. created builds a new entry; change applies the body to a copy.
+func (s *Server) upsert(w http.ResponseWriter, r *http.Request, name string, created func() *state.Secret,
+	change func(next *state.Secret)) {
+	c := callerOf(r)
+	ns, _ := s.of(r)
 	ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))
 	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 	type refusal struct {
@@ -667,9 +717,9 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	var refused *refusal
 	now := s.now()
-	created := false
-	saved, err := s.store.Update(r.Context(), name, func(current *state.Secret) (*state.Secret, error) {
-		refused, created = nil, false // fn may run again, on a fresher secret (state.Store)
+	isNew := false
+	saved, err := ns.Update(r.Context(), name, func(current *state.Secret) (*state.Secret, error) {
+		refused, isNew = nil, false // fn may run again, on a fresher secret (state.Store)
 		if current == nil {
 			if !s.mayCreate(c, name) {
 				kind := "no_verb"
@@ -682,12 +732,8 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 			if ifMatch != "" { // after the permission: a precondition must not tell a name exists
 				return nil, errPrecondition
 			}
-			created = true
-			return &state.Secret{
-				Type: body.Type, Provider: body.Provider, Scope: body.Scope, Params: body.Params,
-				RedactKeys: body.RedactKeys, Comment: deref(body.Comment), Owner: c.Owner(),
-				CreatedAt: now, UpdatedAt: now, Version: 1,
-			}, nil
+			isNew = true
+			return created(), nil
 		}
 		verbs := s.verbs(c, current)
 		if len(verbs) == 0 || (!slices.Contains(verbs, "update") && !s.mayCreate(c, name)) {
@@ -716,11 +762,7 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 			return nil, errors.New("refused")
 		}
 		next := *current
-		next.Type, next.Provider, next.Scope = body.Type, body.Provider, body.Scope
-		next.Params, next.RedactKeys = body.Params, body.RedactKeys
-		if body.Comment != nil {
-			next.Comment = *body.Comment
-		}
+		change(&next)
 		next.UpdatedAt = now
 		next.Version++
 		return &next, nil
@@ -735,10 +777,10 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(saved.Version, 10)))
 		status := http.StatusOK
-		if created {
+		if isNew {
 			status = http.StatusCreated
 		}
-		writeJSON(w, status, descriptor(saved, s.verbs(c, saved)))
+		writeJSON(w, status, s.describe(r, saved, s.verbs(c, saved)))
 	}
 }
 
@@ -754,8 +796,9 @@ func (s *Server) mutate(w http.ResponseWriter, r *http.Request, verb string,
 	fn func(current *state.Secret) (*state.Secret, error)) (*state.Secret, bool) {
 	c := callerOf(r)
 	name := r.PathValue("name")
+	ns, kind := s.of(r)
 	var missing, forbidden bool
-	saved, err := s.store.Update(r.Context(), name, func(current *state.Secret) (*state.Secret, error) {
+	saved, err := ns.Update(r.Context(), name, func(current *state.Secret) (*state.Secret, error) {
 		missing, forbidden = false, false // fn may run again, on a fresher secret (state.Store)
 		if current == nil {
 			missing = true
@@ -774,7 +817,7 @@ func (s *Server) mutate(w http.ResponseWriter, r *http.Request, verb string,
 	})
 	switch {
 	case missing:
-		problem(w, http.StatusNotFound, "not_found", fmt.Sprintf("no secret %q", name))
+		problem(w, http.StatusNotFound, "not_found", fmt.Sprintf("no %s %q", kind, name))
 	case forbidden:
 		s.refuse(w, c, verb)
 	case errors.Is(err, errNotHeld):
@@ -785,8 +828,8 @@ func (s *Server) mutate(w http.ResponseWriter, r *http.Request, verb string,
 		problem(w, http.StatusNotFound, "not_found", "no such grant")
 	case errors.Is(err, keys.ErrSealed) && !s.isAdmin(c) && !errors.Is(err, errInvalid):
 		// a secret that does not verify, to a caller who cannot be shown to hold a verb on it: as missing
-		s.log.Error("store write failed", "secret", name, "error", err.Error())
-		problem(w, http.StatusNotFound, "not_found", fmt.Sprintf("no secret %q", name))
+		s.log.Error("store write failed", kind, name, "error", err.Error())
+		problem(w, http.StatusNotFound, "not_found", fmt.Sprintf("no %s %q", kind, name))
 	case err != nil:
 		s.unavailable(w, "written", name, err)
 	default:
@@ -823,7 +866,7 @@ func (s *Server) patchSecret(w http.ResponseWriter, r *http.Request) {
 		return current, nil
 	})
 	if ok {
-		writeJSON(w, http.StatusOK, descriptor(saved, s.verbs(callerOf(r), saved)))
+		writeJSON(w, http.StatusOK, s.describe(r, saved, s.verbs(callerOf(r), saved)))
 	}
 }
 

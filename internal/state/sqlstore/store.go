@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -30,8 +31,10 @@ type Store struct {
 	envelope *keys.Envelope
 	log      *slog.Logger
 	lease    *lease // SingleWriter dialects only
-	migrated atomic.Bool
-	closed   atomic.Bool
+	migrated *atomic.Bool
+	closed   *atomic.Bool
+	ns       namespace
+	vars     *Store // spec 004: the variables' namespace, on the same database
 
 	// beforeWrite, in tests, runs between fn and the compare-and-set: another writer's moment.
 	beforeWrite func()
@@ -50,8 +53,9 @@ func open(ctx context.Context, db *sql.DB, d Dialect, wrapper keys.KeyWrapper, o
 	if opts.Log == nil {
 		opts.Log = slog.New(slog.DiscardHandler)
 	}
-	s := &Store{db: db, d: d, log: opts.Log}
+	s := &Store{db: db, d: d, log: opts.Log, migrated: &atomic.Bool{}, closed: &atomic.Bool{}, ns: secretsNS}
 	s.envelope = keys.NewEnvelope(wrapper, dataKeys{s}, opts.Keys)
+	defer s.linkVariables() // after the lease: the variables' store shares it
 	if !d.SingleWriter {
 		if err := migrate(ctx, db, d); err != nil {
 			return nil, err
@@ -82,7 +86,33 @@ func (s *Store) migrateOnce(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) q(query string) string { return s.d.Rebind(query) }
+// namespace is what one store keeps (spec 004): the secrets, or the variables - the same shape, tables of
+// their own, and an AAD of their own, so a sealed value never opens in the other.
+type namespace struct {
+	entries, grants string // the tables
+	aad             string
+}
+
+var (
+	secretsNS   = namespace{entries: "secrets", grants: "grants", aad: "tresor-server/params/1"}
+	variablesNS = namespace{entries: "variables", grants: "variable_grants", aad: "tresor-server/variable/1"}
+)
+
+// linkVariables makes the variables' store: this one's database, envelope, lease and state.
+func (s *Store) linkVariables() {
+	v := *s
+	v.ns, v.beforeWrite = variablesNS, nil
+	v.vars = &v
+	s.vars = &v
+}
+
+// Variables is the variables' namespace (spec 004). Closing it closes nothing: the database is this store's.
+func (s *Store) Variables() state.Store { return s.vars }
+
+// q is a query for this namespace's tables ({entries}, {grants}), in the dialect's placeholders.
+func (s *Store) q(query string) string {
+	return s.d.Rebind(strings.NewReplacer("{entries}", s.ns.entries, "{grants}", s.ns.grants).Replace(query))
+}
 
 // ready is the gate of every request: on a single-writer database, only the lease's holder serves, and
 // only once its schema is current.
@@ -110,7 +140,7 @@ type row struct {
 // selectSecrets reads secrets with their grants in one statement: one snapshot, the grants in their order.
 const selectSecrets = `SELECT s.name, s.row_id, s.type, s.provider, s.scope, s.redact_keys, s.comment, s.owner,
 	s.version, s.created_at, s.updated_at, s.data_key_id, s.sealed, g.id, g.principal, g.verbs
-	FROM secrets s LEFT JOIN grants g ON g.secret = s.name`
+	FROM {entries} s LEFT JOIN {grants} g ON g.secret = s.name`
 
 const secretColumns = `name, row_id, type, provider, scope, redact_keys, comment, owner, version, created_at, updated_at, data_key_id, sealed`
 
@@ -167,15 +197,15 @@ func (s *Store) get(ctx context.Context, name string) (*row, error) {
 	return rows[0], nil
 }
 
-// paramsAAD binds sealed params to their row, name and version: a value copied to another row, name or
-// version - or kept from a dropped secret of the same name - does not open.
-func paramsAAD(rowID, name string, version int64) []byte {
-	return []byte("tresor-server/params/1\x00" + rowID + "\x00" + name + "\x00" + strconv.FormatInt(version, 10))
+// paramsAAD binds sealed params to their namespace, row, name and version: a value copied to another
+// namespace, row, name or version - or kept from a dropped secret of the same name - does not open.
+func (s *Store) paramsAAD(rowID, name string, version int64) []byte {
+	return []byte(s.ns.aad + "\x00" + rowID + "\x00" + name + "\x00" + strconv.FormatInt(version, 10))
 }
 
 // opened is a row's secret with its params open.
 func (s *Store) opened(ctx context.Context, r *row) (*state.Secret, error) {
-	plain, err := s.envelope.Open(ctx, r.dataKeyID, paramsAAD(r.rowID, r.sec.Name, r.sec.Version), r.sealed)
+	plain, err := s.envelope.Open(ctx, r.dataKeyID, s.paramsAAD(r.rowID, r.sec.Name, r.sec.Version), r.sealed)
 	if err != nil {
 		return nil, fmt.Errorf("secret %s: its params: %w", r.sec.Name, err)
 	}
@@ -291,7 +321,7 @@ func (s *Store) Update(ctx context.Context, name string,
 // remove deletes the row r was read from; false when it changed or was replaced meanwhile. The row id is
 // in the compare: a secret dropped and created again starts at version 1 again.
 func (s *Store) remove(ctx context.Context, r *row) (bool, error) {
-	res, err := s.db.ExecContext(ctx, s.q(`DELETE FROM secrets WHERE name = ? AND version = ? AND row_id = ?`),
+	res, err := s.db.ExecContext(ctx, s.q(`DELETE FROM {entries} WHERE name = ? AND version = ? AND row_id = ?`),
 		r.sec.Name, r.sec.Version, r.rowID)
 	if err != nil {
 		return false, err
@@ -317,7 +347,7 @@ func (s *Store) write(ctx context.Context, r *row, next *state.Secret) (bool, er
 	if err != nil {
 		return false, err
 	}
-	dataKeyID, sealed, err := s.envelope.Seal(ctx, paramsAAD(rowID, next.Name, next.Version), plain)
+	dataKeyID, sealed, err := s.envelope.Seal(ctx, s.paramsAAD(rowID, next.Name, next.Version), plain)
 	clear(plain)
 	if err != nil {
 		return false, err
@@ -332,7 +362,7 @@ func (s *Store) write(ctx context.Context, r *row, next *state.Secret) (bool, er
 	args := []any{next.Type, next.Provider, string(scope), string(redact), next.Comment, next.Owner, next.Version,
 		next.CreatedAt.UnixMicro(), next.UpdatedAt.UnixMicro(), dataKeyID, sealed}
 	if r == nil {
-		_, err := tx.ExecContext(ctx, s.q(`INSERT INTO secrets (`+secretColumns+`)
+		_, err := tx.ExecContext(ctx, s.q(`INSERT INTO {entries} (`+secretColumns+`)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), append([]any{next.Name, rowID}, args...)...)
 		if s.d.Unique(err) {
 			return false, nil // created by another writer meanwhile
@@ -341,7 +371,7 @@ func (s *Store) write(ctx context.Context, r *row, next *state.Secret) (bool, er
 			return false, err
 		}
 	} else {
-		res, err := tx.ExecContext(ctx, s.q(`UPDATE secrets SET type = ?, provider = ?, scope = ?, redact_keys = ?,
+		res, err := tx.ExecContext(ctx, s.q(`UPDATE {entries} SET type = ?, provider = ?, scope = ?, redact_keys = ?,
 			comment = ?, owner = ?, version = ?, created_at = ?, updated_at = ?, data_key_id = ?, sealed = ?
 			WHERE name = ? AND version = ? AND row_id = ?`), append(args, next.Name, r.sec.Version, r.rowID)...)
 		if err != nil {
@@ -350,13 +380,13 @@ func (s *Store) write(ctx context.Context, r *row, next *state.Secret) (bool, er
 		if n, err := res.RowsAffected(); err != nil || n != 1 {
 			return false, err
 		}
-		if _, err := tx.ExecContext(ctx, s.q(`DELETE FROM grants WHERE secret = ?`), next.Name); err != nil {
+		if _, err := tx.ExecContext(ctx, s.q(`DELETE FROM {grants} WHERE secret = ?`), next.Name); err != nil {
 			return false, err
 		}
 	}
 	for i, g := range next.Grants {
 		verbs, _ := json.Marshal(g.Verbs)
-		if _, err := tx.ExecContext(ctx, s.q(`INSERT INTO grants (secret, id, position, principal, verbs)
+		if _, err := tx.ExecContext(ctx, s.q(`INSERT INTO {grants} (secret, id, position, principal, verbs)
 			VALUES (?, ?, ?, ?, ?)`), next.Name, g.ID, i, g.Principal, string(verbs)); err != nil {
 			return false, err
 		}
@@ -379,6 +409,9 @@ func (s *Store) Ping(ctx context.Context) error {
 }
 
 func (s *Store) Close() error {
+	if s.ns != secretsNS {
+		return nil // the variables' store: the database is the secrets' store's
+	}
 	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}

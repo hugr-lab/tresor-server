@@ -85,7 +85,7 @@ func clear(kubeconfig, namespace, text string) {
 	dyn := dynamic.NewForConfigOrDie(cfg)
 	ctx := context.Background()
 	total := 0
-	for _, resource := range []string{"tresorsecrets", "tresorgrants", "tresormintedtokens", "tresoractors",
+	for _, resource := range []string{"tresorsecrets", "tresorvariables", "tresorgrants", "tresormintedtokens", "tresoractors",
 		"tresordatakeys", "tresorkeyrings"} {
 		list, err := dyn.Resource(schema.GroupVersionResource{Group: "tresor.hugr-lab.io", Version: "v1alpha1",
 			Resource: resource}).Namespace(namespace).List(ctx, metav1.ListOptions{})

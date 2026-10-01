@@ -38,6 +38,8 @@ export TRESOR_SERVER_CONFIG="$root/testdata/keycloak/server.yaml"
 # the store from the environment, over the file's (spec 002: configuration from the environment)
 export TRESOR_STATE__KIND="$kind"
 export TRESOR_SERVER_WAIT="${TRESOR_SERVER_WAIT:-30}"
+# this service advertises variables (spec 004): tresor's variables.test runs too
+export TRESOR_CONFORMANCE_VARIABLES=1
 case "$kind" in
 memory) ;;
 postgres | sqlserver)

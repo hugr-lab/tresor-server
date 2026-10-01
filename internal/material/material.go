@@ -178,7 +178,8 @@ func (r *Resolver) Resolve(ctx context.Context, params map[string]json.RawMessag
 		}
 		src, ref, err := r.parse(p.text) // the allowlist again: the configuration may have changed
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w: parameter %s: %v", ErrUnresolved, key, err)
+			// ErrInvalid too: it will not resolve until the configuration changes
+			return nil, nil, fmt.Errorf("%w: parameter %s: %w", ErrUnresolved, key, err)
 		}
 		value, version, err := src.Resolve(ctx, ref)
 		if err != nil {

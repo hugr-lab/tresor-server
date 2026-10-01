@@ -4,7 +4,8 @@ title: State stores
 
 # State stores
 
-The state store keeps the secrets, their grants, and the delegation grants (servers acting for users).
+The state store keeps the secrets, the [variables](variables.md), their grants, and the delegation grants
+(servers acting for users).
 Material in it is only ever sealed: see [Encryption](encryption.md).
 
 | Kind | Replicas | For |
@@ -94,7 +95,7 @@ keys: {kind: local, key_file: /run/secrets/kek}
 ```
 
 - **Custom resources** in the service's namespace, group `tresor.hugr-lab.io/v1alpha1`: `TresorSecret`,
-  `TresorGrant`, `TresorMintedToken`, `TresorActor`, `TresorDataKey`, `TresorKeyring`.
+  `TresorVariable`, `TresorGrant`, `TresorMintedToken`, `TresorActor`, `TresorDataKey`, `TresorKeyring`.
   `kubectl get tresor` lists them.
 - **The CRDs** are in `deploy/helm/tresor-server/crds`. The service checks at start that the API server
   serves them, and does not start otherwise.

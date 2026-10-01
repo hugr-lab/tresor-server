@@ -121,8 +121,10 @@ func (c *canon) strs(ss []string) {
 	}
 }
 
-func (s *secretSpec) canonical(instance string) []byte {
-	c := newCanon(kindSecret, instance)
+// canonical is a secret's (k: TresorSecret) or a variable's (TresorVariable): the kind keeps one from verifying
+// as the other.
+func (s *secretSpec) canonical(k kind, instance string) []byte {
+	c := newCanon(k, instance)
 	c.str(s.Name)
 	c.str(s.RowID)
 	c.str(s.Type)

@@ -70,6 +70,10 @@ type Store interface {
 	Update(ctx context.Context, name string, fn func(current *Secret) (*Secret, error)) (*Secret, error)
 	// Delegations are the delegation grants, in the same database.
 	Delegations() DelegationStore
+	// Variables is the variables' namespace (spec 004): the same rules, its own entries - a Secret of type
+	// variable whose params hold "value", sealed as a secret's. Its own Variables is itself; its Delegations
+	// are this store's.
+	Variables() Store
 	// Ping says whether the store answers.
 	Ping(ctx context.Context) error
 	Close() error

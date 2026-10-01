@@ -32,12 +32,13 @@ type kind struct {
 
 var (
 	kindSecret  = kind{"TresorSecret", "tresorsecrets"}
+	kindVar     = kind{"TresorVariable", "tresorvariables"} // spec 004
 	kindGrant   = kind{"TresorGrant", "tresorgrants"}
 	kindToken   = kind{"TresorMintedToken", "tresormintedtokens"}
 	kindActor   = kind{"TresorActor", "tresoractors"}
 	kindDataKey = kind{"TresorDataKey", "tresordatakeys"}
 	kindKeyring = kind{"TresorKeyring", "tresorkeyrings"}
-	allKinds    = []kind{kindSecret, kindGrant, kindToken, kindActor, kindDataKey, kindKeyring}
+	allKinds    = []kind{kindSecret, kindVar, kindGrant, kindToken, kindActor, kindDataKey, kindKeyring}
 	labelPrefix = Group + "/"
 	labelActor  = labelPrefix + "actor-owner"
 	labelClient = labelPrefix + "actor-client"
@@ -200,9 +201,10 @@ func hashName(prefix string, parts ...[]byte) string {
 	return prefix + hex.EncodeToString(h.Sum(nil))[:40]
 }
 
-func secretName(name string) string  { return hashName("s-", []byte(name)) }
-func grantName(idHash []byte) string { return hashName("g-", idHash) }
-func actorName(owner string) string  { return hashName("a-", []byte(owner)) }
+func secretName(name string) string   { return hashName("s-", []byte(name)) }
+func variableName(name string) string { return hashName("v-", []byte(name)) }
+func grantName(idHash []byte) string  { return hashName("g-", idHash) }
+func actorName(owner string) string   { return hashName("a-", []byte(owner)) }
 func tokenName(idHash []byte, key string) string {
 	return hashName("t-", idHash, []byte(key))
 }
