@@ -19,16 +19,19 @@ const Prefix = "ref+"
 
 // Ref is a parsed reference.
 type Ref struct {
-	Scheme string // "azkv"
-	// Where, as the source parsed it (for Key Vault: the vault, the secret, a version or "")
-	Vault, Name, Version string
+	Scheme string // "azkv", "k8s"
+	// Where, as the source parsed it: for Key Vault the vault, the secret, a version or ""; for Kubernetes the
+	// namespace (Vault), the Secret (Name) and its key (Key).
+	Vault, Name, Key, Version string
 }
 
 // String is the reference as logged: where, never a value.
 func (r Ref) String() string {
 	s := Prefix + r.Scheme + "://" + r.Vault + "/" + r.Name
-	if r.Version != "" {
-		s += "/" + r.Version
+	for _, part := range []string{r.Key, r.Version} {
+		if part != "" {
+			s += "/" + part
+		}
 	}
 	return s
 }
@@ -203,4 +206,24 @@ func (r *Resolver) Resolve(ctx context.Context, params map[string]json.RawMessag
 		return params, nil, nil
 	}
 	return out, done, nil
+}
+
+// Admits says whether a reference's text parses and is within a configured allowlist: what an administrator
+// could write.
+func (r *Resolver) Admits(text string) bool {
+	_, _, err := r.parse(text)
+	return err == nil
+}
+
+// ResolveOne reads what one reference names (state.password_ref): within its source's allowlist, never logged.
+func (r *Resolver) ResolveOne(ctx context.Context, text string) (string, error) {
+	src, ref, err := r.parse(text)
+	if err != nil {
+		return "", err
+	}
+	value, _, err := src.Resolve(ctx, ref)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %v", ErrUnresolved, ref, err)
+	}
+	return value, nil
 }

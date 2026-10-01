@@ -281,3 +281,24 @@ func TestDelegationsSealedAtRest(t *testing.T) {
 }
 
 func hexOf(b []byte) string { return hex.EncodeToString(b) }
+
+// a password from a reference: read each time; an empty one or a failure is no password
+func TestRefLogin(t *testing.T) {
+	value, fail := "pw1", error(nil)
+	l := RefLogin{Resolve: func(context.Context) (string, error) { return value, fail }}
+	if pw, err := l.Password(ctx); err != nil || pw != "pw1" {
+		t.Fatalf("%q %v", pw, err)
+	}
+	value = "pw2"
+	if pw, _ := l.Password(ctx); pw != "pw2" {
+		t.Fatal("not read again")
+	}
+	value = ""
+	if _, err := l.Password(ctx); err == nil {
+		t.Fatal("an empty password")
+	}
+	fail = errors.New("the Kubernetes API answered 403 Forbidden")
+	if _, err := l.Password(ctx); err == nil {
+		t.Fatal("a failure")
+	}
+}

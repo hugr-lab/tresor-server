@@ -84,11 +84,6 @@ func Open(ctx context.Context, cfg *rest.Config, wrapper keys.KeyWrapper, opts O
 	if opts.Log == nil {
 		opts.Log = slog.New(slog.DiscardHandler)
 	}
-	cfg = rest.CopyConfig(cfg)
-	if cfg.QPS == 0 {
-		cfg.QPS, cfg.Burst = 100, 200 // client-go's own (5, 10) would throttle a service
-	}
-	cfg.UserAgent = "tresor-server"
 	if err := checkSchema(ctx, cfg); err != nil {
 		return nil, err
 	}

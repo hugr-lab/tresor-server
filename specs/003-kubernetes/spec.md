@@ -233,6 +233,11 @@ are authenticated by the root.
   match an allowed prefix.
 - **A database password from a reference**: `state.password_ref: ref+k8s://…` (or `ref+azkv://…`), read for
   each new connection - spec 001's "a password comes from a MaterialSource".
+  - It is read through a source of its own, whose allowlist is that one place.
+  - It must be **outside every `material` allowlist** (the configuration is refused otherwise): an
+    administrator could otherwise write a secret that names it, and read the database's password.
+- No cache: a read from the API server is cheap, and a rotation is seen at once.
+- The source reads Secrets by the dynamic client: client-go's typed client links every built-in API type.
 
 ### Workload identity
 
@@ -311,7 +316,7 @@ development).
    every store, `keys.cache_ttl` for all; the custom role in the Container Apps recipe.
 2. **(a) the Kubernetes store** (landed): the CRDs, `state.kind: kubernetes`, the MAC, the suite on envtest,
    conformance on it.
-3. **(b) `ref+k8s://`**: the source, its allowlist, `state.password_ref`.
+3. **(b) `ref+k8s://`** (landed): the source, its allowlist, `state.password_ref`.
 4. **(c) workload identity**: `azure.identity: workload`.
 5. **(d) the Helm chart**: every state store, the admission policy; lint, template, kind installs in CI
    (the Kubernetes store, and PostgreSQL in the cluster); the OCI chart from a tag.
