@@ -128,6 +128,24 @@ The service's own identity on Azure: for Key Vault, and for a database login by 
 `default` is for development. Its chain also takes a client secret from the environment
 (`AZURE_CLIENT_SECRET`), which is a static secret. Production runs `managed` (Container Apps) or `workload` (AKS).
 
+### `exchange` (per issuer)
+
+The service's client at the issuer, for `token_exchange` secrets. See [Token exchange](token-exchange.md).
+
+| Setting | |
+| --- | --- |
+| `client_id` | The service's client. With `key_file`, read from ZITADEL's key file when unset. |
+| `client_auth` | `secret` (default), `azure`, `file`, `keyvault` or `key_file`. |
+| `client_secret_env` | `secret`: the variable holding the client secret. |
+| `assertion_file` | `file`: a token read at each request (a projected ServiceAccount token). |
+| `key`, `key_file` | `keyvault`: a Key Vault key URL. `key_file`: ZITADEL's key file or a PEM key. |
+| `kid`, `x5t` | What the JWT's header names the key by (`kid`; `x5t` for Entra's certificates). |
+| `assertion_audience` | `issuer` (default) or `token_endpoint` (Entra). |
+
+**Roles from an object**: a `roles_claim` or `groups_claim` that is an object gives its keys (ZITADEL's
+`urn:zitadel:iam:org:project:roles`). An issuer whose claim points at an object used to get nothing, and now
+gets the keys: check the claim it names.
+
 ### `audit`, `telemetry`
 
 See [Observability](observability.md).

@@ -53,7 +53,7 @@ func TestZitadelKeyFile(t *testing.T) {
 	if err != nil || kid != "kid-1" || clientID != "svc@project" || signer.Alg() != "RS256" {
 		t.Fatalf("%v %q %q %v", signer, kid, clientID, err)
 	}
-	src := JWT(clientID, kid, Audience{Issuer: "https://acme.zitadel.cloud"}, signer)
+	src := JWT(clientID, Header{KID: kid}, Audience{Issuer: "https://acme.zitadel.cloud"}, signer)
 	a1, err := src(ctx, "https://acme.zitadel.cloud/oauth/v2/token")
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestZitadelKeyFile(t *testing.T) {
 	c, gotKID := verify(t, a1, &key.PublicKey, jose.RS256)
 	if gotKID != "kid-1" || c.Issuer != "svc@project" || c.Subject != "svc@project" ||
 		!c.Audience.Contains("https://acme.zitadel.cloud") || c.ID == "" ||
-		c.Expiry.Time().Sub(time.Now()) > 6*time.Minute || c.Expiry.Time().Before(time.Now()) {
+		c.Expiry.Time().Sub(time.Now()) > 2*time.Minute || c.Expiry.Time().Before(time.Now()) {
 		t.Fatalf("the claims: %+v", c)
 	}
 	a2, _ := src(ctx, "")
@@ -78,7 +78,7 @@ func TestPEMKey(t *testing.T) {
 	if err != nil || kid != "" || clientID != "" || signer.Alg() != "ES256" {
 		t.Fatalf("%v %q %q %v", signer, kid, clientID, err)
 	}
-	a, err := JWT("app", "x5t", Audience{Issuer: "https://login", TokenEndpoint: true}, signer)(ctx, "https://login/token")
+	a, err := JWT("app", Header{X5T: "thumb"}, Audience{Issuer: "https://login", TokenEndpoint: true}, signer)(ctx, "https://login/token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,5 +110,29 @@ func TestFile(t *testing.T) {
 	_ = os.WriteFile(p, nil, 0o600)
 	if _, err := src(ctx, ""); err == nil {
 		t.Fatal("an empty token")
+	}
+}
+
+// Entra's way: a certificate before the key in the PEM, the key named by its thumbprint (x5t)
+func TestCertificateFirstAndX5T(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not parsed")})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	signer, _, _, err := KeyFile(write(t, "bundle.pem", append(cert, keyPEM...)))
+	if err != nil {
+		t.Fatalf("a certificate before the key: %v", err)
+	}
+	a, _ := JWT("app", Header{X5T: "q0abc"}, Audience{TokenEndpoint: true}, signer)(ctx, "https://login/token")
+	tok, err := jwt.ParseSigned(a, []jose.SignatureAlgorithm{jose.RS256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.Headers[0].ExtraHeaders["x5t"] != "q0abc" || tok.Headers[0].KeyID != "" {
+		t.Fatalf("the header: %+v", tok.Headers[0])
+	}
+	small, _ := rsa.GenerateKey(rand.Reader, 1024)
+	if _, _, _, err := KeyFile(write(t, "small.pem", pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(small)}))); err == nil {
+		t.Fatal("a 1024-bit RSA key")
 	}
 }

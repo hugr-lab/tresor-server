@@ -40,6 +40,8 @@ type IdP struct {
 	// ClientKeys lets the exchange client log in with a signed assertion (spec 006): kid -> public key. An
 	// assertion must name the client, the issuer as its audience, be live, and never come twice (its jti).
 	ClientKeys map[string]any
+	// NoRefreshByExchange: no refresh token by exchange, as ZITADEL (an access token only).
+	NoRefreshByExchange bool
 	seenJTI    map[string]bool
 }
 
@@ -173,6 +175,10 @@ func (idp *IdP) token(w http.ResponseWriter, r *http.Request) {
 		claims = Claims{"sub": payload["sub"], "aud": aud, "azp": ExchangeClient,
 			"realm_access": payload["realm_access"]}
 		withRefresh = r.PostForm.Get("requested_token_type") == "urn:ietf:params:oauth:token-type:refresh_token"
+		if withRefresh && idp.NoRefreshByExchange { // as ZITADEL answers (spec 006)
+			deny("invalid_request", "requested_token_type: TypeNotSupported")
+			return
+		}
 		idp.Exchanges++
 	case "refresh_token":
 		stored, ok := idp.refreshes[r.PostForm.Get("refresh_token")]

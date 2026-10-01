@@ -70,11 +70,25 @@ type Audience struct {
 	TokenEndpoint bool
 }
 
+// Header is what the JWT's header names the key by: kid, and x5t for an IdP that knows a certificate by its
+// thumbprint (Entra: the certificate's SHA-1, base64url).
+type Header struct {
+	KID, X5T string
+}
+
 // JWT is a private_key_jwt assertion (RFC 7523): iss and sub the client id, aud the issuer or the token
-// endpoint, a fresh jti, five minutes; kid names the key as the IdP knows it.
-func JWT(clientID, kid string, aud Audience, signer Signer) Source {
+// endpoint, a fresh jti, a minute (one is made per request: a long one gains nothing, and some IdPs cap it);
+// the header names the key as the IdP knows it.
+func JWT(clientID string, h Header, aud Audience, signer Signer) Source {
 	return func(ctx context.Context, tokenURL string) (string, error) {
-		header, _ := json.Marshal(map[string]string{"alg": signer.Alg(), "typ": "JWT", "kid": kid})
+		fields := map[string]string{"alg": signer.Alg(), "typ": "JWT"}
+		if h.KID != "" {
+			fields["kid"] = h.KID
+		}
+		if h.X5T != "" {
+			fields["x5t"] = h.X5T
+		}
+		header, _ := json.Marshal(fields)
 		raw := make([]byte, 16)
 		if _, err := rand.Read(raw); err != nil {
 			return "", err
@@ -86,7 +100,7 @@ func JWT(clientID, kid string, aud Audience, signer Signer) Source {
 		}
 		claims, _ := json.Marshal(map[string]any{"iss": clientID, "sub": clientID, "aud": audience,
 			"jti": hex.EncodeToString(raw), "iat": now.Unix(), "nbf": now.Add(-30 * time.Second).Unix(),
-			"exp": now.Add(5 * time.Minute).Unix()})
+			"exp": now.Add(time.Minute).Unix()})
 		b64 := base64.RawURLEncoding
 		signing := b64.EncodeToString(header) + "." + b64.EncodeToString(claims)
 		digest := sha256.Sum256([]byte(signing))
@@ -115,7 +129,14 @@ func KeyFile(path string) (signer Signer, kid, clientID string, err error) {
 	if json.Unmarshal(raw, &zitadel) == nil && zitadel.Key != "" {
 		pemBytes, kid, clientID = []byte(zitadel.Key), zitadel.KeyID, zitadel.ClientID
 	}
-	block, _ := pem.Decode(pemBytes)
+	// the first key block: a certificate before it (as Entra's bundles have) is passed over
+	var block *pem.Block
+	for rest := pemBytes; ; {
+		block, rest = pem.Decode(rest)
+		if block == nil || strings.HasSuffix(block.Type, "PRIVATE KEY") {
+			break
+		}
+	}
 	if block == nil {
 		return nil, "", "", errors.New("exchange.key_file: no PEM key in it")
 	}
@@ -133,6 +154,9 @@ func KeyFile(path string) (signer Signer, kid, clientID string, err error) {
 	}
 	switch k := key.(type) {
 	case *rsa.PrivateKey:
+		if k.N.BitLen() < 2048 {
+			return nil, "", "", errors.New("exchange.key_file: an RSA key of 2048 bits at least")
+		}
 		return rsaSigner{k}, kid, clientID, nil
 	case *ecdsa.PrivateKey:
 		if k.Curve.Params().BitSize != 256 {

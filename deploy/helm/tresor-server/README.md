@@ -28,6 +28,10 @@ Kubernetes 1.30 or later.
   `TRESOR_*` settings: the RBAC and the volumes are derived from `config`, which they would override.
 - `replicas`: 2 by default. SQLite and memory always run one; SQLite on a PersistentVolumeClaim, with
   `strategy: Recreate`. Give SQLite block storage: a WAL on Azure Files or NFS is not safe.
+- `exchangeToken`: a projected ServiceAccount token, with the audience the identity provider expects. It is for
+  an issuer's `exchange.client_auth: file`, at `/var/run/tresor/idp-token/token` (Keycloak's federated client
+  authentication). ZITADEL's key file (`client_auth: key_file`) is mounted from a Secret with
+  `extraVolumes`.
 - `rbac.secrets: false`: the Roles on Secrets (`material.k8s.allow`, `state.password_ref`) are yours to make.
 - `networkPolicy`: with `tls.offload` the pod serves plain HTTP - bearer tokens on the pod network. Let only
   the ingress controller reach it (`networkPolicy.from`).

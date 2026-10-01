@@ -210,9 +210,13 @@ func (s *Server) mintClient(ctx context.Context, issuer string) (*mint.Client, *
 		!(u.Scheme == "https" || (u.Scheme == "http" && config.IsLoopback(u.Hostname()))) {
 		return nil, unavailableMint("the identity provider's token endpoint is not https")
 	}
-	// how the service logs in there (spec 006): an assertion made for it at start, or the client secret
+	// how the service logs in there (spec 006): an assertion made for it at start, or the client secret - and
+	// never an empty secret for an issuer meant to send an assertion
 	auth, ok := s.exchangeAuth[config.IssuerKey(issuer)]
 	if !ok {
+		if ex.ClientAuth != "" && ex.ClientAuth != "secret" {
+			return nil, unavailableMint("the service's client authentication at the identity provider is not set up")
+		}
 		auth = mint.SecretAuth{ID: ex.ClientID, Secret: ex.ClientSecret}
 	}
 	return &mint.Client{TokenURL: tokenURL, Auth: auth, Now: s.now}, nil
@@ -273,7 +277,7 @@ func (s *Server) mintAtGrant(ctx context.Context, user *auth.Caller, subject str
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			token, err := client.Exchange(ctx, subject, target[0], target[1], true)
+			token, err := exchangeForGrant(ctx, client, subject, target[0], target[1])
 			if err == nil {
 				err = s.checkMinted(token, target[0])
 			}
@@ -294,6 +298,17 @@ func (s *Server) mintAtGrant(ctx context.Context, user *auth.Caller, subject str
 	}
 	wg.Wait()
 	return results
+}
+
+// exchangeForGrant asks for a refresh token with the access token, renewed from it for the grant's life; an
+// IdP that issues none by exchange (ZITADEL, spec 006) gives an access token only, and the grant exchanges
+// again from its subject token when that one expires.
+func exchangeForGrant(ctx context.Context, client *mint.Client, subject, audience, scope string) (*mint.Token, error) {
+	token, err := client.Exchange(ctx, subject, audience, scope, true)
+	if mint.IsUnsupported(err) {
+		return client.Exchange(ctx, subject, audience, scope, false)
+	}
+	return token, err
 }
 
 // isRefusal: the IdP answered no (a lasting refusal), as opposed to not answering (an outage).
@@ -425,7 +440,7 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 				s.log.Error("a grant's subject token: the store failed", "error", err.Error())
 				return nil, storeMintProblem(err, "the grant's token could not be read")
 			}
-			minted, err := client.Exchange(ctx, string(subject), audience, scope, true)
+			minted, err := exchangeForGrant(ctx, client, string(subject), audience, scope)
 			clear(subject)
 			if err == nil {
 				err = s.checkMinted(minted, audience)

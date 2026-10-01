@@ -105,16 +105,20 @@ func IsInvalidGrant(err error) bool {
 	return errors.As(err, &e) && e.Code == "invalid_grant"
 }
 
-// IsUnsupported: the IdP does not issue refresh tokens by exchange - Keycloak names requested_token_type;
-// ZITADEL says the token type is not supported (spec 006). The service then mints access tokens only.
+// IsUnsupported: the IdP does not issue refresh tokens by exchange - Keycloak names requested_token_type,
+// ZITADEL answers TypeNotSupported (spec 006). The service then mints access tokens only.
 func IsUnsupported(err error) bool {
 	var e *Error
-	if !errors.As(err, &e) || (e.Code != "invalid_request" && e.Code != "unsupported_token_type") {
+	if !errors.As(err, &e) {
 		return false
 	}
-	d := strings.ToLower(e.Description)
-	return strings.Contains(d, "requested_token_type") || strings.Contains(d, "typenotsupported") ||
-		strings.Contains(d, "token type") && strings.Contains(d, "not supported")
+	switch e.Code {
+	case "unsupported_token_type":
+		return true
+	case "invalid_request":
+		return strings.Contains(e.Description, "requested_token_type") || strings.Contains(e.Description, "TypeNotSupported")
+	}
+	return false
 }
 
 // Exchange trades `subject` (an access token issued for this service) for one meant for `audience`; with
@@ -164,8 +168,9 @@ func (c *Client) post(ctx context.Context, form url.Values, presented string, ke
 		return nil, &Error{Code: "client_auth", Description: "no client authentication is configured"}
 	}
 	if err := c.Auth.Apply(ctx, form, c.TokenURL); err != nil {
-		// no assertion, no request: never a fallback to no authentication
-		return nil, &Error{Code: "client_auth", Description: "the service could not authenticate to the identity provider"}
+		// no assertion, no request: never a fallback to no authentication. The cause names a source, never an
+		// assertion or a key (clientauth's errors)
+		return nil, &Error{Code: "client_auth", Description: bounded("the service could not authenticate to the identity provider: "+err.Error(), 300)}
 	}
 	httpClient := c.HTTP
 	if httpClient == nil {

@@ -28,7 +28,8 @@ Every way but `secret` needs no secret of the service's own (spec 006).
 | `keyvault` | a JWT it signs with `key` in Key Vault (RS256 or ES256), as `kid` | any IdP with `private_key_jwt`, on Azure |
 | `key_file` | a JWT it signs with `key_file`: ZITADEL's key file, or a PEM key with `kid` | ZITADEL; any IdP with `private_key_jwt`, with no KMS |
 
-- **Signed JWTs**: `iss` and `sub` are the client id, plus a fresh `jti`, valid for five minutes.
+- **Signed JWTs**: `iss` and `sub` are the client id, plus a fresh `jti`, valid for one minute. The header
+  names the key by `kid`, and by `x5t` (a certificate's thumbprint) when it is set.
   - `aud` is the issuer by default; `assertion_audience: token_endpoint` makes it the token endpoint, which
     Entra wants.
   - A new one is made for each request: an IdP may refuse a `jti` it has seen.
@@ -46,11 +47,30 @@ exchange: {client_id: <the app registration's client id>, client_auth: azure}
 azure: {identity: managed}         # Container Apps; workload on AKS
 ```
 
-1. On the app registration, add a federated credential:
-   - Container Apps: *Managed identity*, the service's user-assigned identity;
-   - AKS: the cluster's OIDC issuer, the ServiceAccount's subject, audience `api://AzureADTokenExchange`.
+1. On the app registration, add a federated credential of the kind *Managed identity*, naming the service's
+   user-assigned identity. This holds on Container Apps and on AKS alike: the assertion is the identity's
+   Entra token.
 2. The service asks its identity for a token with the audience `api://AzureADTokenExchange`, and sends it as
    the client assertion.
+
+- **On AKS, an alternative**: the federated credential trusts the cluster's OIDC issuer and the
+  ServiceAccount's subject. The service then sends the pod's projected token itself: `client_auth: file`,
+  `assertion_file` the path in `AZURE_FEDERATED_TOKEN_FILE`.
+- **Sovereign clouds** use another audience. This build sends the public cloud's.
+
+### Entra with a certificate (`keyvault`)
+
+```yaml
+exchange:
+  client_id: <the app registration's client id>
+  client_auth: keyvault
+  key: https://corp-kv.vault.azure.net/keys/tresor-exchange
+  x5t: <the certificate's SHA-1 thumbprint, base64url>
+  assertion_audience: token_endpoint
+```
+
+- Entra's app certificates are RSA.
+- The JWT names the certificate by `x5t`, and its `aud` is the token endpoint.
 
 ## Keycloak: a ServiceAccount token
 
@@ -69,6 +89,13 @@ config:
 
 The chart mounts a projected ServiceAccount token with the audience the IdP expects. The kubelet rotates it,
 and the service reads it at each request.
+
+On Keycloak's side (see its documentation on federated client authentication for Kubernetes service
+accounts):
+- an identity provider trusts the cluster's service-account issuer;
+- that issuer must be reachable from Keycloak, or its JWKS configured;
+- the `duckdb-secrets` client authenticates with it, for the subject
+  `system:serviceaccount:<namespace>:<serviceAccount>`.
 
 ## ZITADEL, on a stack with no Azure
 
@@ -105,3 +132,13 @@ issuers:
   - It is asymmetric, never sent, and revoked and replaced in ZITADEL. Rotate it there.
   - ZITADEL generates it, so a key of your own cannot be registered.
   - Where there is Azure after all, import it into Key Vault and use `keyvault`.
+- **The chart** mounts the key file from a Secret through `extraVolumes` and `extraVolumeMounts`.
+- **The service reads the key file at start.** After a rotation, update the Secret and restart the pods.
+
+## Keys in Key Vault
+
+- `keyvault` signs with the key's **current version**. Rotating it changes the key the IdP must know: register
+  the new one first.
+- The service reads the key's type at start. A vault that does not answer then stops the start, as for the
+  KEK.
+- Readiness signs a test assertion every 30 seconds per replica.

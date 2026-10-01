@@ -459,8 +459,8 @@ func exchangeAuth(ctx context.Context, cfg *config.Config) (map[string]mint.Clie
 				}
 				kid = ex.KID
 			}
-			if kid == "" {
-				return nil, nil, fmt.Errorf("exchange.kid: the key file names no keyId - set kid")
+			if kid == "" && ex.X5T == "" {
+				return nil, nil, fmt.Errorf("exchange.kid: the key file names no keyId - set kid (or x5t)")
 			}
 			if fileClient != "" {
 				if clientID != "" && clientID != fileClient {
@@ -471,7 +471,7 @@ func exchangeAuth(ctx context.Context, cfg *config.Config) (map[string]mint.Clie
 			if clientID == "" {
 				return nil, nil, fmt.Errorf("exchange.client_id: the key file names no clientId - set client_id")
 			}
-			source = clientauth.JWT(clientID, kid, aud, signer)
+			source = clientauth.JWT(clientID, clientauth.Header{KID: kid, X5T: ex.X5T}, aud, signer)
 		case "keyvault":
 			cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
 			if err != nil {
@@ -481,7 +481,7 @@ func exchangeAuth(ctx context.Context, cfg *config.Config) (map[string]mint.Clie
 			if err != nil {
 				return nil, nil, err
 			}
-			source = clientauth.JWT(clientID, ex.KID, aud, signer)
+			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
 		}
 		out[config.IssuerKey(is.Issuer)] = mint.AssertionAuth{ID: clientID, Assertion: source}
 		checks = append(checks, health.Check{

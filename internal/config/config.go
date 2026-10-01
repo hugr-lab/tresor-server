@@ -193,6 +193,8 @@ type ExchangeClient struct {
 	Key           string `yaml:"key"`
 	KeyFile       string `yaml:"key_file"`
 	KID           string `yaml:"kid"`
+	// X5T is the certificate's thumbprint in the JWT's header, for an IdP that knows a key by it (Entra).
+	X5T string `yaml:"x5t"`
 	// AssertionAudience is a signed JWT's aud: issuer (the default; ZITADEL, Keycloak) or token_endpoint (Entra).
 	AssertionAudience string `yaml:"assertion_audience"`
 }
@@ -577,13 +579,14 @@ func (ex *ExchangeClient) validate(identity string) error {
 		return errors.New("exchange needs client_id")
 	}
 	set := map[string]bool{"client_secret_env": ex.ClientSecretEnv != "", "assertion_file": ex.AssertionFile != "",
-		"key": ex.Key != "", "key_file": ex.KeyFile != "", "kid": ex.KID != "", "assertion_audience": ex.AssertionAudience != ""}
+		"key": ex.Key != "", "key_file": ex.KeyFile != "", "kid": ex.KID != "", "x5t": ex.X5T != "",
+		"assertion_audience": ex.AssertionAudience != ""}
 	allowed := map[string][]string{
 		"secret":   {"client_secret_env"},
 		"azure":    {},
 		"file":     {"assertion_file"},
-		"keyvault": {"key", "kid", "assertion_audience"},
-		"key_file": {"key_file", "kid", "assertion_audience"},
+		"keyvault": {"key", "kid", "x5t", "assertion_audience"},
+		"key_file": {"key_file", "kid", "x5t", "assertion_audience"},
 	}[ex.ClientAuth]
 	for name, on := range set {
 		if on && !slices.Contains(allowed, name) {
@@ -611,8 +614,8 @@ func (ex *ExchangeClient) validate(identity string) error {
 			return errors.New("exchange.client_auth: file reads assertion_file (a projected ServiceAccount token)")
 		}
 	case "keyvault":
-		if ex.Key == "" || ex.KID == "" {
-			return errors.New("exchange.client_auth: keyvault signs with key (a Key Vault key URL) as kid")
+		if ex.Key == "" || (ex.KID == "" && ex.X5T == "") {
+			return errors.New("exchange.client_auth: keyvault signs with key (a Key Vault key URL), named by kid or x5t")
 		}
 		if identity == "" {
 			return errors.New("exchange.client_auth: keyvault signs with the service's Azure identity: azure.identity is required")
