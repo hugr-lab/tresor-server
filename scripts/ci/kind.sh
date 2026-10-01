@@ -109,12 +109,69 @@ smoke() {
 	"$work/kindcheck" smoke "$work/idp" "$issuer" "http://127.0.0.1:$port" "${@:3}"
 }
 
+echo "kind: an OpenTelemetry collector (spec 005): the audit's log records, the metrics"
+kubectl create namespace otel
+kubectl -n otel create configmap otelcol --from-literal=config.yaml='receivers:
+  otlp: {protocols: {http: {endpoint: 0.0.0.0:4318}}}
+exporters:
+  debug: {verbosity: detailed}
+service:
+  pipelines:
+    logs: {receivers: [otlp], exporters: [debug]}
+    metrics: {receivers: [otlp], exporters: [debug]}
+    traces: {receivers: [otlp], exporters: [debug]}'
+kubectl apply -f - <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: otelcol, namespace: otel}
+spec:
+  selector: {matchLabels: {app: otelcol}}
+  template:
+    metadata: {labels: {app: otelcol}}
+    spec:
+      containers:
+        - name: otelcol
+          image: otel/opentelemetry-collector:0.140.0
+          args: [--config, /conf/config.yaml]
+          ports: [{containerPort: 4318}]
+          volumeMounts: [{name: conf, mountPath: /conf}]
+      volumes: [{name: conf, configMap: {name: otelcol}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: otelcol, namespace: otel}
+spec:
+  selector: {app: otelcol}
+  ports: [{port: 4318}]
+EOF
+kubectl -n otel rollout status deploy/otelcol --timeout 180s
+
 echo "kind: the Kubernetes store, ref+k8s from another namespace, the admission policy"
 kubectl create namespace data
 kubectl -n data create secret generic duckdb-lake --from-literal=secret=from-a-kubernetes-secret
 install t tresor --set config.state.kind=kubernetes \
-	--set-json 'config.material={"k8s":{"allow":[{"namespace":"data","prefixes":["duckdb-"]}]}}'
+	--set-json 'config.material={"k8s":{"allow":[{"namespace":"data","prefixes":["duckdb-"]}]}}' \
+	--set-json 'env=[{"name":"SSL_CERT_FILE","value":"/etc/tresor-ca/ca.crt"},{"name":"OTEL_EXPORTER_OTLP_ENDPOINT","value":"http://otelcol.otel.svc:4318"},{"name":"OTEL_METRIC_EXPORT_INTERVAL","value":"2000"}]'
 smoke t tresor ref+k8s://data/duckdb-lake/secret from-a-kubernetes-secret
+# the audit reached the collector, with no material in it; the pods' stdout has it as JSON lines too
+for _ in $(seq 30); do
+	kubectl -n otel logs deploy/otelcol | grep -q "tresor.kind: Str(read)" && break
+	sleep 2
+done
+collected="$(kubectl -n otel logs deploy/otelcol)"
+grep -q "tresor.kind: Str(read)" <<<"$collected" || { echo "kind: no audit record reached the collector" >&2; exit 1; }
+grep -q "tresor.server.requests" <<<"$collected" || { echo "kind: no metric reached the collector" >&2; exit 1; }
+if grep -qE "kind-material|from-a-kubernetes-secret|eu-west" <<<"$collected"; then
+	echo "kind: material reached the collector" >&2
+	exit 1
+fi
+stdout="$(kubectl -n tresor logs -l app.kubernetes.io/instance=t --tail 500)"
+grep -q '"audit":"tresor-server/1"' <<<"$stdout" || { echo "kind: no audit line on stdout" >&2; exit 1; }
+if grep -qE "kind-material|from-a-kubernetes-secret|eu-west" <<<"$stdout"; then
+	echo "kind: material reached the pods' log" >&2
+	exit 1
+fi
+echo "kind: the audit on stdout and in the collector, the metrics, no material"
 kubectl -n tresor get tresor
 # a hand write is refused; the service's own resources stay as written
 if kubectl -n tresor apply -f - 2>"$work/denied" <<'EOF'; then

@@ -139,6 +139,7 @@ func (s *Server) delegated(r *http.Request, actor *auth.Caller) (*auth.Caller, *
 // --- grants ------------------------------------------------------------------------------------------
 
 func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
+	observed(r).event.Detail = "exchanged"
 	actor := callerOf(r)
 	if actor.Actor != "" {
 		problem(w, http.StatusForbidden, "actor_not_allowed", "a grant is exchanged with the server's own token only")
@@ -235,6 +236,7 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 // admin revokes every grant matching the filters (at least one); anyone else revokes the grants made
 // for themselves - a user ends every session a server holds for them.
 func (s *Server) revokeGrants(w http.ResponseWriter, r *http.Request) {
+	observed(r).event.Detail = "revoked"
 	c := callerOf(r)
 	if c.Actor != "" {
 		problem(w, http.StatusForbidden, "actor_not_allowed", "grants are revoked with the caller's own token")
@@ -260,6 +262,7 @@ func (s *Server) revokeGrants(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
+	observed(r).event.Detail = "revoked"
 	c := callerOf(r)
 	gr, err := s.loadGrant(r.Context(), r.PathValue("id"))
 	if err != nil {

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/hugr-lab/tresor-server/internal/api"
+	"github.com/hugr-lab/tresor-server/internal/audit"
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/azure"
 	"github.com/hugr-lab/tresor-server/internal/config"
@@ -35,6 +36,8 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/state/kubestore"
 	"github.com/hugr-lab/tresor-server/internal/state/memory"
 	"github.com/hugr-lab/tresor-server/internal/state/sqlstore"
+	"github.com/hugr-lab/tresor-server/internal/telemetry"
+	"github.com/hugr-lab/tresor-server/internal/traced"
 )
 
 // version is the build's (-ldflags -X main.version=...): the image's tag.
@@ -260,7 +263,7 @@ func materialResolver(cfg *config.Config) (*material.Resolver, error) {
 		for i, a := range kv.Allow {
 			allow[i] = azkvsource.Allow{Vault: a.Vault, Prefixes: a.Prefixes}
 		}
-		sources = append(sources, azkvsource.New(allow, cred, azkvsource.Options{DNSSuffix: kv.DNSSuffix, CacheTTL: kv.CacheTTL}))
+		sources = append(sources, traced.Source(azkvsource.New(allow, cred, azkvsource.Options{DNSSuffix: kv.DNSSuffix, CacheTTL: kv.CacheTTL})))
 	}
 	if k := cfg.Material.K8s; len(k.Allow) > 0 {
 		// the service's own namespace holds its own credentials (a local KEK, a password, a client secret):
@@ -285,7 +288,7 @@ func materialResolver(cfg *config.Config) (*material.Resolver, error) {
 		if err != nil {
 			return nil, err
 		}
-		sources = append(sources, src)
+		sources = append(sources, traced.Source(src))
 	}
 	if len(sources) == 0 {
 		return nil, nil
@@ -293,8 +296,16 @@ func materialResolver(cfg *config.Config) (*material.Resolver, error) {
 	return material.New(sources...), nil
 }
 
-// keyWrapper is the configured KEK.
+// keyWrapper is the configured KEK, traced (spec 005).
 func keyWrapper(cfg *config.Config) (keys.KeyWrapper, error) {
+	w, err := kekOf(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return traced.Wrapper(w), nil
+}
+
+func kekOf(cfg *config.Config) (keys.KeyWrapper, error) {
 	k := cfg.Keys
 	switch {
 	case k.Kind == "local" && k.KeyEnv != "":
@@ -321,6 +332,18 @@ func serve(configPath string, log *slog.Logger) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// spec 005: OpenTelemetry from the environment (nothing exported without an endpoint); flushed at the end
+	flush, err := telemetry.Setup(ctx, telemetry.Options{Version: version, Traces: cfg.Telemetry.TracesOn()})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		done, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := flush(done); err != nil {
+			log.Warn("telemetry was not flushed", "error", err.Error())
+		}
+	}()
 
 	st, stateChecks, err := openState(ctx, cfg, log)
 	if err != nil {
@@ -336,7 +359,12 @@ func serve(configPath string, log *slog.Logger) error {
 	if ref := cfg.State.PasswordRef; ref != "" && resolver != nil && resolver.Admits(ref) {
 		return errors.New("state.password_ref is within material's allowlist: an administrator could read the database's password")
 	}
-	srv, err := api.New(ctx, cfg, verifier, st, log, api.WithMaterial(resolver))
+	level, err := audit.ParseLevel(cfg.Audit.Level)
+	if err != nil {
+		return err
+	}
+	srv, err := api.New(ctx, cfg, verifier, traced.Store(st), log, api.WithMaterial(resolver),
+		api.WithAudit(audit.New(level, os.Stdout)))
 	if err != nil {
 		return err
 	}

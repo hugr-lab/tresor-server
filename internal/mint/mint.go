@@ -16,6 +16,12 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/hugr-lab/tresor-server/internal/telemetry"
 )
 
 // sharedHTTP is every mint's client: one connection pool, bounded requests.
@@ -106,7 +112,16 @@ func (c *Client) Refresh(ctx context.Context, refresh string) (*Token, error) {
 	return token, err
 }
 
-func (c *Client) post(ctx context.Context, form url.Values, presented string, keepRefresh bool) (*Token, error) {
+func (c *Client) post(ctx context.Context, form url.Values, presented string, keepRefresh bool) (_ *Token, err error) {
+	// spec 005: the IdP's time, under tresor's trace; never a token, never the error's text
+	ctx, span := telemetry.Tracer().Start(ctx, "idp.token", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(attribute.String("tresor.grant_type", form.Get("grant_type"))))
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, "failed")
+		}
+		span.End()
+	}()
 	form.Set("client_id", c.ClientID)
 	form.Set("client_secret", c.ClientSecret) // client_secret_post, as every tresor flow
 	httpClient := c.HTTP

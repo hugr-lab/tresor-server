@@ -22,6 +22,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/hugr-lab/tresor-server/internal/audit"
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/keys"
@@ -49,6 +50,7 @@ type Server struct {
 	direct    directCache        // tokens minted for callers reading directly (specs/010)
 	mintLocks mintLocks          // one replica's renewals of a grant's token, per grant and audience
 	material  *material.Resolver // references (ref+...): nil refuses them all
+	audit     *audit.Auditor     // spec 005: nil records nothing
 }
 
 // New wires a server; the verifier and the store are the caller's. It reads the store once, to report
@@ -122,7 +124,8 @@ func (s *Server) Handler() http.Handler {
 
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status  int
+	problem string
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
@@ -143,7 +146,10 @@ func (s *Server) logged(next http.Handler) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		start := time.Now()
 		holder := &auth.Caller{}
+		r, o, span := s.begin(r, w)
 		next.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), loggedCallerKey{}, holder)))
+		o.problem = rec.problem
+		s.finish(r, o, span, rec.status, time.Since(start))
 		attrs := []any{"method", r.Method, "path", loggedPath(r.URL.Path), "status", rec.status,
 			"subject", holder.Subject, "ms", time.Since(start).Milliseconds()}
 		// the caller's trace (protocol, Tracing): its ids, so the line can be found from the client's trace
@@ -194,6 +200,12 @@ func loggedPath(path string) string {
 // authed verifies the bearer token; a failure is 401 unauthenticated with the reason in the log only.
 func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		o := observed(r)
+		o.pattern = r.Pattern
+		if name := r.PathValue("name"); name != "" {
+			_, o.event.Entry = s.of(r)
+			o.event.Name = name
+		}
 		// the scheme is case-insensitive (RFC 9110 §11.1)
 		header := r.Header.Get("Authorization")
 		scheme, raw, ok := strings.Cut(header, " ")
@@ -229,6 +241,7 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 			}
 			*holder = auth.Caller{Subject: subject}
 		}
+		o.caller = caller
 		next(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, caller)))
 	}
 }
@@ -241,6 +254,9 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 
 // problem is an RFC 9457 error with a type from the protocol's list.
 func problem(w http.ResponseWriter, status int, kind, detail string) {
+	if rec, ok := w.(*statusRecorder); ok {
+		rec.problem = kind // the audit's reason
+	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"type": kind, "title": kind, "status": status, "detail": detail})
@@ -523,9 +539,12 @@ func (s *Server) getSecret(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusServiceUnavailable, "service_unavailable", "a reference of the secret did not resolve")
 		return
 	}
+	o := observed(r)
+	o.event.Version = sec.Version
 	for _, res := range resolved { // where and which version, never the value
 		s.log.Info("reference resolved", "secret", sec.Name, "param", res.Param, "ref", res.Ref.String(),
 			"version", res.Version)
+		o.event.Refs = append(o.event.Refs, audit.Ref{Param: res.Param, Ref: res.Ref.String(), Version: res.Version})
 	}
 	if params == nil {
 		params = map[string]json.RawMessage{}
@@ -777,8 +796,11 @@ func (s *Server) upsert(w http.ResponseWriter, r *http.Request, name string, cre
 	default:
 		w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(saved.Version, 10)))
 		status := http.StatusOK
+		o := observed(r)
+		o.event.Version, o.event.Detail = saved.Version, "replaced"
 		if isNew {
 			status = http.StatusCreated
+			o.event.Detail = "created"
 		}
 		writeJSON(w, status, s.describe(r, saved, s.verbs(c, saved)))
 	}
@@ -866,6 +888,7 @@ func (s *Server) patchSecret(w http.ResponseWriter, r *http.Request) {
 		return current, nil
 	})
 	if ok {
+		observed(r).event.Version = saved.Version
 		writeJSON(w, http.StatusOK, s.describe(r, saved, s.verbs(callerOf(r), saved)))
 	}
 }
@@ -901,6 +924,7 @@ func (s *Server) putGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	observed(r).event.Target = body.Principal
 	if err := validName("the grant's id", id); err != nil {
 		problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
 		return
@@ -943,6 +967,7 @@ func (s *Server) deleteGrant(w http.ResponseWriter, r *http.Request) {
 		for _, g := range current.Grants {
 			if g.ID == id {
 				found = true
+				observed(r).event.Target = g.Principal
 				continue
 			}
 			kept = append(kept, g)
