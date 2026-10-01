@@ -3,6 +3,9 @@ package azurekeyvault
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -80,6 +83,20 @@ func (v *vault) WrapKey(_ context.Context, name, version string, p azkeys.KeyOpe
 		return azkeys.WrapKeyResponse{}, err
 	}
 	return azkeys.WrapKeyResponse{KeyOperationResult: azkeys.KeyOperationResult{KID: v.kid(version), Result: out}}, nil
+}
+
+func (v *vault) Sign(_ context.Context, name, version string, p azkeys.SignParameters, _ *azkeys.SignOptions) (azkeys.SignResponse, error) {
+	v.mu.Lock()
+	key := v.versions[version]
+	v.mu.Unlock()
+	if key == nil || *p.Algorithm != azkeys.SignatureAlgorithmRS256 {
+		return azkeys.SignResponse{}, &azcore.ResponseError{StatusCode: 400, ErrorCode: "BadParameter"}
+	}
+	sig, err := rsa.SignPKCS1v15(nil, key, crypto.SHA256, p.Value) // deterministic, as the vault's RS256
+	if err != nil {
+		return azkeys.SignResponse{}, err
+	}
+	return azkeys.SignResponse{KeyOperationResult: azkeys.KeyOperationResult{KID: v.kid(version), Result: sig}}, nil
 }
 
 func (v *vault) UnwrapKey(_ context.Context, name, version string, p azkeys.KeyOperationParameters, _ *azkeys.UnwrapKeyOptions) (azkeys.UnwrapKeyResponse, error) {
@@ -248,14 +265,14 @@ func (s *dataKeys) List(context.Context) ([]keys.DataKey, error) {
 	return out, nil
 }
 
-func (s *dataKeys) Rewrapped(_ context.Context, id, from string, wrapped []byte, kekID string) (bool, error) {
+func (s *dataKeys) Rewrapped(_ context.Context, id, from string, wrapped []byte, kekID string, tag []byte) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	dk, ok := s.keys[id]
 	if !ok || dk.KEKID != from {
 		return false, nil
 	}
-	dk.Wrapped, dk.KEKID = wrapped, kekID
+	dk.Wrapped, dk.KEKID, dk.Tag = wrapped, kekID, tag
 	s.keys[id] = dk
 	return true, nil
 }
@@ -274,10 +291,10 @@ func TestRewrap(t *testing.T) {
 	old := v.current
 	v.rotate(t)
 	w.readAt = time.Time{}
-	if n, err := e.Rewrap(ctx); err != nil || n != 1 {
+	if n, err := e.Rewrap(ctx, false, nil); err != nil || n != 1 {
 		t.Fatalf("rewrap: %d %v", n, err)
 	}
-	if n, _ := e.Rewrap(ctx); n != 0 {
+	if n, _ := e.Rewrap(ctx, false, nil); n != 0 {
 		t.Fatalf("a second rewrap: %d", n)
 	}
 	v.mu.Lock()
@@ -301,8 +318,61 @@ func TestRewrapSkips(t *testing.T) {
 	store.keys["foreign"] = keys.DataKey{ID: "foreign", KEKID: "local:0123", Wrapped: []byte("w")}
 	v.rotate(t)
 	w.readAt = time.Time{}
-	n, err := e.Rewrap(ctx)
+	n, err := e.Rewrap(ctx, false, nil)
 	if n != 1 || err == nil || !strings.Contains(err.Error(), "foreign") {
 		t.Fatalf("rewrap past a foreign data key: %d %v", n, err)
+	}
+}
+
+// an RSA KEK wraps with its public key: whoever could write the store could plant a data key that unwraps, and
+// seal material of their choice under it. Its tag, under a root only the vault computes, gives it away
+func TestPlantedDataKey(t *testing.T) {
+	v := newVault(t)
+	w, _ := NewWithOps(v.url+"/keys/"+v.name, v)
+	store := &dataKeys{keys: map[string]keys.DataKey{}}
+	e := keys.NewEnvelope(w, store, keys.Options{})
+	if _, _, err := e.Seal(ctx, nil, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	// the attacker: the public key, a data key of their own, a tag they cannot compute
+	mine := bytes.Repeat([]byte{9}, 32)
+	v.mu.Lock()
+	pub := v.versions[v.current].PublicKey
+	kid := string(*v.kid(v.current)) + "#RSA-OAEP-256"
+	v.mu.Unlock()
+	wrapped, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, &pub, mine, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a value the attacker seals under their own data key, as the store would hold it: nonce, then ciphertext
+	block, _ := aes.NewCipher(mine)
+	gcm, _ := cipher.NewGCM(block)
+	nonce := make([]byte, gcm.NonceSize())
+	sealed := gcm.Seal(nonce, nonce, []byte("the attacker's material"), []byte("aad"))
+	for name, tag := range map[string][]byte{"a forged tag": bytes.Repeat([]byte{1}, 32), "no tag": nil} {
+		store.keys["planted"] = keys.DataKey{ID: "planted", KEKID: kid, Wrapped: wrapped, Tag: tag}
+		fresh := keys.NewEnvelope(w, store, keys.Options{})
+		if plain, err := fresh.Open(ctx, "planted", []byte("aad"), sealed); !errors.Is(err, keys.ErrSealed) {
+			t.Errorf("%s: opened %q, %v", name, plain, err)
+		}
+	}
+	// rewrap tags a data key with none - the operator vouches for the store as it is - and never one whose
+	// tag does not match
+	store.keys["planted"] = keys.DataKey{ID: "planted", KEKID: kid, Wrapped: wrapped, Tag: bytes.Repeat([]byte{1}, 32)}
+	if _, err := e.Rewrap(ctx, false, nil); err == nil || !strings.Contains(err.Error(), "planted") {
+		t.Fatalf("rewrap over a forged tag: %v", err)
+	}
+	delete(store.keys, "planted")
+	// a data key with no tag: a routine rewrap (after a rotation) skips and names it - one planted since would
+	// carry none either; only --tag-untagged tags it, naming each
+	store.keys["legacy"] = keys.DataKey{ID: "legacy", KEKID: kid, Wrapped: wrapped}
+	if n, err := e.Rewrap(ctx, false, nil); n != 0 || err == nil || !strings.Contains(err.Error(), "legacy") ||
+		len(store.keys["legacy"].Tag) != 0 {
+		t.Fatalf("a routine rewrap over a key with no tag: %d %v", n, err)
+	}
+	var named []string
+	if n, err := e.Rewrap(ctx, true, func(id string) { named = append(named, id) }); n != 1 || err != nil ||
+		len(store.keys["legacy"].Tag) == 0 || len(named) != 1 || named[0] != "legacy" {
+		t.Fatalf("rewrap --tag-untagged: %d %v %v", n, err, named)
 	}
 }

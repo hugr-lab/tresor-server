@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -21,7 +23,13 @@ type Envelope struct {
 	now     func() time.Time
 
 	mu    sync.Mutex
-	cache map[string]cached // data key id -> unwrapped
+	cache map[string]cached     // data key id -> unwrapped
+	roots map[string]cachedRoot // KEK id -> root
+}
+
+type cachedRoot struct {
+	root    []byte
+	expires time.Time
 }
 
 type cached struct {
@@ -44,7 +52,7 @@ func NewEnvelope(wrapper KeyWrapper, keys DataKeyStore, opts Options) *Envelope 
 		opts.CacheTTL = 5 * time.Minute
 	}
 	return &Envelope{wrapper: wrapper, keys: keys, maxAge: opts.DataKeyMaxAge, ttl: opts.CacheTTL,
-		now: time.Now, cache: map[string]cached{}}
+		now: time.Now, cache: map[string]cached{}, roots: map[string]cachedRoot{}}
 }
 
 // Seal encrypts plain under the active data key with aad bound to it; it names the data key it used.
@@ -77,7 +85,50 @@ func (e *Envelope) Open(ctx context.Context, dataKeyID string, aad, sealed []byt
 	return plain, nil
 }
 
-// Check wraps and unwraps a throwaway key: the KEK answers (readiness).
+// root is the KEK's root for kekID, from the cache or computed now (one TTL with the data keys: when the service
+// loses its KEK rights, it stops within it).
+func (e *Envelope) root(ctx context.Context, kekID string) ([]byte, error) {
+	e.mu.Lock()
+	c, ok := e.roots[kekID]
+	e.mu.Unlock()
+	if ok && e.now().Before(c.expires) {
+		return c.root, nil
+	}
+	root, err := e.wrapper.Root(ctx, kekID)
+	if err != nil {
+		return nil, fmt.Errorf("the KEK's root: %w", err)
+	}
+	e.mu.Lock()
+	e.roots[kekID] = cachedRoot{root: root, expires: e.now().Add(e.ttl)}
+	e.mu.Unlock()
+	return root, nil
+}
+
+// Tag authenticates a data key under the root of the KEK version that wrapped it.
+func Tag(root []byte, id, kekID string, wrapped []byte) []byte {
+	m := hmac.New(sha256.New, root)
+	m.Write([]byte("tresor-server/data-key/1\x00" + id + "\x00" + kekID + "\x00"))
+	m.Write(wrapped)
+	return m.Sum(nil)
+}
+
+// authentic checks a stored data key's tag: one planted by whoever could write the store - wrapped with an RSA
+// KEK's public key, say - has none that matches (ErrSealed). A KEK that does not answer is not ErrSealed.
+func (e *Envelope) authentic(ctx context.Context, dk DataKey) error {
+	if len(dk.Tag) == 0 {
+		return fmt.Errorf("%w: data key %s has no tag (made before spec 003: tresor-server rewrap tags it)", ErrSealed, dk.ID)
+	}
+	root, err := e.root(ctx, dk.KEKID)
+	if err != nil {
+		return err
+	}
+	if !hmac.Equal(dk.Tag, Tag(root, dk.ID, dk.KEKID, dk.Wrapped)) {
+		return fmt.Errorf("%w: data key %s is not authentic", ErrSealed, dk.ID)
+	}
+	return nil
+}
+
+// Check wraps and unwraps a throwaway key, and computes the current root: the KEK answers (readiness).
 func (e *Envelope) Check(ctx context.Context) error {
 	probe := make([]byte, 32)
 	if _, err := rand.Read(probe); err != nil {
@@ -91,13 +142,20 @@ func (e *Envelope) Check(ctx context.Context) error {
 	if err != nil || string(back) != string(probe) {
 		return errors.New("the KEK does not unwrap what it wrapped")
 	}
+	if _, err := e.wrapper.Root(ctx, kekID); err != nil {
+		return fmt.Errorf("the KEK does not give its root (sign): %w", err)
+	}
 	return nil
 }
 
-// Rewrap wraps every data key under the KEK's current version, where it is not already: after a rotation
-// of the KEK, its old versions can be retired. The values sealed under the data keys are not touched. It
-// goes on past a data key it cannot rewrap: how many were rewrapped, and an error naming each one skipped.
-func (e *Envelope) Rewrap(ctx context.Context) (int, error) {
+// Rewrap wraps every data key under the KEK's current version, where it is not already, and tags it: after a
+// rotation of the KEK its old versions can be retired. A data key whose tag does not match is never rewrapped.
+// A data key with no tag (made before spec 003) is tagged only when tagUntagged says so - once, at the upgrade,
+// the operator vouching for the store as it is; otherwise it is skipped and named, for a key planted since
+// would carry no tag either. The values sealed under the data keys are not touched. It goes on past a data key
+// it cannot rewrap: how many were rewrapped, and an error naming each one skipped. tagged names each data key
+// it tagged from none.
+func (e *Envelope) Rewrap(ctx context.Context, tagUntagged bool, tagged func(id string)) (int, error) {
 	current, err := e.wrapper.Current(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("the KEK: %w", err)
@@ -109,16 +167,30 @@ func (e *Envelope) Rewrap(ctx context.Context) (int, error) {
 	n := 0
 	var skipped []error
 	for _, dk := range all {
-		if dk.KEKID == current {
+		untagged := len(dk.Tag) == 0
+		switch {
+		case untagged && !tagUntagged:
+			skipped = append(skipped, fmt.Errorf("data key %s has no tag: not tagged without --tag-untagged", dk.ID))
 			continue
+		case !untagged:
+			if err := e.authentic(ctx, dk); err != nil {
+				skipped = append(skipped, fmt.Errorf("data key %s: %w", dk.ID, err))
+				continue
+			}
+			if dk.KEKID == current {
+				continue
+			}
 		}
-		ok, err := e.rewrapOne(ctx, dk)
+		ok, err := e.rewrapOne(ctx, dk, current)
 		if err != nil {
 			skipped = append(skipped, fmt.Errorf("data key %s (under %s): %w", dk.ID, dk.KEKID, err))
 			continue
 		}
 		if ok {
 			n++
+			if untagged && tagged != nil {
+				tagged(dk.ID)
+			}
 		}
 	}
 	if len(skipped) > 0 {
@@ -127,17 +199,28 @@ func (e *Envelope) Rewrap(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-func (e *Envelope) rewrapOne(ctx context.Context, dk DataKey) (bool, error) {
+func (e *Envelope) rewrapOne(ctx context.Context, dk DataKey, current string) (bool, error) {
 	dek, err := e.wrapper.Unwrap(ctx, dk.Wrapped, dk.KEKID)
 	if err != nil {
 		return false, err
 	}
-	wrapped, kekID, err := e.wrapper.Wrap(ctx, dek)
+	if len(dek) != 32 {
+		clear(dek)
+		return false, fmt.Errorf("%w: data key %s unwraps to %d bytes, not 32", ErrSealed, dk.ID, len(dek))
+	}
+	wrapped, kekID := dk.Wrapped, dk.KEKID
+	if dk.KEKID != current {
+		wrapped, kekID, err = e.wrapper.Wrap(ctx, dek)
+	}
 	clear(dek)
 	if err != nil {
 		return false, err
 	}
-	return e.keys.Rewrapped(ctx, dk.ID, dk.KEKID, wrapped, kekID)
+	root, err := e.root(ctx, kekID)
+	if err != nil {
+		return false, err
+	}
+	return e.keys.Rewrapped(ctx, dk.ID, dk.KEKID, wrapped, kekID, Tag(root, dk.ID, kekID, wrapped))
 }
 
 // active is the data key new values are sealed with: the active one, or a new one when there is none, it
@@ -182,6 +265,11 @@ func (e *Envelope) rotate(ctx context.Context, slot int64) (string, cipher.AEAD,
 		return "", nil, err
 	}
 	dk := DataKey{ID: hex.EncodeToString(raw), KEKID: kekID, Wrapped: wrapped, CreatedAt: e.now().UTC()}
+	root, err := e.root(ctx, kekID)
+	if err != nil {
+		return "", nil, err
+	}
+	dk.Tag = Tag(root, dk.ID, dk.KEKID, dk.Wrapped)
 	if err := e.keys.Activate(ctx, dk, slot); err != nil {
 		return "", nil, err
 	}
@@ -206,6 +294,9 @@ func (e *Envelope) aead(ctx context.Context, id string) (cipher.AEAD, error) {
 		return nil, fmt.Errorf("%w: data key %s is not stored", ErrSealed, id)
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := e.authentic(ctx, dk); err != nil {
 		return nil, err
 	}
 	dek, err := e.wrapper.Unwrap(ctx, dk.Wrapped, dk.KEKID)

@@ -125,6 +125,9 @@ under it. So the service derives a **root** from the KEK, which only the KEK's h
 - **Every data key is authenticated**, on every store: a tag, HMAC under the root, over its id, its wrapped
   bytes and its KEK id. A data key whose tag does not match is refused (`ErrSealed`). This closes a planted
   data key on the SQL stores too.
+- **Keys from before**: no tag, refused until tagged. `tresor-server rewrap -tag-untagged` tags them once,
+  at the upgrade, and logs each; a routine `rewrap` never tags a key with none (one planted since has none
+  either).
 - **The MAC key** (below) is derived from the root, with the installation's id
   (`state.instance`, default the namespace's name; kept stable, so a restore still verifies): a resource
   moved from another installation that shares the KEK (dev and prod) does not verify.

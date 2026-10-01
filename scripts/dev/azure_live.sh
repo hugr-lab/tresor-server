@@ -61,7 +61,7 @@ up() {
 	}
 	if ! az keyvault key show --vault-name "$vault" -n "$key" -o none 2>/dev/null; then
 		echo "azure_live: RSA key $key"
-		az keyvault key create --vault-name "$vault" -n "$key" --kty RSA --size 3072 --ops wrapKey unwrapKey -o none
+		az keyvault key create --vault-name "$vault" -n "$key" --kty RSA --size 3072 --ops wrapKey unwrapKey sign -o none
 	fi
 }
 

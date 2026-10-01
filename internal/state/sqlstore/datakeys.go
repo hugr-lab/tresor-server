@@ -15,8 +15,8 @@ type dataKeys struct{ s *Store }
 func (k dataKeys) Get(ctx context.Context, id string) (keys.DataKey, error) {
 	var dk keys.DataKey
 	var created int64
-	err := k.s.db.QueryRowContext(ctx, k.s.q(`SELECT id, kek_id, wrapped, created_at FROM data_keys WHERE id = ?`), id).
-		Scan(&dk.ID, &dk.KEKID, &dk.Wrapped, &created)
+	err := k.s.db.QueryRowContext(ctx, k.s.q(`SELECT id, kek_id, wrapped, tag, created_at FROM data_keys WHERE id = ?`), id).
+		Scan(&dk.ID, &dk.KEKID, &dk.Wrapped, &dk.Tag, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return keys.DataKey{}, keys.ErrNoDataKey
 	}
@@ -47,8 +47,8 @@ func (k dataKeys) Activate(ctx context.Context, dk keys.DataKey, slot int64) err
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, k.s.q(`INSERT INTO data_keys (id, kek_id, wrapped, created_at) VALUES (?, ?, ?, ?)`),
-		dk.ID, dk.KEKID, dk.Wrapped, dk.CreatedAt.UnixMicro()); err != nil {
+	if _, err := tx.ExecContext(ctx, k.s.q(`INSERT INTO data_keys (id, kek_id, wrapped, tag, created_at) VALUES (?, ?, ?, ?, ?)`),
+		dk.ID, dk.KEKID, dk.Wrapped, dk.Tag, dk.CreatedAt.UnixMicro()); err != nil {
 		return err
 	}
 	if slot == 0 {
@@ -76,7 +76,7 @@ func (k dataKeys) Activate(ctx context.Context, dk keys.DataKey, slot int64) err
 }
 
 func (k dataKeys) List(ctx context.Context) ([]keys.DataKey, error) {
-	rows, err := k.s.db.QueryContext(ctx, k.s.q(`SELECT id, kek_id, wrapped, created_at FROM data_keys ORDER BY created_at`))
+	rows, err := k.s.db.QueryContext(ctx, k.s.q(`SELECT id, kek_id, wrapped, tag, created_at FROM data_keys ORDER BY created_at`))
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func (k dataKeys) List(ctx context.Context) ([]keys.DataKey, error) {
 	for rows.Next() {
 		var dk keys.DataKey
 		var created int64
-		if err := rows.Scan(&dk.ID, &dk.KEKID, &dk.Wrapped, &created); err != nil {
+		if err := rows.Scan(&dk.ID, &dk.KEKID, &dk.Wrapped, &dk.Tag, &created); err != nil {
 			return nil, err
 		}
 		dk.CreatedAt = time.UnixMicro(created).UTC()
@@ -94,9 +94,9 @@ func (k dataKeys) List(ctx context.Context) ([]keys.DataKey, error) {
 	return out, rows.Err()
 }
 
-func (k dataKeys) Rewrapped(ctx context.Context, id, fromKEKID string, wrapped []byte, kekID string) (bool, error) {
-	res, err := k.s.db.ExecContext(ctx, k.s.q(`UPDATE data_keys SET kek_id = ?, wrapped = ? WHERE id = ? AND kek_id = ?`),
-		kekID, wrapped, id, fromKEKID)
+func (k dataKeys) Rewrapped(ctx context.Context, id, fromKEKID string, wrapped []byte, kekID string, tag []byte) (bool, error) {
+	res, err := k.s.db.ExecContext(ctx, k.s.q(`UPDATE data_keys SET kek_id = ?, wrapped = ?, tag = ? WHERE id = ? AND kek_id = ?`),
+		kekID, wrapped, tag, id, fromKEKID)
 	if err != nil {
 		return false, err
 	}

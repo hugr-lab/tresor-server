@@ -56,7 +56,7 @@ func TestLive(t *testing.T) {
 		if err != nil || second == id {
 			t.Fatalf("after the rotation: %s %v", second, err)
 		}
-		if n, err := e.Rewrap(ctx); err != nil || n != 1 {
+		if n, err := e.Rewrap(ctx, false, nil); err != nil || n != 1 {
 			t.Fatalf("rewrap: %d %v", n, err)
 		}
 		if plain, err := keys.NewEnvelope(w, store, keys.Options{}).Open(ctx, id, []byte("aad"), sealed); err != nil ||

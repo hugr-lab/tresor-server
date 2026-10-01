@@ -17,13 +17,18 @@ type KeyWrapper interface {
 	Unwrap(ctx context.Context, wrapped []byte, kekID string) ([]byte, error)
 	// Current names the KEK's current version, as Wrap would: a new version means a new data key.
 	Current(ctx context.Context) (kekID string, err error)
+	// Root is a secret only the KEK's holder can compute, for the KEK version kekID names (spec 003): an RSA
+	// KEK wraps with its public key, so a data key that unwraps proves nothing - the root authenticates it.
+	// Deterministic, never stored.
+	Root(ctx context.Context, kekID string) ([]byte, error)
 }
 
-// DataKey is a data key as stored: wrapped.
+// DataKey is a data key as stored: wrapped, and authenticated by a tag under the KEK's root.
 type DataKey struct {
 	ID        string
 	KEKID     string
 	Wrapped   []byte
+	Tag       []byte // HMAC under the root over the id, the KEK id and the wrapped bytes; nil before spec 003
 	CreatedAt time.Time
 }
 
@@ -38,9 +43,9 @@ type DataKeyStore interface {
 	Activate(ctx context.Context, dk DataKey, slotVersion int64) error
 	// List returns every stored data key (rewrap).
 	List(ctx context.Context) ([]DataKey, error)
-	// Rewrapped replaces a data key's wrap, compare-and-set on the KEK id it was read with; false when
-	// another rewrap came first.
-	Rewrapped(ctx context.Context, id, fromKEKID string, wrapped []byte, kekID string) (bool, error)
+	// Rewrapped replaces a data key's wrap and tag, compare-and-set on the KEK id it was read with; false
+	// when another rewrap came first.
+	Rewrapped(ctx context.Context, id, fromKEKID string, wrapped []byte, kekID string, tag []byte) (bool, error)
 }
 
 var (

@@ -8,6 +8,7 @@ package azurekeyvault
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -37,6 +38,7 @@ type Ops interface {
 	GetKey(ctx context.Context, name, version string, opts *azkeys.GetKeyOptions) (azkeys.GetKeyResponse, error)
 	WrapKey(ctx context.Context, name, version string, p azkeys.KeyOperationParameters, opts *azkeys.WrapKeyOptions) (azkeys.WrapKeyResponse, error)
 	UnwrapKey(ctx context.Context, name, version string, p azkeys.KeyOperationParameters, opts *azkeys.UnwrapKeyOptions) (azkeys.UnwrapKeyResponse, error)
+	Sign(ctx context.Context, name, version string, p azkeys.SignParameters, opts *azkeys.SignOptions) (azkeys.SignResponse, error)
 }
 
 // Wrapper wraps under one key of a vault.
@@ -212,6 +214,42 @@ func (w *Wrapper) Unwrap(ctx context.Context, wrapped []byte, kekID string) ([]b
 		return nil, fmt.Errorf("unwrapping under the KEK %s: %w", w.name, describe(err))
 	}
 	return resp.Result, nil
+}
+
+// Root is a secret only the vault can compute (spec 003): an RSA key's deterministic signature (RS256, PKCS#1
+// v1.5) of a fixed label - the public key cannot make it; an AES key's deterministic wrap (A256KW) of it. Its
+// SHA-256, so it is a key's length. It needs the key's sign (RSA) operation.
+func (w *Wrapper) Root(ctx context.Context, kekID string) ([]byte, error) {
+	kid, alg, hasAlg := strings.Cut(kekID, "#")
+	_, _, version, ok := w.own(kid)
+	if !hasAlg || !ok {
+		return nil, fmt.Errorf("%w: another KEK's root (%s)", keys.ErrSealed, kekID)
+	}
+	label := sha256.Sum256([]byte("tresor-server/root/1\x00" + kekID))
+	var out []byte
+	switch azkeys.EncryptionAlgorithm(alg) {
+	case azkeys.EncryptionAlgorithmRSAOAEP256:
+		rs256 := azkeys.SignatureAlgorithmRS256
+		resp, err := w.ops.Sign(ctx, w.name, version, azkeys.SignParameters{Algorithm: &rs256, Value: label[:]}, nil)
+		if err != nil {
+			return nil, fmt.Errorf("the KEK %s's root (sign): %w", w.name, describe(err))
+		}
+		out = resp.Result
+	case azkeys.EncryptionAlgorithmA256KW:
+		a256 := azkeys.EncryptionAlgorithmA256KW
+		resp, err := w.ops.WrapKey(ctx, w.name, version, azkeys.KeyOperationParameters{Algorithm: &a256, Value: label[:]}, nil)
+		if err != nil {
+			return nil, fmt.Errorf("the KEK %s's root (wrap): %w", w.name, describe(err))
+		}
+		out = resp.Result
+	default:
+		return nil, fmt.Errorf("%w: no root for the algorithm %s", keys.ErrSealed, alg)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("the KEK %s gave no root", w.name)
+	}
+	sum := sha256.Sum256(out)
+	return sum[:], nil
 }
 
 // bad: the vault refused the value itself (a tampered wrap: 400 BadParameter) - not transient, not the

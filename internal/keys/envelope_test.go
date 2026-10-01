@@ -74,7 +74,8 @@ func (unreachable) Wrap(context.Context, []byte) ([]byte, string, error) {
 func (unreachable) Unwrap(context.Context, []byte, string) ([]byte, error) {
 	return nil, errors.New("timeout")
 }
-func (unreachable) Current(context.Context) (string, error) { return "", errors.New("timeout") }
+func (unreachable) Current(context.Context) (string, error)      { return "", errors.New("timeout") }
+func (unreachable) Root(context.Context, string) ([]byte, error) { return nil, errors.New("timeout") }
 
 func TestSealOpen(t *testing.T) {
 	st := newStore()
@@ -176,14 +177,14 @@ func (s *store) List(context.Context) ([]keys.DataKey, error) {
 	return out, nil
 }
 
-func (s *store) Rewrapped(_ context.Context, id, from string, wrapped []byte, kekID string) (bool, error) {
+func (s *store) Rewrapped(_ context.Context, id, from string, wrapped []byte, kekID string, tag []byte) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	dk, ok := s.keys[id]
 	if !ok || dk.KEKID != from {
 		return false, nil
 	}
-	dk.Wrapped, dk.KEKID = wrapped, kekID
+	dk.Wrapped, dk.KEKID, dk.Tag = wrapped, kekID, tag
 	s.keys[id] = dk
 	return true, nil
 }
