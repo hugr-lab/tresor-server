@@ -1,6 +1,6 @@
 # Spec 006: token exchange without a client secret, and ZITADEL
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-01
 - **Author**: hugr lab
 

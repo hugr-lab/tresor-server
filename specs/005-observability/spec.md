@@ -1,6 +1,6 @@
 # Spec 005: observability - the audit, traces and metrics
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-01
 - **Author**: hugr lab
 
