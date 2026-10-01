@@ -52,6 +52,17 @@ seeded material in the clear.
 CI runs it on every store, two replicas on PostgreSQL, SQL Server and Kubernetes, with tresor at the commit
 `scripts/ci/tresor_checkout.sh` pins.
 
+## The chart
+
+```bash
+helm lint --strict deploy/helm/tresor-server
+scripts/ci/kind.sh     # kind, the image built here, the Kubernetes store and PostgreSQL, through the protocol
+```
+
+`kind.sh` makes a CA, an OIDC issuer and a PostgreSQL with TLS in the cluster, installs the chart twice and
+checks each install through the protocol. On the Kubernetes store it also checks the admission policy: a hand
+write is refused, and the garbage collector may delete. CI runs it on every PR.
+
 ## Live on Azure
 
 By hand, with the owner's tenant and subscription; nothing secret is printed:

@@ -1,0 +1,11 @@
+apiVersion: v2
+name: tresor-server
+description: The duckdb-secrets/1 service behind tresor, the DuckDB extension - on any state store (spec 003).
+type: application
+version: 0.1.0
+appVersion: "edge"
+kubeVersion: ">=1.30.0-0"
+home: https://hugr-lab.github.io/tresor-server/
+sources:
+  - https://github.com/hugr-lab/tresor-server
+keywords: [duckdb, secrets, tresor]

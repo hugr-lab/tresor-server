@@ -1,0 +1,6 @@
+# What `helm lint` and the kubeconform check render with: an issuer, a local KEK.
+localKEK: {secretName: kek}
+config:
+  issuers:
+    - {issuer: https://idp.example.com/realms/t, audience: duckdb-secrets}
+  policy: {admins: [role:secrets_admin]}

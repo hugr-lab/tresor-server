@@ -1,0 +1,110 @@
+# tresor-server (spec 003). The service's own configuration is `config`, as its server.yaml
+# (https://hugr-lab.github.io/tresor-server/configuration/); the chart derives the rest from it: the CRDs' use,
+# the RBAC, the admission policy, the volumes.
+
+image:
+  repository: ghcr.io/hugr-lab/tresor-server
+  tag: ""                  # the chart's appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Replicas: kubernetes, postgres and sqlserver serve with several; sqlite and memory with one (always).
+replicas: 2
+
+# The service's configuration (server.yaml). The chart sets listen (:8080) and derives, when they are unset:
+# tls (offload; tlsSecret's files when set), keys (local, from localKEK), state.path (sqlite: the volume's).
+# Settings belong here, not in env: the RBAC, the policy and the volumes are derived from this.
+config:
+  public_url: https://tresor.example.com
+  state:
+    kind: kubernetes       # memory | sqlite | postgres | sqlserver | kubernetes
+  # keys: {kind: azurekeyvault, key: https://<vault>.vault.azure.net/keys/<key>}   # with workloadIdentity
+  issuers: []              # required
+  policy:
+    admins: []
+
+# A local KEK from a Secret (32 bytes, base64): mounted at /var/run/tresor/kek/<key>, and config.keys set to
+# it when unset. A static secret, for clusters with no KMS.
+localKEK:
+  secretName: ""
+  key: key
+
+# A kubernetes.io/tls Secret the pod serves with itself (tls.cert, tls.key set to it); empty: tls.offload.
+tlsSecret: ""
+
+# Extra environment: a client secret (exchange.client_secret_env), SSL_CERT_FILE for a private CA. Not
+# TRESOR_* settings: they would change what the chart derived its RBAC and volumes from.
+env: []
+envFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# AKS workload identity (azure.identity: workload): the pod's label and the ServiceAccount's annotation.
+workloadIdentity:
+  enabled: false
+  clientId: ""
+
+# The admission policy (Kubernetes 1.30+, cluster-scoped): on the kubernetes store, only the service writes
+# its resources. Off: a hand write is refused by the MAC, but a rollback is not (spec 003).
+admissionPolicy:
+  enabled: true
+
+# Roles for Secrets the service reads: material.k8s.allow's namespaces (get on Secrets) and
+# state.password_ref's Secret (get on that one) are granted from config; off to grant them yourself.
+rbac:
+  secrets: true
+
+service:
+  type: ClusterIP
+  port: 80                 # 443 with tlsSecret
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []                # [{host: tresor.example.com, paths: [/]}]
+  tls: []
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# With tls.offload the pod serves plain HTTP: let only the ingress controller reach it. from: the
+# NetworkPolicy's peers (e.g. [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}]).
+networkPolicy:
+  enabled: false
+  from: []
+
+# sqlite: the volume at /var/lib/tresor (the database, its WAL and shared memory).
+sqlite:
+  size: 1Gi
+  storageClass: ""
+  accessModes: [ReadWriteOnce]
+
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits: {memory: 256Mi}
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile: {type: RuntimeDefault}
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+terminationGracePeriodSeconds: 30

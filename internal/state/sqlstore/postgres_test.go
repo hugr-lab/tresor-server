@@ -109,3 +109,26 @@ func TestPostgresRequiresVerifiedTLS(t *testing.T) {
 		t.Fatal("sslmode not read")
 	}
 }
+
+// replicas starting at once on an empty database: every one opens it (the migrations' table made under the
+// lock: CREATE TABLE IF NOT EXISTS alone races in the catalog)
+func TestPostgresReplicasStartTogether(t *testing.T) {
+	for range 5 {
+		dsn := postgresDB(t)
+		errs := make(chan error, 6)
+		for range cap(errs) {
+			go func() {
+				s, err := OpenPostgres(ctx, dsn, PasswordLogin{Env: "TRESOR_TEST_POSTGRES_PASSWORD"}, 2, kek(t, 1), Options{})
+				if err == nil {
+					s.Close()
+				}
+				errs <- err
+			}()
+		}
+		for range cap(errs) {
+			if err := <-errs; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}

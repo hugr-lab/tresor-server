@@ -1,0 +1,16 @@
+{{- if eq (include "tresor.stateKind" .) "sqlite" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "tresor.fullname" . }}
+  labels: {{- include "tresor.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep   # the database outlives an uninstall
+spec:
+  accessModes: {{- toYaml .Values.sqlite.accessModes | nindent 4 }}
+  {{- with .Values.sqlite.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests: {storage: {{ .Values.sqlite.size }}}
+{{- end }}

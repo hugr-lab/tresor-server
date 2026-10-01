@@ -1,0 +1,40 @@
+{{- if and (eq (include "tresor.stateKind" .) "kubernetes") .Values.admissionPolicy.enabled }}
+{{- $name := printf "%s-%s" (include "tresor.fullname" .) .Release.Namespace }}
+# Only the service writes its resources (spec 003). Deletes by the cluster's own controllers, narrowly: the
+# garbage collector only the minted tokens (the one kind the store gives an owner); the namespace controller
+# only while the namespace is being deleted. A deletecollection is admitted as one DELETE per object.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels: {{- include "tresor.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels: {kubernetes.io/metadata.name: {{ .Release.Namespace }}}
+    resourceRules:
+      - apiGroups: [tresor.hugr-lab.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: ["*/*"]   # every resource and subresource
+  validations:
+    - expression: >-
+        request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:{{ include "tresor.serviceAccountName" . }}' ||
+        (request.operation == 'DELETE' && request.resource.resource == 'tresormintedtokens' &&
+          request.userInfo.username in ['system:serviceaccount:kube-system:generic-garbage-collector', 'system:kube-controller-manager']) ||
+        (request.operation == 'DELETE' && has(namespaceObject.metadata.deletionTimestamp) &&
+          request.userInfo.username in ['system:serviceaccount:kube-system:namespace-controller', 'system:kube-controller-manager'])
+      message: only tresor-server writes its resources (spec 003)
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels: {{- include "tresor.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $name }}
+  validationActions: [Deny]
+{{- end }}

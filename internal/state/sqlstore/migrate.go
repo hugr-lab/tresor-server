@@ -49,7 +49,7 @@ func migrate(ctx context.Context, db *sql.DB, d Dialect) error {
 	if err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, d.Bootstrap); err != nil && !d.Unique(err) { // replicas starting at once
+	if err := bootstrap(ctx, db, d); err != nil {
 		return fmt.Errorf("migrations: %w", err)
 	}
 	var newest sql.NullInt64
@@ -69,6 +69,23 @@ func migrate(ctx context.Context, db *sql.DB, d Dialect) error {
 		}
 	}
 	return nil
+}
+
+// bootstrap makes the migrations' table, under the migrations' lock: replicas starting at once on an empty
+// database would race even on CREATE TABLE IF NOT EXISTS (PostgreSQL: a duplicate type in its catalog).
+func bootstrap(ctx context.Context, db *sql.DB, d Dialect) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := d.Lock(ctx, tx, "tresor-server/migrate"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, d.Bootstrap); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func apply(ctx context.Context, db *sql.DB, d Dialect, m migration) error {

@@ -1,0 +1,69 @@
+{{- $sa := include "tresor.serviceAccountName" . }}
+{{- if eq (include "tresor.stateKind" .) "kubernetes" }}
+# the Kubernetes store: its own resources, in its own namespace only
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "tresor.fullname" . }}-store
+  labels: {{- include "tresor.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [tresor.hugr-lab.io]
+    resources: [tresorsecrets, tresorgrants, tresormintedtokens, tresoractors, tresordatakeys, tresorkeyrings]
+    verbs: [get, list, create, update, delete, deletecollection]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "tresor.fullname" . }}-store
+  labels: {{- include "tresor.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "tresor.fullname" . }}-store}
+subjects:
+  - {kind: ServiceAccount, name: {{ $sa }}, namespace: {{ .Release.Namespace }}}
+{{- end }}
+{{- if .Values.rbac.secrets }}
+{{- range (((.Values.config.material | default dict).k8s | default dict).allow | default list) }}
+---
+# ref+k8s: get on Secrets in a namespace of material.k8s.allow (the prefixes are the allowlist's alone)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "tresor.fullname" $ }}-{{ $.Release.Namespace }}-refs
+  namespace: {{ .namespace }}
+  labels: {{- include "tresor.labels" $ | nindent 4 }}
+rules:
+  - {apiGroups: [""], resources: [secrets], verbs: [get]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "tresor.fullname" $ }}-{{ $.Release.Namespace }}-refs
+  namespace: {{ .namespace }}
+  labels: {{- include "tresor.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "tresor.fullname" $ }}-{{ $.Release.Namespace }}-refs}
+subjects:
+  - {kind: ServiceAccount, name: {{ $sa }}, namespace: {{ $.Release.Namespace }}}
+{{- end }}
+{{- with include "tresor.passwordSecret" . }}
+{{- $parts := splitList " " . }}
+---
+# state.password_ref: get on that one Secret
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "tresor.fullname" $ }}-{{ $.Release.Namespace }}-db-password
+  namespace: {{ index $parts 0 }}
+  labels: {{- include "tresor.labels" $ | nindent 4 }}
+rules:
+  - {apiGroups: [""], resources: [secrets], resourceNames: [{{ index $parts 1 | quote }}], verbs: [get]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "tresor.fullname" $ }}-{{ $.Release.Namespace }}-db-password
+  namespace: {{ index $parts 0 }}
+  labels: {{- include "tresor.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "tresor.fullname" $ }}-{{ $.Release.Namespace }}-db-password}
+subjects:
+  - {kind: ServiceAccount, name: {{ $sa }}, namespace: {{ $.Release.Namespace }}}
+{{- end }}
+{{- end }}

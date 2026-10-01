@@ -192,7 +192,7 @@ under it. So the service derives a **root** from the KEK, which only the KEK's h
   operator deletes its resource by hand, past the admission policy.
 - A revocation (`DeleteWhere`) and the purge delete what the labels select, a changed resource included: a
   delete gives no one anything.
-- A backup restored (Velero) or a move with the same KEK and `state.instance` verifies. Minted tokens do
+- A backup restored (Velero; with the admission policy's binding removed for it) or a move with the same KEK and `state.instance` verifies. Minted tokens do
   not survive it: their owner references name the grants' old UIDs, and the garbage collector deletes them
   (they are minted again).
 - The purge also sweeps minted tokens whose grant is gone (a stripped label or owner reference would
@@ -200,12 +200,15 @@ under it. So the service derives a **root** from the KEK, which only the KEK's h
 
 #### A ValidatingAdmissionPolicy (Kubernetes 1.30+), in the chart
 
-- On `tresor.hugr-lab.io`, `resources: ["*", "*/*"]`, operations CREATE, UPDATE, DELETE,
+- On `tresor.hugr-lab.io`, `resources: ["*/*"]` (every resource and subresource; the API server refuses `"*"` beside it), operations CREATE, UPDATE, DELETE,
   `matchPolicy: Equivalent`, `failurePolicy: Fail`, the binding's `validationActions: [Deny]`.
-- Allowed: the service's ServiceAccount; for DELETE only, the garbage collector and the namespace
-  controller (`system:serviceaccount:kube-system:generic-garbage-collector`,
-  `...:namespace-controller`) - or a namespace could not be deleted. A deletecollection is admitted as one
-  DELETE per object.
+- Allowed: the service's ServiceAccount; for DELETE only, the garbage collector on minted tokens (the one kind
+  with an owner reference) and the namespace controller while the namespace is being deleted
+  (`namespaceObject.metadata.deletionTimestamp`) - or a namespace could not be deleted. A deletecollection
+  is admitted as one DELETE per object. A wider exemption would let a holder of a controller's token delete
+  the data keys: every sealed value lost.
+- A restore (Velero) writes as another account: the binding is removed for its duration. Two releases in one
+  namespace would lock each other out.
 - It does not stop a cluster admin, who can remove it or delete the CRDs (which deletes every resource),
   nor a stolen ServiceAccount token: the MAC does, but for a rollback.
 - It is cluster-scoped: installing it needs cluster rights; `admissionPolicy.enabled: false` for an older
@@ -285,7 +288,25 @@ are authenticated by the root.
 - **The admission policy** and its binding, with the Kubernetes store (`admissionPolicy.enabled`).
 - **values.yaml**: the issuers, the policy, the state, the keys, the material - typed as the service's
   configuration.
-- Published as an OCI chart, `oci://ghcr.io/hugr-lab/charts/tresor-server`, from a tag.
+- Published as an OCI chart, `oci://ghcr.io/hugr-lab/charts/tresor-server`, from a tag (`vX.Y.Z`: chart
+  `X.Y.Z`, the image `vX.Y.Z`).
+- **At (d)**:
+  - `values.config` is the service's `server.yaml` as it is. The chart derives the RBAC, the volumes, the
+    admission policy and the CRDs' use from it, and fails a render whose `material.k8s.allow` names the
+    release's namespace.
+  - A `preStop` sleep (the kubelet's own: the image has no shell): the endpoints drop the pod before it
+    stops serving.
+  - The policy also lets `system:kube-controller-manager` delete, in the same two cases: a controller manager
+    that runs without per-controller credentials.
+  - A render the service would refuse fails (no issuer, no KEK, a SQLite path off the volume, the namespace's
+    default ServiceAccount, the release's namespace in `material.k8s.allow`); `memory` runs one replica.
+  - An optional NetworkPolicy: with `tls.offload` only the ingress controller should reach the plain HTTP.
+  - CI on kind:
+    - a CA of the run's, an OIDC issuer (nginx, static discovery and JWKS), PostgreSQL with TLS;
+    - two installs, each checked through the protocol (`scripts/ci/kind.sh`);
+    - the policy checked by server dry runs: a hand write, a delete, a rollback (an UPDATE) and a
+      controller's delete outside its case are denied; the namespace's deletion completes;
+    - `ref+k8s` from another namespace, and a delete, through the protocol.
 
 ### Configuration
 
@@ -325,7 +346,7 @@ development).
    conformance on it.
 3. **(b) `ref+k8s://`** (landed): the source, its allowlist, `state.password_ref`.
 4. **(c) workload identity** (landed): `azure.identity: workload`.
-5. **(d) the Helm chart**: every state store, the admission policy; lint, template, kind installs in CI
+5. **(d) the Helm chart** (landed): every state store, the admission policy; lint, template, kind installs in CI
    (the Kubernetes store, and PostgreSQL in the cluster); the OCI chart from a tag.
 6. **(e) docs and the live run**: a Kubernetes page on the site; AKS with the Kubernetes store, Key Vault
    by workload identity, the chart.
