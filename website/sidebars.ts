@@ -10,6 +10,7 @@ const sidebars: SidebarsConfig = {
     'references',
     'variables',
     'azure-container-apps',
+    'kubernetes',
     'operations',
     'security',
     'development',
