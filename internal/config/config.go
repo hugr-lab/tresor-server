@@ -42,8 +42,8 @@ type TLS struct {
 
 // State says where the service keeps what it knows (spec 002).
 type State struct {
-	// Kind is the store: memory (lost when the process ends), sqlite (one replica), postgres or sqlserver
-	// (several).
+	// Kind is the store: memory (lost when the process ends), sqlite (one replica), postgres, sqlserver or
+	// kubernetes (several).
 	Kind string `yaml:"kind"`
 	// Path is the SQLite database's file.
 	Path string `yaml:"path"`
@@ -55,10 +55,19 @@ type State struct {
 	PasswordEnv  string `yaml:"password_env"`
 	PasswordFile string `yaml:"password_file"`
 	MaxOpenConns int    `yaml:"max_open_conns"`
+	// Namespace is where the kubernetes store keeps its resources: the pod's own by default; outside a pod
+	// (KUBECONFIG) required.
+	Namespace string `yaml:"namespace"`
+	// Instance names the installation in the kubernetes store's MACs (spec 003): the namespace by default.
+	// Kept stable, so a restore still verifies.
+	Instance string `yaml:"instance"`
 }
 
 // StateKinds are the stores this build knows.
-var StateKinds = []string{"memory", "sqlite", "postgres", "sqlserver"}
+var StateKinds = []string{"memory", "sqlite", "postgres", "sqlserver", "kubernetes"}
+
+// dnsLabel is a Kubernetes namespace's name.
+var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // Keys is the KEK the params are sealed under (spec 002): local, a 32-byte key from the environment or a
 // file; or azurekeyvault, a key in Key Vault or Managed HSM.
@@ -228,6 +237,12 @@ func (c *Config) validate() error {
 	}
 	if err := c.State.validateServer(c.Azure.Identity); err != nil {
 		return err
+	}
+	if c.State.Kind != "kubernetes" && (c.State.Namespace != "" || c.State.Instance != "") {
+		return fmt.Errorf("state: namespace and instance are for kubernetes, not %s", c.State.Kind)
+	}
+	if c.State.Namespace != "" && !dnsLabel.MatchString(c.State.Namespace) {
+		return errors.New("state.namespace is a namespace's name (a DNS label)")
 	}
 	if err := c.Keys.validate(c.State.Kind != "memory"); err != nil {
 		return err

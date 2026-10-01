@@ -215,3 +215,28 @@ func TestTLSOffload(t *testing.T) {
 		}
 	}
 }
+
+func TestKubernetesState(t *testing.T) {
+	keys := "keys: {kind: local, key_file: /run/secrets/kek}\n"
+	kube := strings.Replace(good, "state: {kind: memory}", "state: {kind: kubernetes, namespace: tresor, instance: prod}", 1) + keys
+	cfg, err := Parse([]byte(kube))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.State.Namespace != "tresor" || cfg.State.Instance != "prod" {
+		t.Fatalf("state: %+v", cfg.State)
+	}
+	if _, err := Parse([]byte(strings.Replace(kube, ", namespace: tresor, instance: prod", "", 1))); err != nil {
+		t.Fatalf("in a pod, the namespace is the pod's: %v", err)
+	}
+	for name, doc := range map[string]string{
+		"no keys":               strings.Replace(kube, keys, "", 1),
+		"a namespace no label":  strings.Replace(kube, "namespace: tresor", "namespace: Tresor_1", 1),
+		"a namespace on sqlite": strings.Replace(good, "state: {kind: memory}", "state: {kind: sqlite, path: /d, namespace: x}", 1) + keys,
+		"a dsn":                 strings.Replace(kube, "instance: prod", "dsn: 'postgres://u@h/d'", 1),
+	} {
+		if _, err := Parse([]byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

@@ -5,6 +5,8 @@
 # with its build (build/release: unittest, duckdb, the tresor extension).
 #
 #   scripts/ci/conformance.sh <tresor dir> [state kind]     # the kind defaults to memory
+#
+# kubernetes needs KUBEBUILDER_ASSETS: envtest's binaries (setup-envtest use -p path).
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 tresor="$(cd "${1:?usage: conformance.sh <tresor dir> [state kind]}" && pwd)"
@@ -18,7 +20,8 @@ trap 'rm -rf "$work"' EXIT
 }
 (cd "$root" && GOWORK=off CGO_ENABLED=0 go build -o "$work/tresor-server" ./cmd/tresor-server &&
 	GOWORK=off CGO_ENABLED=0 go build -o "$work/replicas" ./scripts/ci/replicas &&
-	GOWORK=off CGO_ENABLED=0 go build -o "$work/testdb" ./scripts/ci/testdb)
+	GOWORK=off CGO_ENABLED=0 go build -o "$work/testdb" ./scripts/ci/testdb &&
+	GOWORK=off CGO_ENABLED=0 go build -o "$work/kubeenv" ./scripts/ci/kubeenv)
 
 # one simple command that is the server (test_keycloak.sh runs it with exec): the config it names is the one
 # test_keycloak.sh writes on this run's ports
@@ -61,6 +64,27 @@ sqlite)
 	TRESOR_TEST_KEK="$(openssl rand -base64 32)"
 	export TRESOR_TEST_KEK
 	;;
+kubernetes)
+	# an API server of this run's (envtest: KUBEBUILDER_ASSETS from setup-envtest) with the chart's CRDs; the
+	# replicas reach it by KUBECONFIG, as outside a pod. A local KEK made for the run
+	"$work/kubeenv" up "$root/deploy/helm/tresor-server/crds" "$work/kubeconfig" tresor >"$work/kubeenv.log" 2>&1 &
+	kubeenv_pid=$!
+	trap 'kill "$kubeenv_pid" 2>/dev/null; wait "$kubeenv_pid" 2>/dev/null; rm -rf "$work"' EXIT
+	for _ in $(seq 120); do
+		[ -f "$work/kubeconfig" ] && break
+		kill -0 "$kubeenv_pid" 2>/dev/null || break
+		sleep 0.5
+	done
+	[ -f "$work/kubeconfig" ] || {
+		echo "conformance: the API server did not start" >&2
+		cat "$work/kubeenv.log" >&2
+		exit 1
+	}
+	export KUBECONFIG="$work/kubeconfig" TRESOR_STATE__NAMESPACE=tresor
+	export TRESOR_KEYS__KIND=local TRESOR_KEYS__KEY_ENV=TRESOR_TEST_KEK
+	TRESOR_TEST_KEK="$(openssl rand -base64 32)"
+	export TRESOR_TEST_KEK
+	;;
 *)
 	echo "conformance: no setup for state $kind" >&2
 	exit 1
@@ -89,5 +113,8 @@ if [ "$kind" = postgres ] || [ "$kind" = sqlserver ]; then
 	else
 		status=1
 	fi
+fi
+if [ "$kind" = kubernetes ]; then
+	"$work/kubeenv" clear "$work/kubeconfig" tresor s3cr3t || status=1
 fi
 exit "$status"

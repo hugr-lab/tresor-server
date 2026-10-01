@@ -28,7 +28,9 @@ page covers what the service adds.
 - **The identity providers** it is configured with, and their signing keys.
 - **Whoever can write its database.** The sealed values are bound to their rows, but a secret's grants, a
   delegation grant's user and expiries are not sealed: write access to the database can change who may use
-  what. Protect it as the service itself.
+  what. Protect it as the service itself. On the Kubernetes store these are authenticated by a MAC: a
+  change by hand is refused, but a whole older resource put back (a rollback) is not - only the service's
+  account should write its resources.
 - **Whoever holds the KEK**, with the database, holds the material.
 - **Administrators**: they write secrets and references. The allowlist bounds what a reference can read.
 

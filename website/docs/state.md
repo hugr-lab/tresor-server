@@ -13,6 +13,7 @@ Material in it is only ever sealed: see [Encryption](encryption.md).
 | `sqlite` | one | a laptop, a VM, docker compose |
 | `postgres` | several | PostgreSQL, Azure Database for PostgreSQL |
 | `sqlserver` | several | SQL Server, Azure SQL |
+| `kubernetes` | several | a Kubernetes cluster, with no database |
 
 ## What every store does
 
@@ -83,3 +84,30 @@ azure: {identity: managed}
 - **Off this machine, `encrypt=true`** (or `strict`) with the certificate checked is required.
 - Compared texts are `COLLATE Latin1_General_100_BIN2`: the default collation compares without case, and
   names are compared exactly.
+
+## Kubernetes
+
+```yaml
+state: {kind: kubernetes}   # namespace: the pod's own; instance: the namespace
+keys: {kind: local, key_file: /run/secrets/kek}
+```
+
+- **Custom resources** in the service's namespace, group `tresor.hugr-lab.io/v1alpha1`: `TresorSecret`,
+  `TresorGrant`, `TresorMintedToken`, `TresorActor`, `TresorDataKey`, `TresorKeyring`.
+  `kubectl get tresor` lists them.
+- **The CRDs** are in `deploy/helm/tresor-server/crds`. The service checks at start that the API server
+  serves them, and does not start otherwise.
+- **Several replicas.** Compare-and-set is the API server's `resourceVersion`; a delete carries the
+  resource's UID and version. Every read goes to the API server: no cache, so a replica sees another's
+  write at once.
+- **Names are hashes** (`s-…`, `g-…`): any secret name works, whatever its case or characters.
+- **What is not sealed is authenticated.** A secret's descriptor and grants, a delegation grant's actor and
+  user: a MAC under a data key, which only the KEK's holder can make. A resource changed by hand
+  (`kubectl edit`) is refused - `500 service_error` - and a list leaves it out. A resource moved from
+  another installation does not verify either: `state.instance` (the namespace by default) is in every MAC.
+  Keep it stable: a backup restored with the same KEK and instance verifies.
+- **Limits**: a secret's resource at most 256 KiB, at most 1000 grants (`422` otherwise).
+- **In a pod**, the service reaches the API by its ServiceAccount; outside one, by `KUBECONFIG`, and then
+  `state.namespace` is required.
+- **Its rights**: get, list, create, update, delete and deletecollection on its resources, in its namespace
+  only.

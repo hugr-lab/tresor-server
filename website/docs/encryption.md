@@ -48,6 +48,9 @@ material of their choice under it. So a data key that unwraps proves nothing. Th
      identity the custom role (get, wrap, unwrap, sign) on the key;
   2. `tresor-server rewrap -tag-untagged -config …`: it tags the data keys that have none - you vouch for
      the store as it is - and logs each one it tagged.
+- **On the Kubernetes store**, what is not sealed (a secret's grants, a delegation grant's user) carries a
+  MAC under a key derived from a data key: only the KEK's holder can make one that verifies. A `rewrap` keeps
+  the data keys, so it keeps every MAC.
 - A routine `rewrap` (after a rotation) never tags a data key with no tag: it skips and names it, for a key
   planted since would carry none either. It never tags a data key whose tag does not match.
 

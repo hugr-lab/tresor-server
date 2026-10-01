@@ -188,3 +188,35 @@ func (s *store) Rewrapped(_ context.Context, id, from string, wrapped []byte, ke
 	s.keys[id] = dk
 	return true, nil
 }
+
+// a MAC verifies under its data key - from another envelope, as another replica - and nothing else does
+func TestMAC(t *testing.T) {
+	st := newStore()
+	e := keys.NewEnvelope(wrapper(t, 1), st, keys.Options{})
+	id, err := e.ActiveID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac, err := e.MAC(ctx, id, []byte("resource"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := keys.NewEnvelope(wrapper(t, 1), st, keys.Options{})
+	if err := other.Verify(ctx, id, []byte("resource"), mac); err != nil {
+		t.Fatalf("another replica: %v", err)
+	}
+	if err := other.Verify(ctx, id, []byte("resourcf"), mac); !errors.Is(err, keys.ErrSealed) {
+		t.Fatalf("a changed message: %v", err)
+	}
+	if err := other.Verify(ctx, "0000", []byte("resource"), mac); !errors.Is(err, keys.ErrSealed) {
+		t.Fatalf("a data key that is not stored: %v", err)
+	}
+	// another KEK's MAC key is another: a resource from an installation with another KEK does not verify
+	if err := keys.NewEnvelope(wrapper(t, 2), st, keys.Options{}).Verify(ctx, id, []byte("resource"), mac); !errors.Is(err, keys.ErrSealed) {
+		t.Fatalf("under another KEK: %v", err)
+	}
+	// a KEK that does not answer is no forgery
+	if err := keys.NewEnvelope(unreachable{}, st, keys.Options{}).Verify(ctx, id, []byte("resource"), mac); err == nil || errors.Is(err, keys.ErrSealed) {
+		t.Fatalf("an unreachable KEK: %v", err)
+	}
+}

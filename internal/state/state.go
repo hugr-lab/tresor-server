@@ -42,6 +42,9 @@ var (
 	ErrConflict = errors.New("the secret changed concurrently")
 	// ErrVersion: fn returned a secret whose version does not move on from the current one.
 	ErrVersion = errors.New("a write must move the version on")
+	// ErrTooLarge: the secret is more than the store holds (Kubernetes: its object over 256 KiB, or over 1000
+	// grants). A refusal of the write, not an outage.
+	ErrTooLarge = errors.New("the secret is too large for the store")
 	// ErrUnavailable: this replica may not use the store now (SQLite: another replica holds the lease).
 	ErrUnavailable = errors.New("the store is held by another replica")
 )

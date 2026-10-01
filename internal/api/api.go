@@ -336,11 +336,16 @@ func (s *Server) visible(w http.ResponseWriter, r *http.Request, c *auth.Caller,
 	return nil, nil, false
 }
 
-// unavailable answers a store that failed: 503, the reason in the log only.
+// unavailable answers a store that failed: 503, the reason in the log only. A secret too large for the store
+// is the caller's: 422.
 //
 // A value that does not open (keys.ErrSealed: its key changed, or it was tampered with) is no outage:
 // 500 service_error - trying again will not help until an operator acts (protocol, Errors; tresor spec 016).
 func (s *Server) unavailable(w http.ResponseWriter, what, name string, err error) {
+	if errors.Is(err, state.ErrTooLarge) {
+		problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
+		return
+	}
 	s.log.Error("store "+what+" failed", "secret", name, "error", err.Error())
 	if errors.Is(err, keys.ErrSealed) {
 		problem(w, http.StatusInternalServerError, "service_error", "a value the service holds does not open")

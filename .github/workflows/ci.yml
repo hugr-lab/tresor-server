@@ -1,4 +1,4 @@
-# CI (spec 002): the Go tests on every PR, and tresor's conformance suite against this service. tresor is
+# CI (specs 002, 003): the Go tests on every PR, and tresor's conformance suite against this service. tresor is
 # built once per pinned commit (scripts/ci/tresor_checkout.sh) and cached: its build is C++ (DuckDB).
 name: CI
 
@@ -52,6 +52,10 @@ jobs:
           if [ -n "$out" ]; then echo "gofmt needed:"; echo "$out"; exit 1; fi
       - name: go vet
         run: go vet ./...
+      - name: envtest (kube-apiserver and etcd, for the Kubernetes store)
+        run: |
+          assets="$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.1 use 1.37.0 -p path)"
+          echo "KUBEBUILDER_ASSETS=$assets" >> "$GITHUB_ENV"
       - name: go test
         run: go test -race ./...
       - name: govulncheck
@@ -87,6 +91,7 @@ jobs:
           - {state: sqlite, replicas: 1}
           - {state: postgres, replicas: 2}   # two replicas behind a round-robin proxy
           - {state: sqlserver, replicas: 2}
+          - {state: kubernetes, replicas: 2}  # envtest's API server, no cluster
     services:
       postgres:
         image: postgres:17
@@ -115,6 +120,11 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: envtest (kube-apiserver and etcd, for the Kubernetes store)
+        if: matrix.state == 'kubernetes'
+        run: |
+          assets="$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.1 use 1.37.0 -p path)"
+          echo "KUBEBUILDER_ASSETS=$assets" >> "$GITHUB_ENV"
       - name: Check out tresor (the tests, no submodules)
         run: scripts/ci/tresor_checkout.sh _tresor
       - uses: actions/download-artifact@v8
