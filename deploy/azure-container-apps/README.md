@@ -23,6 +23,10 @@ What it creates in a resource group:
 
 The configuration is all environment variables (`TRESOR_*`). Nothing is mounted.
 
+Deploying it needs *Owner* or *User Access Administrator* on the resource group: it creates a custom role
+(`roleDefinitions/write`) and assigns roles. The custom role outlives the resource group; delete it by hand
+(`az role definition delete --name "tresor KEK user (…)"`) when you are done.
+
 ## Deploy
 
 ```bash

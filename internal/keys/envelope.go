@@ -149,11 +149,13 @@ func (e *Envelope) Check(ctx context.Context) error {
 }
 
 // Rewrap wraps every data key under the KEK's current version, where it is not already, and tags it: after a
-// rotation of the KEK its old versions can be retired. A data key with no tag (made before spec 003) is tagged
-// here - the operator who runs rewrap vouches for the store as it is; a data key whose tag does not match is
-// never rewrapped. The values sealed under the data keys are not touched. It goes on past a data key it cannot
-// rewrap: how many were rewrapped, and an error naming each one skipped.
-func (e *Envelope) Rewrap(ctx context.Context) (int, error) {
+// rotation of the KEK its old versions can be retired. A data key whose tag does not match is never rewrapped.
+// A data key with no tag (made before spec 003) is tagged only when tagUntagged says so - once, at the upgrade,
+// the operator vouching for the store as it is; otherwise it is skipped and named, for a key planted since
+// would carry no tag either. The values sealed under the data keys are not touched. It goes on past a data key
+// it cannot rewrap: how many were rewrapped, and an error naming each one skipped. tagged names each data key
+// it tagged from none.
+func (e *Envelope) Rewrap(ctx context.Context, tagUntagged bool, tagged func(id string)) (int, error) {
 	current, err := e.wrapper.Current(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("the KEK: %w", err)
@@ -165,7 +167,12 @@ func (e *Envelope) Rewrap(ctx context.Context) (int, error) {
 	n := 0
 	var skipped []error
 	for _, dk := range all {
-		if len(dk.Tag) > 0 {
+		untagged := len(dk.Tag) == 0
+		switch {
+		case untagged && !tagUntagged:
+			skipped = append(skipped, fmt.Errorf("data key %s has no tag: not tagged without --tag-untagged", dk.ID))
+			continue
+		case !untagged:
 			if err := e.authentic(ctx, dk); err != nil {
 				skipped = append(skipped, fmt.Errorf("data key %s: %w", dk.ID, err))
 				continue
@@ -181,6 +188,9 @@ func (e *Envelope) Rewrap(ctx context.Context) (int, error) {
 		}
 		if ok {
 			n++
+			if untagged && tagged != nil {
+				tagged(dk.ID)
+			}
 		}
 	}
 	if len(skipped) > 0 {
@@ -193,6 +203,10 @@ func (e *Envelope) rewrapOne(ctx context.Context, dk DataKey, current string) (b
 	dek, err := e.wrapper.Unwrap(ctx, dk.Wrapped, dk.KEKID)
 	if err != nil {
 		return false, err
+	}
+	if len(dek) != 32 {
+		clear(dek)
+		return false, fmt.Errorf("%w: data key %s unwraps to %d bytes, not 32", ErrSealed, dk.ID, len(dek))
 	}
 	wrapped, kekID := dk.Wrapped, dk.KEKID
 	if dk.KEKID != current {

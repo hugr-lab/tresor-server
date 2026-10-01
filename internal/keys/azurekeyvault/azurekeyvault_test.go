@@ -291,10 +291,10 @@ func TestRewrap(t *testing.T) {
 	old := v.current
 	v.rotate(t)
 	w.readAt = time.Time{}
-	if n, err := e.Rewrap(ctx); err != nil || n != 1 {
+	if n, err := e.Rewrap(ctx, false, nil); err != nil || n != 1 {
 		t.Fatalf("rewrap: %d %v", n, err)
 	}
-	if n, _ := e.Rewrap(ctx); n != 0 {
+	if n, _ := e.Rewrap(ctx, false, nil); n != 0 {
 		t.Fatalf("a second rewrap: %d", n)
 	}
 	v.mu.Lock()
@@ -318,7 +318,7 @@ func TestRewrapSkips(t *testing.T) {
 	store.keys["foreign"] = keys.DataKey{ID: "foreign", KEKID: "local:0123", Wrapped: []byte("w")}
 	v.rotate(t)
 	w.readAt = time.Time{}
-	n, err := e.Rewrap(ctx)
+	n, err := e.Rewrap(ctx, false, nil)
 	if n != 1 || err == nil || !strings.Contains(err.Error(), "foreign") {
 		t.Fatalf("rewrap past a foreign data key: %d %v", n, err)
 	}
@@ -359,11 +359,20 @@ func TestPlantedDataKey(t *testing.T) {
 	// rewrap tags a data key with none - the operator vouches for the store as it is - and never one whose
 	// tag does not match
 	store.keys["planted"] = keys.DataKey{ID: "planted", KEKID: kid, Wrapped: wrapped, Tag: bytes.Repeat([]byte{1}, 32)}
-	if _, err := e.Rewrap(ctx); err == nil || !strings.Contains(err.Error(), "planted") {
+	if _, err := e.Rewrap(ctx, false, nil); err == nil || !strings.Contains(err.Error(), "planted") {
 		t.Fatalf("rewrap over a forged tag: %v", err)
 	}
+	delete(store.keys, "planted")
+	// a data key with no tag: a routine rewrap (after a rotation) skips and names it - one planted since would
+	// carry none either; only --tag-untagged tags it, naming each
 	store.keys["legacy"] = keys.DataKey{ID: "legacy", KEKID: kid, Wrapped: wrapped}
-	if n, _ := e.Rewrap(ctx); n != 1 || len(store.keys["legacy"].Tag) == 0 {
-		t.Fatalf("rewrap of a key from before: %d", n)
+	if n, err := e.Rewrap(ctx, false, nil); n != 0 || err == nil || !strings.Contains(err.Error(), "legacy") ||
+		len(store.keys["legacy"].Tag) != 0 {
+		t.Fatalf("a routine rewrap over a key with no tag: %d %v", n, err)
+	}
+	var named []string
+	if n, err := e.Rewrap(ctx, true, func(id string) { named = append(named, id) }); n != 1 || err != nil ||
+		len(store.keys["legacy"].Tag) == 0 || len(named) != 1 || named[0] != "legacy" {
+		t.Fatalf("rewrap --tag-untagged: %d %v %v", n, err, named)
 	}
 }

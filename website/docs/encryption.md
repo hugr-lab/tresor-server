@@ -41,9 +41,15 @@ material of their choice under it. So a data key that unwraps proves nothing. Th
 - The root is never stored; it stays in memory for `keys.cache_ttl`, as the data keys do.
 - A data key's tag is an HMAC under the root over its id, its KEK id and its wrapped bytes.
 - A data key whose tag does not match is refused, on every store.
-- **Upgrading from a version before this**: its data keys have no tag and are refused. Run
-  `tresor-server rewrap` once: it tags them - you vouch for the store as it is. It never tags a data key
-  whose tag does not match.
+- **Upgrading from a version before this**: its data keys have no tag, and every value sealed under them is
+  refused (`500`) until they are tagged. Once, at the upgrade, with the service's new version:
+  1. Key Vault: give the KEK the `sign` operation (`az keyvault key set-attributes --vault-name <vault>
+     --name <key> --ops wrapKey unwrapKey sign`, or rotate it with those operations), and the service's
+     identity the custom role (get, wrap, unwrap, sign) on the key;
+  2. `tresor-server rewrap -tag-untagged -config …`: it tags the data keys that have none - you vouch for
+     the store as it is - and logs each one it tagged.
+- A routine `rewrap` (after a rotation) never tags a data key with no tag: it skips and names it, for a key
+  planted since would carry none either. It never tags a data key whose tag does not match.
 
 ## The KEK
 

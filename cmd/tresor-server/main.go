@@ -48,6 +48,11 @@ func main() {
 	flags := flag.NewFlagSet("tresor-server "+command, flag.ExitOnError)
 	configPath := flags.String("config", "", "the configuration file (optional: TRESOR_CONFIG and TRESOR_<SETTING> "+
 		"variables are read over it)")
+	tagUntagged := false
+	if command == "rewrap" {
+		flags.BoolVar(&tagUntagged, "tag-untagged", false, "rewrap: tag the data keys that have no tag (made before "+
+			"spec 003) - once, at the upgrade: you vouch for the store as it is")
+	}
 	_ = flags.Parse(args)
 	if flags.NArg() > 0 {
 		// `tresor-server -config x rewrap` must not start the service: the command comes first
@@ -57,7 +62,7 @@ func main() {
 	}
 	run := serve
 	if command == "rewrap" {
-		run = rewrap
+		run = func(configPath string, log *slog.Logger) error { return rewrap(configPath, tagUntagged, log) }
 	}
 	if err := run(*configPath, log); err != nil {
 		log.Error("tresor-server "+command+" stopped", "error", err.Error())
@@ -68,7 +73,7 @@ func main() {
 // rewrap wraps every data key under the KEK's current version (spec 002): after a rotation of the KEK, its
 // old versions can then be retired. No sealed value is touched. It runs next to the service, whose data keys
 // it changes compare-and-set.
-func rewrap(configPath string, log *slog.Logger) error {
+func rewrap(configPath string, tagUntagged bool, log *slog.Logger) error {
 	cfg, _, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -90,7 +95,9 @@ func rewrap(configPath string, log *slog.Logger) error {
 	if !ok {
 		return fmt.Errorf("state.kind %s keeps nothing at rest: nothing to rewrap", cfg.State.Kind)
 	}
-	n, err := sealed.Envelope().Rewrap(ctx)
+	n, err := sealed.Envelope().Rewrap(ctx, tagUntagged, func(id string) {
+		log.Warn("a data key with no tag was tagged (--tag-untagged)", "data_key", id)
+	})
 	if err != nil {
 		return err
 	}
