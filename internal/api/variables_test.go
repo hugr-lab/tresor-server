@@ -147,3 +147,44 @@ func TestVariableReference(t *testing.T) {
 		t.Fatalf("a plain value: %s", r.body)
 	}
 }
+
+// the secrets' rules for whoever is not an administrator, and through a server acting for a user
+func TestVariablesPermissions(t *testing.T) {
+	f := newFixture(t, "")
+	f.do("PUT", "/v1/variables/v", f.admin, `{"value":""}`) // an empty string is a value
+	f.do("PUT", "/v1/variables/v/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	if r := f.do("GET", "/v1/variables/v", f.alice, ""); r.status != 200 || r.json(t)["value"] != "" {
+		t.Fatalf("an empty value: %d %s", r.status, r.body)
+	}
+	for what, r := range map[string]reply{
+		"annotate": f.do("PATCH", "/v1/variables/v", f.alice, `{"comment":"x"}`),
+		"delete":   f.do("DELETE", "/v1/variables/v", f.alice, ""),
+		"grant":    f.do("PUT", "/v1/variables/v/grants/b", f.alice, `{"principal":"role:x","verbs":["use"]}`),
+		"replace":  f.do("PUT", "/v1/variables/v", f.alice, `{"value":"x"}`),
+	} {
+		if r.status != 403 {
+			t.Errorf("a user's %s: %d %s", what, r.status, r.body)
+		}
+	}
+	if r := f.do("DELETE", "/v1/variables/v", f.carol, ""); r.status != 404 {
+		t.Fatalf("an invisible variable's delete: %d", r.status)
+	}
+	if r := f.do("PUT", "/v1/variables/v", f.admin, `{"value":"y"}`, "If-None-Match", `"1"`); r.status != 200 {
+		t.Fatalf("If-None-Match on another version: %d %s", r.status, r.body)
+	}
+	if r := f.do("PUT", "/v1/variables/w", f.admin, `{"value":" REF+notes"}`); r.status != 422 {
+		t.Fatalf("a near miss of a reference: %d", r.status)
+	}
+	// a server for alice: use by the actor's grants; management is not passed on to a non-admin user
+	node := f.idp.Service(t, "duckdb-secrets", "node", "analysts")
+	g, r := f.grantFor(node, f.alice)
+	if g == "" {
+		t.Fatalf("exchange: %d %s", r.status, r.body)
+	}
+	if r := f.do("GET", "/v1/variables/v", node, "", "Delegation", g); r.status != 200 || r.json(t)["value"] != "y" {
+		t.Fatalf("through a server: %d %s", r.status, r.body)
+	}
+	if r := f.do("DELETE", "/v1/variables/v", node, "", "Delegation", g); r.status != 403 {
+		t.Fatalf("a delete through a server for a user: %d %s", r.status, r.body)
+	}
+}

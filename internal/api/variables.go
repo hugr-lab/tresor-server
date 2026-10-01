@@ -95,11 +95,15 @@ func (s *Server) getVariable(w http.ResponseWriter, r *http.Request) {
 	}
 	var value string
 	if err := json.Unmarshal(params["value"], &value); err != nil {
-		s.unavailable(w, "read", v.Name, err)
+		s.log.Error("a variable's value does not read", "variable", v.Name)
+		problem(w, http.StatusInternalServerError, "service_error", "the variable's value does not read")
 		return
 	}
 	body := variableDescriptor(full, verbs)
 	body["value"] = value
+	if len(resolved) > 0 {
+		body["sensitive"] = true // what was resolved is material, whatever the stored marker says
+	}
 	w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(full.Version, 10)))
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, body)

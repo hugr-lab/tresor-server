@@ -237,7 +237,7 @@ func (s *Store) List(ctx context.Context) ([]*state.Secret, error) {
 		sec, err := s.verified(ctx, o)
 		if errors.Is(err, keys.ErrSealed) {
 			// one bad resource never fails a list (spec 002): left out, and logged
-			s.log.Error("a secret's resource was changed behind the store: left out", "resource", o.Metadata.Name,
+			s.log.Error("an entry's resource was changed behind the store: left out", "resource", o.Metadata.Name,
 				"error", err.Error())
 			continue
 		}

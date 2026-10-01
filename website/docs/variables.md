@@ -35,6 +35,8 @@ CALL corp.set_variable('warehouse_dsn', 'ref+azkv://corp-vault/duckdb-warehouse-
 ```
 
 - Written by an administrator only, within the allowlist (`422` outside it).
+- A value that looks like a reference is one: `ref+…` (in any case, after spaces) must be a valid reference
+  within the allowlist, or the write is refused (`422`). Such a text cannot be kept as a plain value.
 - Read at each fetch, with the service's identity. A rotation reaches the next read.
 - **`sensitive: true`**: the resolved value is material. tresor keeps it out of logs and its audit, and caches
   it per caller.

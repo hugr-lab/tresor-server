@@ -34,6 +34,9 @@ callers. tresor-server supports them on every state store. The protocol is treso
 | SQLite, PostgreSQL, SQL Server | tables `variables` and `variable_grants`, the secrets' columns (migration 0005) |
 | Kubernetes | `TresorVariable` (`v-<hash>`), the `TresorSecret`'s spec, its MAC under kind `TresorVariable` |
 
+On Kubernetes the new CRD comes with the chart's `crds/`, which Helm does not upgrade. An install from before
+runs `kubectl apply --server-side -f crds/` first, or the service does not start (its schema check).
+
 ### The API
 
 - The routes are the protocol's. `capabilities.variables: true` is set in the discovery.
@@ -49,8 +52,15 @@ callers. tresor-server supports them on every state store. The protocol is treso
   - `503 service_unavailable` when it may resolve later (the source does not answer, or the secret is
     missing);
   - `500 service_error` when it will not (it is outside the allowlist now).
-- **`sensitive`** is `true` when the value is a reference: the resolved value is material. A plain value is
-  `false`, though it is sealed at rest all the same.
+- **`sensitive`** is `true` when the value is a reference: the resolved value is material. It is marked in
+  the variable's `provider` (`reference`), so a list knows without opening the value, and a read that
+  resolved one says `true` whatever the marker. A plain value is `false`, though it is sealed at rest all
+  the same.
+- **A value that looks like a reference is one.** `ref+…` (any case, after spaces) must be a valid reference
+  within the allowlist (`422` otherwise), as for a secret's params. The protocol's 64 KiB of any string
+  yields to that: such a text cannot be kept as a plain value.
+- A source that answers but holds nothing usable (missing, disabled) is `503`: the vault's owner may fix it
+  at any time. A stored value that does not read is `500`.
 
 ### Conformance
 
