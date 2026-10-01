@@ -19,7 +19,7 @@ Material in it is only ever sealed: see [Encryption](encryption.md).
 - **Every write is compare-and-set** on the secret's version and its row. A write read before another
   replica's change is run again on the new secret; it never overwrites it.
 - **Names are compared exactly**, in every store. A write (a secret, a grant) is refused (`422`) when its
-  name or grant id is empty, longer than 200 characters, not UTF-8, begins or ends with a space, or holds a
+  name or grant id is empty, longer than 200 characters, not UTF-8, begins or ends with whitespace, or holds a
   control character.
 - **A list or a descriptor opens no material.** Only a read with `use` opens a secret's params. A secret
   whose params do not open fails that read with `500 service_error` (an operator must act; a KEK that does

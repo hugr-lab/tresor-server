@@ -156,7 +156,7 @@ func (s *Server) loadMinted(ctx context.Context, idHash []byte, key string) (*mi
 	if t.Token != nil {
 		token = &mint.Token{}
 		if err := json.Unmarshal(t.Token, token); err != nil {
-			return nil, "", 0, fmt.Errorf("a minted token does not read: %w", err)
+			return nil, "", 0, fmt.Errorf("a minted token does not read (%v): %w", err, keys.ErrSealed)
 		}
 	}
 	return token, t.Failed, t.Version, nil

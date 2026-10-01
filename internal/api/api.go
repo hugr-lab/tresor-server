@@ -606,7 +606,7 @@ func validName(what, name string) error {
 	case !utf8.ValidString(name):
 		return fmt.Errorf("%s is not UTF-8", what)
 	case strings.TrimSpace(name) != name:
-		return fmt.Errorf("%s begins or ends with a space", what)
+		return fmt.Errorf("%s begins or ends with whitespace", what)
 	case strings.IndexFunc(name, unicode.IsControl) >= 0:
 		return fmt.Errorf("%s holds a control character", what)
 	}
