@@ -23,7 +23,8 @@ Kubernetes 1.30 or later.
 - `workloadIdentity`: AKS workload identity (`azure.identity: workload`), with the pod's label and the
   ServiceAccount's annotation.
 - `tlsSecret`: TLS in the pod itself. Otherwise `tls.offload`, with TLS at the ingress.
-- `env`, `extraVolumes`: a client secret (`exchange.client_secret_env`), a private CA (`SSL_CERT_FILE`). Not
+- `env`, `extraVolumes`: a client secret (`exchange.client_secret_env`), a private CA (`SSL_CERT_DIR`, which
+  adds to the system's roots; `SSL_CERT_FILE` would replace them, and Key Vault's TLS with them). Not
   `TRESOR_*` settings: the RBAC and the volumes are derived from `config`, which they would override.
 - `replicas`: 2 by default. SQLite and memory always run one; SQLite on a PersistentVolumeClaim, with
   `strategy: Recreate`. Give SQLite block storage: a WAL on Azure Files or NFS is not safe.

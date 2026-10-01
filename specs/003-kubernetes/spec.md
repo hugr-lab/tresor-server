@@ -435,7 +435,8 @@ development).
   Readiness was `ok` for the state, the keys and the issuer. Through the protocol, with the in-cluster issuer
   of `scripts/ci/incluster.sh`, a secret and a variable were written, granted, read and deleted, and both
   references resolved, the variable as `sensitive`. A hand delete was refused, and no value reached the log.
-  Everything was deleted afterwards and the vault purged.
+  Everything was deleted afterwards (the group, the custom role, the vault purged, and the NetworkWatcherRG AKS
+  made).
 
 ## Follow-ups
 

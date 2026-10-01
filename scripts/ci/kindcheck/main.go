@@ -124,6 +124,8 @@ func smoke(dir, iss, url, ref, want string) {
 	if got := call("GET", "/v1/variables/byref", user, "", 200); !strings.Contains(got, want) || !strings.Contains(got, `"sensitive":true`) {
 		log.Fatal("kindcheck: the variable's reference did not read its value, sensitive")
 	}
+	call("DELETE", "/v1/secrets/byref", admin, "", 204)
+	call("DELETE", "/v1/variables/byref", admin, "", 204)
 	fmt.Println("kindcheck: a reference resolved at the read, in a secret and in a variable")
 }
 

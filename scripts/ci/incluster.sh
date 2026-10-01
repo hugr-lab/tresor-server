@@ -72,7 +72,10 @@ forward() {
 	pids+=($!)
 	for _ in $(seq 30); do
 		port="$(sed -n 's/^Forwarding from 127.0.0.1:\([0-9]*\) .*/\1/p' "$out" | head -1)"
-		[ -n "$port" ] && curl -sf "http://127.0.0.1:$port/readyz" >/dev/null && break
+		[ -n "$port" ] && curl -sf "http://127.0.0.1:$port/readyz" >/dev/null && return 0
 		sleep 1
 	done
+	echo "forward: $1/$2 is not ready behind a port-forward" >&2
+	cat "$out" >&2
+	return 1
 }
