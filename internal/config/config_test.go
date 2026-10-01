@@ -268,3 +268,14 @@ func TestMaterialK8s(t *testing.T) {
 		t.Fatal("a namespace that is no DNS label")
 	}
 }
+
+func TestWorkloadIdentity(t *testing.T) {
+	doc := strings.Replace(good, "state: {kind: memory}", "state: {kind: kubernetes}", 1) +
+		"keys: {kind: azurekeyvault, key: 'https://kv.vault.azure.net/keys/k'}\nazure: {identity: workload}\n"
+	if _, err := Parse([]byte(doc)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse([]byte(strings.Replace(doc, "identity: workload", "identity: workload, client_id: x", 1))); err != nil {
+		t.Fatalf("workload with a client id: %v", err)
+	}
+}

@@ -122,8 +122,8 @@ The service's own identity on Azure: for Key Vault, and for a database login by 
 
 | Setting | |
 | --- | --- |
-| `azure.identity` | `managed` (a managed identity) or `default` (`DefaultAzureCredential`: the az CLI's login, for development). |
-| `azure.client_id` | `managed`: a user-assigned identity's client id. |
+| `azure.identity` | `managed` (a managed identity), `workload` (AKS workload identity: the pod's federated ServiceAccount token) or `default` (`DefaultAzureCredential`: the az CLI's login, for development). |
+| `azure.client_id` | `managed`: a user-assigned identity's client id. `workload`: overrides the webhook's `AZURE_CLIENT_ID`. |
 
 `default` is for development. Its chain also takes a client secret from the environment
 (`AZURE_CLIENT_SECRET`), which is a static secret. Production runs `managed`.
