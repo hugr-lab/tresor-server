@@ -31,11 +31,17 @@ func end(s trace.Span, err error) {
 }
 
 // Store traces a state.Store: its reads and writes, and the variables' namespace as itself.
-func Store(st state.Store) state.Store { return &store{Store: st, entry: "secret"} }
+func Store(st state.Store) state.Store {
+	s := &store{Store: st, entry: "secret"}
+	v := &store{Store: st.Variables(), entry: "variable"}
+	s.vars, v.vars = v, v // the variables' Variables is itself, as the store's is
+	return s
+}
 
 type store struct {
 	state.Store
 	entry string
+	vars  *store
 }
 
 func (s *store) attr() attribute.KeyValue { return attribute.String("tresor.entry", s.entry) }
@@ -72,16 +78,15 @@ func (s *store) Update(ctx context.Context, name string, fn func(*state.Secret) 
 		return next, err
 	})
 	sp.SetAttributes(attribute.Int("tresor.attempts", attempts))
-	if err != nil && errors.Is(err, refused) {
-		err = nil
+	failed := ignoreNotFound(err)
+	if failed != nil && errors.Is(failed, refused) {
+		failed = nil // the span's status only: the caller gets fn's answer as it was
 	}
-	end(sp, ignoreNotFound(err))
+	end(sp, failed)
 	return out, err
 }
 
-func (s *store) Variables() state.Store {
-	return &store{Store: s.Store.Variables(), entry: "variable"}
-}
+func (s *store) Variables() state.Store { return s.vars }
 
 func ignoreNotFound(err error) error {
 	if errors.Is(err, state.ErrNotFound) {
