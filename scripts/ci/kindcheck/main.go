@@ -102,6 +102,14 @@ func smoke(dir, iss, url, ref, want string) {
 	call("DELETE", "/v1/secrets/lake", admin, "", 204)
 	call("GET", "/v1/secrets/lake", user, "", 404)
 	fmt.Println("kindcheck: a secret written, granted, read and deleted through the protocol")
+	// a variable (spec 004): the same rules, its own routes
+	call("PUT", "/v1/variables/region", admin, `{"value":"eu-west"}`, 201)
+	call("PUT", "/v1/variables/region/grants/analysts", admin, `{"principal":"role:analysts","verbs":["use"]}`, 200)
+	if got := call("GET", "/v1/variables/region", user, "", 200); !strings.Contains(got, `"value":"eu-west"`) {
+		log.Fatal("kindcheck: the user's read of the variable holds no value")
+	}
+	call("DELETE", "/v1/variables/region", admin, "", 204)
+	fmt.Println("kindcheck: a variable written, granted, read and deleted")
 	if ref == "" {
 		return
 	}
@@ -111,7 +119,12 @@ func smoke(dir, iss, url, ref, want string) {
 	if got := call("GET", "/v1/secrets/byref", user, "", 200); !strings.Contains(got, want) {
 		log.Fatal("kindcheck: the reference did not read its value")
 	}
-	fmt.Println("kindcheck: a reference resolved at the read")
+	call("PUT", "/v1/variables/byref", admin, `{"value":"`+ref+`"}`, 201)
+	call("PUT", "/v1/variables/byref/grants/analysts", admin, `{"principal":"role:analysts","verbs":["use"]}`, 200)
+	if got := call("GET", "/v1/variables/byref", user, "", 200); !strings.Contains(got, want) || !strings.Contains(got, `"sensitive":true`) {
+		log.Fatal("kindcheck: the variable's reference did not read its value, sensitive")
+	}
+	fmt.Println("kindcheck: a reference resolved at the read, in a secret and in a variable")
 }
 
 func must(err error) {

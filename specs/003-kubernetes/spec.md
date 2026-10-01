@@ -1,6 +1,6 @@
 # Spec 003: phase 3 - Kubernetes
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-01
 - **Author**: hugr lab
 
@@ -348,7 +348,7 @@ development).
 4. **(c) workload identity** (landed): `azure.identity: workload`.
 5. **(d) the Helm chart** (landed): every state store, the admission policy; lint, template, kind installs in CI
    (the Kubernetes store, and PostgreSQL in the cluster); the OCI chart from a tag.
-6. **(e) docs and the live run**: a Kubernetes page on the site; AKS with the Kubernetes store, Key Vault
+6. **(e) docs and the live run** (landed): a Kubernetes page on the site; AKS with the Kubernetes store, Key Vault
    by workload identity, the chart.
 
 ## Enforcement & security
@@ -424,6 +424,18 @@ development).
 
 - **At (a), the MAC key from the data key**, not the root: a KEK rotation and its `rewrap` would otherwise
   have to re-MAC every resource before the old KEK version is retired.
+
+- **The live run (2026-10-01)**: `scripts/dev/aks_live.sh` on AKS 1.35 in westeurope:
+  - one `Standard_D2s_v6` node (the subscription has no `Bsv2` quota there);
+  - the chart from this repository, with the image `edge`, on the Kubernetes store with two replicas;
+  - the KEK an RSA key in Key Vault, reached by workload identity with no secret of the service's own:
+    a federated credential, and the custom role (get, wrap, unwrap, sign) on the one key;
+  - `ref+azkv` in a secret and in a variable (spec 004);
+  - the admission policy on.
+  Readiness was `ok` for the state, the keys and the issuer. Through the protocol, with the in-cluster issuer
+  of `scripts/ci/incluster.sh`, a secret and a variable were written, granted, read and deleted, and both
+  references resolved, the variable as `sensitive`. A hand delete was refused, and no value reached the log.
+  Everything was deleted afterwards and the vault purged.
 
 ## Follow-ups
 

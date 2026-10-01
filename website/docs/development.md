@@ -70,7 +70,9 @@ By hand, with the owner's tenant and subscription; nothing secret is printed:
 - `scripts/dev/azure_live.sh up`: a Key Vault KEK (seal, open, a rotation, rewrap) and a reference, against
   a real vault;
 - `scripts/dev/aca_live.sh up sqlserver`: the Container Apps recipe, checked from DuckDB with an Entra
-  application.
+  application;
+- `scripts/dev/aks_live.sh up`: the chart on AKS - the Kubernetes store, the KEK in Key Vault by workload
+  identity, `ref+azkv` - checked through the protocol; `down` deletes it all.
 
 ## The process
 

@@ -16,5 +16,5 @@ Research lives in the local, gitignored `design/` folder.
 | --- | --- | --- |
 | [001](001-architecture/spec.md) | tresor-server - state stores, KEK, material by reference, deployment, phases | accepted |
 | [002](002-phase1-azure-mvp/spec.md) | phase 1 - the Azure MVP | implemented |
-| [003](003-kubernetes/spec.md) | phase 3 - Kubernetes: the CRD store, ref+k8s, workload identity, the Helm chart | accepted |
-| [004](004-variables/spec.md) | variables (tresor spec 018): a second namespace on every store, sealed | accepted |
+| [003](003-kubernetes/spec.md) | phase 3 - Kubernetes: the CRD store, ref+k8s, workload identity, the Helm chart | implemented |
+| [004](004-variables/spec.md) | variables (tresor spec 018): a second namespace on every store, sealed | implemented |

@@ -22,7 +22,9 @@ cleanup() {
 trap cleanup EXIT
 chart="$root/deploy/helm/tresor-server"
 issuer=https://idp.idp.svc/realms/t
-kubectl() { command kubectl --context "kind-$cluster" "$@"; }
+KUBECTL_CONTEXT="kind-$cluster"
+kubectl() { command kubectl --context "$KUBECTL_CONTEXT" "$@"; }
+. "$root/scripts/ci/incluster.sh"
 helm() { command helm --kube-context "kind-$cluster" "$@"; }
 (cd "$root" && GOWORK=off CGO_ENABLED=0 go build -o "$work/kindcheck" ./scripts/ci/kindcheck)
 
@@ -32,59 +34,10 @@ created=1
 docker build -q -t tresor-server:ci --build-arg VERSION=ci "$root" >/dev/null
 kind load docker-image tresor-server:ci --name "$cluster"
 
-echo "kind: a CA of this run's, the issuer's and the database's certificates"
-openssl req -x509 -newkey rsa:2048 -nodes -keyout "$work/ca.key" -out "$work/ca.crt" -days 1 -subj /CN=tresor-ci-ca 2>/dev/null
-cert() { # name dns
-	openssl req -newkey rsa:2048 -nodes -keyout "$work/$1.key" -out "$work/$1.csr" -subj "/CN=$2" 2>/dev/null
-	printf 'subjectAltName=DNS:%s\nextendedKeyUsage=serverAuth\n' "$2" >"$work/$1.ext"
-	openssl x509 -req -in "$work/$1.csr" -CA "$work/ca.crt" -CAkey "$work/ca.key" -CAcreateserial -days 1 \
-		-extfile "$work/$1.ext" -out "$work/$1.crt" 2>/dev/null
-}
-cert idp idp.idp.svc
-cert pg pg.db.svc
-
-echo "kind: the issuer (nginx, static discovery and JWKS)"
-"$work/kindcheck" issuer "$work/idp" "$issuer"
-kubectl create namespace idp
-kubectl -n idp create secret tls idp-tls --cert "$work/idp.crt" --key "$work/idp.key"
-kubectl -n idp create configmap idp-files --from-file="$work/idp/openid-configuration" --from-file="$work/idp/jwks"
-kubectl -n idp create configmap idp-nginx --from-literal=default.conf='server {
-  listen 8443 ssl;
-  ssl_certificate /tls/tls.crt;
-  ssl_certificate_key /tls/tls.key;
-  default_type application/json;
-  location = /realms/t/.well-known/openid-configuration { alias /files/openid-configuration; }
-  location = /realms/t/jwks { alias /files/jwks; }
-}'
-kubectl apply -f - <<'EOF'
-apiVersion: apps/v1
-kind: Deployment
-metadata: {name: idp, namespace: idp}
-spec:
-  selector: {matchLabels: {app: idp}}
-  template:
-    metadata: {labels: {app: idp}}
-    spec:
-      containers:
-        - name: nginx
-          image: nginxinc/nginx-unprivileged:1.29-alpine
-          ports: [{containerPort: 8443}]
-          volumeMounts:
-            - {name: conf, mountPath: /etc/nginx/conf.d}
-            - {name: files, mountPath: /files}
-            - {name: tls, mountPath: /tls}
-      volumes:
-        - {name: conf, configMap: {name: idp-nginx}}
-        - {name: files, configMap: {name: idp-files}}
-        - {name: tls, secret: {secretName: idp-tls}}
----
-apiVersion: v1
-kind: Service
-metadata: {name: idp, namespace: idp}
-spec:
-  selector: {app: idp}
-  ports: [{port: 443, targetPort: 8443}]
-EOF
+echo "kind: a CA of this run's, the issuer"
+ca_make
+issuer_up "$issuer"
+ca_cert pg pg.db.svc
 
 echo "kind: PostgreSQL with TLS, its password in a Secret"
 kubectl create namespace db
@@ -121,7 +74,6 @@ spec:
   selector: {app: pg}
   ports: [{port: 5432}]
 EOF
-kubectl -n idp rollout status deploy/idp --timeout 180s
 kubectl -n db rollout status deploy/pg --timeout 180s
 
 # install <release> <namespace> <values...>: the chart with the image built here, a local KEK, the run's CA
@@ -153,15 +105,7 @@ EOF
 
 # smoke <release> <namespace> [<ref> <value>]: through the protocol, by a port-forward on a free local port
 smoke() {
-	# not the kubectl function: $! must be the port-forward itself
-	command kubectl --context "kind-$cluster" -n "$2" port-forward "svc/$1-tresor-server" :80 >"$work/$1.forward" &
-	pids+=($!)
-	local port=""
-	for _ in $(seq 30); do
-		port="$(sed -n 's/^Forwarding from 127.0.0.1:\([0-9]*\) .*/\1/p' "$work/$1.forward" | head -1)"
-		[ -n "$port" ] && curl -sf "http://127.0.0.1:$port/readyz" >/dev/null && break
-		sleep 1
-	done
+	forward "$2" "$1-tresor-server"
 	"$work/kindcheck" smoke "$work/idp" "$issuer" "http://127.0.0.1:$port" "${@:3}"
 }
 

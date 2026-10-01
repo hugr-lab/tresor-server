@@ -1,6 +1,6 @@
 # Spec 004: variables
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-01
 - **Author**: hugr lab
 
