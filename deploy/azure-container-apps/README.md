@@ -6,8 +6,9 @@ What it creates in a resource group:
 
 - **A user-assigned managed identity.** Everything the service reaches, it reaches as this identity.
 - **A Key Vault** on the RBAC permission model, with purge protection. It holds:
-  - the KEK, an RSA-3072 key `tresor-kek`. The identity is *Key Vault Crypto Service Encryption User* on that
-    key only (get, wrap, unwrap);
+  - the KEK, an RSA-3072 key `tresor-kek`. The identity has a custom role on that key only: get, wrap,
+    unwrap and sign. Sign makes the root that authenticates data keys (spec 003); no built-in role gives
+    exactly these four;
   - the secrets that references (`ref+azkv://`) may read. The identity is *Key Vault Secrets User* on the vault.
 - **The database**, Entra authentication only, with the identity as its administrator:
   - `database=postgres`: Azure Database for PostgreSQL Flexible Server, Burstable B1ms;

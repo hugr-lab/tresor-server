@@ -5,6 +5,7 @@ package local
 import (
 	"context"
 	"crypto/aes"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -65,6 +66,16 @@ func decode(value, from string) (*Wrapper, error) {
 }
 
 func (w *Wrapper) Current(context.Context) (string, error) { return w.id, nil }
+
+// Root is HMAC-SHA256 under the local key: only who holds the key computes it.
+func (w *Wrapper) Root(_ context.Context, kekID string) ([]byte, error) {
+	if kekID != w.id {
+		return nil, fmt.Errorf("%w: another KEK's root (%s, this one is %s)", keys.ErrSealed, kekID, w.id)
+	}
+	m := hmac.New(sha256.New, w.kek)
+	m.Write([]byte("tresor-server/root/1\x00" + kekID))
+	return m.Sum(nil), nil
+}
 
 func (w *Wrapper) Wrap(_ context.Context, dek []byte) ([]byte, string, error) {
 	out, err := wrap(w.kek, dek)

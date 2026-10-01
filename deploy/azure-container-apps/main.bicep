@@ -71,16 +71,39 @@ resource kek 'Microsoft.KeyVault/vaults/keys@2023-07-01' = {
   properties: {
     kty: 'RSA'
     keySize: 3072
-    keyOps: ['wrapKey', 'unwrapKey']
+    keyOps: ['wrapKey', 'unwrapKey', 'sign'] // sign: the root that authenticates data keys (spec 003)
   }
 }
 
-// Key Vault Crypto Service Encryption User: get, wrapKey, unwrapKey - on the KEK only
+// get, wrapKey, unwrapKey and sign - exactly what the service does with its KEK, on that key only. No built-in
+// role gives exactly this: Crypto Service Encryption User has no sign (the root that authenticates data keys,
+// spec 003), Crypto User adds encrypt and decrypt
+resource kekRoleDefinition 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
+  name: guid(resourceGroup().id, p, 'tresor-kek-user')
+  properties: {
+    roleName: 'tresor KEK user (${p}, ${resourceGroup().name})'
+    description: 'tresor-server: get, wrap, unwrap and sign with its key-encryption key'
+    type: 'CustomRole'
+    assignableScopes: [resourceGroup().id]
+    permissions: [
+      {
+        actions: []
+        dataActions: [
+          'Microsoft.KeyVault/vaults/keys/read'
+          'Microsoft.KeyVault/vaults/keys/wrap/action'
+          'Microsoft.KeyVault/vaults/keys/unwrap/action'
+          'Microsoft.KeyVault/vaults/keys/sign/action'
+        ]
+      }
+    ]
+  }
+}
+
 resource kekRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(kek.id, identity.id, 'crypto-service-encryption-user')
+  name: guid(kek.id, identity.id, 'tresor-kek-user')
   scope: kek
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'e147488a-f6f5-4113-8e2d-b22465e65bf6')
+    roleDefinitionId: kekRoleDefinition.id
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'
   }

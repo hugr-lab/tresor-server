@@ -20,7 +20,7 @@ flowchart LR
 
 - **A user-assigned managed identity.** Everything the service reaches, it reaches as this identity.
 - **A Key Vault** on the RBAC permission model, with purge protection:
-  - the KEK, an RSA-3072 key. The identity is *Key Vault Crypto Service Encryption User* on it;
+  - the KEK, an RSA-3072 key. The identity has a custom role on it: get, wrap, unwrap, sign;
   - the secrets references may read. The identity is *Key Vault Secrets User* on the vault.
 - **The database**, Entra authentication only, the identity its administrator:
   - `database=postgres`: Azure Database for PostgreSQL Flexible Server, Burstable B1ms;

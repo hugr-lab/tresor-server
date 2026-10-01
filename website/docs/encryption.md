@@ -21,8 +21,29 @@ flowchart LR
   `keys.cache_ttl` (5 minutes), never written or logged.
 - **A delegation grant's tokens** (the user's token, the tokens minted for them) are sealed the same way,
   bound to the grant.
+- **A data key is authenticated**: a tag under the KEK's root (below). One planted by whoever could write
+  the store is refused.
 - **What does not open is an error**, never an empty value: a tampered value, a data key another KEK
-  wrapped, a KEK that does not answer.
+  wrapped or one that is not authentic (`500 service_error`); a KEK that does not answer (`503`).
+
+## The root
+
+An RSA KEK wraps with its **public** key: anyone who has it can make a data key that unwraps, and seal
+material of their choice under it. So a data key that unwraps proves nothing. The service derives a
+**root** that only the KEK's holder can compute, and tags every data key with it:
+
+| KEK | The root |
+| --- | --- |
+| Key Vault RSA | a deterministic signature (RS256) of a fixed label, made in the vault |
+| Managed HSM AES | a deterministic wrap (A256KW) of a fixed label |
+| local | HMAC-SHA256 of a fixed label under the key |
+
+- The root is never stored; it stays in memory for `keys.cache_ttl`, as the data keys do.
+- A data key's tag is an HMAC under the root over its id, its KEK id and its wrapped bytes.
+- A data key whose tag does not match is refused, on every store.
+- **Upgrading from a version before this**: its data keys have no tag and are refused. Run
+  `tresor-server rewrap` once: it tags them - you vouch for the store as it is. It never tags a data key
+  whose tag does not match.
 
 ## The KEK
 
@@ -44,8 +65,9 @@ azure: {identity: managed}
 
 - A key in Azure Key Vault or Managed HSM. The KEK never leaves it: the service asks it to wrap and unwrap.
 - `RSA-OAEP-256` for an RSA key (either service); `A256KW` for an AES key on Managed HSM.
-- The service's identity needs *Key Vault Crypto Service Encryption User* on the key (get, wrap, unwrap),
-  and nothing more. On Managed HSM, its local role of the same name.
+- The service's identity needs get, wrap, unwrap and **sign** on the key - sign makes the root. No
+  built-in role gives exactly these four: the recipes make a custom role, on the one key. On Managed HSM
+  (an AES key), *Managed HSM Crypto Service Encryption User* is enough: the root is a wrap.
 - The vault on the RBAC permission model, with purge protection: the material depends on the key.
 - The key is named **without a version**. New data keys are wrapped under its current version; each data
   key records the version it was wrapped under.
