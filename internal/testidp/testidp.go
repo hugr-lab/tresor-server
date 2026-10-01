@@ -42,7 +42,7 @@ type IdP struct {
 	ClientKeys map[string]any
 	// NoRefreshByExchange: no refresh token by exchange, as ZITADEL (an access token only).
 	NoRefreshByExchange bool
-	seenJTI    map[string]bool
+	seenJTI             map[string]bool
 }
 
 // The service's exchange client at this IdP (specs/010).
