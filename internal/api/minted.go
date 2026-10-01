@@ -205,12 +205,17 @@ func (s *Server) mintClient(ctx context.Context, issuer string) (*mint.Client, *
 	if err != nil {
 		return nil, unavailableMint("the identity provider's token endpoint is not known yet")
 	}
-	// the client secret goes there: https, or http only to this machine (as the issuers themselves)
+	// the client's secret or assertion goes there: https, or http only to this machine (as the issuers themselves)
 	if u, err := url.Parse(tokenURL); err != nil ||
 		!(u.Scheme == "https" || (u.Scheme == "http" && config.IsLoopback(u.Hostname()))) {
 		return nil, unavailableMint("the identity provider's token endpoint is not https")
 	}
-	return &mint.Client{TokenURL: tokenURL, ClientID: ex.ClientID, ClientSecret: ex.ClientSecret, Now: s.now}, nil
+	// how the service logs in there (spec 006): an assertion made for it at start, or the client secret
+	auth, ok := s.exchangeAuth[config.IssuerKey(issuer)]
+	if !ok {
+		auth = mint.SecretAuth{ID: ex.ClientID, Secret: ex.ClientSecret}
+	}
+	return &mint.Client{TokenURL: tokenURL, Auth: auth, Now: s.now}, nil
 }
 
 // checkMinted refuses a token not meant for the audience asked, or meant for this service itself: an IdP

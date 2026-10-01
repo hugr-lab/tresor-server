@@ -45,6 +45,14 @@ serviceAccount:
   name: ""
   annotations: {}
 
+# A projected ServiceAccount token for an issuer's exchange (client_auth: file, spec 006): mounted at
+# /var/run/tresor/idp-token/token, with the audience the identity provider expects (Keycloak's federated
+# client authentication). Set the issuer's exchange.assertion_file to that path.
+exchangeToken:
+  enabled: false
+  audience: ""
+  expirationSeconds: 3600
+
 # AKS workload identity (azure.identity: workload): the pod's label and the ServiceAccount's annotation.
 workloadIdentity:
   enabled: false

@@ -103,6 +103,18 @@ issuers:
 - The chart: the projected token.
 - The docs: Entra, Keycloak and ZITADEL set-ups. No protocol change.
 
+## The PRs
+
+1. **(a) client authentication** (landed):
+   - `client_auth` with `azure`, `file`, `keyvault` and `key_file`;
+   - a roles claim that is an object;
+   - the chart's projected token;
+   - the docs (a Token exchange page);
+   - ZITADEL's refusal of a refresh read as unsupported (from its documented wording, checked in b).
+2. **(b) ZITADEL in CI, and the stack with no Azure on kind**:
+   - ZITADEL in docker, an exchange through `key_file`;
+   - the recipe: ZITADEL, the Kubernetes store, a local KEK.
+
 ## Enforcement & security
 
 - **Fail closed.** If no assertion can be made, the mint fails (`503`). There is no fallback to a secret

@@ -1,8 +1,17 @@
 package api
 
 import (
+	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"github.com/hugr-lab/tresor-server/internal/clientauth"
+	"github.com/hugr-lab/tresor-server/internal/config"
+	"github.com/hugr-lab/tresor-server/internal/mint"
+	"github.com/hugr-lab/tresor-server/internal/testidp"
 	"strings"
 	"testing"
 	"time"
@@ -206,4 +215,42 @@ func TestMintedWithoutExchangeClient(t *testing.T) {
 	if r := f.do("GET", "/v1/secrets/echo", f.alice, ""); r.status != 422 || r.problemType(t) != "invalid_secret" {
 		t.Fatalf("no exchange client: %d %s", r.status, r.body)
 	}
+}
+
+// spec 006: the service logs in at the IdP with a signed assertion, no client secret; with no assertion it
+// does not log in at all (503), never without one
+func TestMintWithAssertion(t *testing.T) {
+	f := newFixture(t, "")
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	f.idp.ClientKeys = map[string]any{"k1": &key.PublicKey}
+	source := clientauth.JWT(testidp.ExchangeClient, "k1", clientauth.Audience{Issuer: f.idp.Issuer}, rsaKey{key})
+	f.srv.exchangeAuth = map[string]mint.ClientAuth{config.IssuerKey(f.idp.Issuer): mint.AssertionAuth{ID: testidp.ExchangeClient, Assertion: source}}
+	f.do("PUT", "/v1/secrets/echo", f.admin, mintedSecret)
+	f.do("PUT", "/v1/secrets/echo/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	for range 2 { // a fresh assertion each time: the IdP refuses a jti it saw
+		f.srv.direct = directCache{}
+		if r := f.do("GET", "/v1/secrets/echo", f.alice, ""); r.status != 200 {
+			t.Fatalf("minted with an assertion: %d %s", r.status, r.body)
+		}
+	}
+	if f.idp.LastForm.Get("client_secret") != "" || f.idp.LastForm.Get("client_assertion") == "" {
+		t.Fatalf("the token request: %v", f.idp.LastForm)
+	}
+	failing := func(context.Context, string) (string, error) { return "", errors.New("no identity") }
+	f.srv.exchangeAuth = map[string]mint.ClientAuth{config.IssuerKey(f.idp.Issuer): mint.AssertionAuth{ID: testidp.ExchangeClient, Assertion: failing}}
+	f.srv.direct = directCache{}
+	before := f.idp.Exchanges
+	if r := f.do("GET", "/v1/secrets/echo", f.alice, ""); r.status != 503 {
+		t.Fatalf("no assertion: %d %s", r.status, r.body)
+	}
+	if f.idp.Exchanges != before {
+		t.Fatal("a request went to the IdP with no client authentication")
+	}
+}
+
+type rsaKey struct{ key *rsa.PrivateKey }
+
+func (rsaKey) Alg() string { return "RS256" }
+func (k rsaKey) Sign(_ context.Context, digest []byte) ([]byte, error) {
+	return rsa.SignPKCS1v15(rand.Reader, k.key, crypto.SHA256, digest)
 }

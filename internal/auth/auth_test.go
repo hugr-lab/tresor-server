@@ -219,3 +219,22 @@ func TestCheckIssuer(t *testing.T) {
 		t.Fatal("never answered; one issuer configured")
 	}
 }
+
+// a roles claim that is an object gives its keys (ZITADEL, spec 006); a list its items; anything else nothing
+func TestRolesAsAnObject(t *testing.T) {
+	claims := map[string]any{
+		"urn:zitadel:iam:org:project:roles": map[string]any{"analysts": map[string]any{"123": "acme.zitadel.cloud"},
+			"admins": map[string]any{"123": "acme.zitadel.cloud"}},
+		"realm_access": map[string]any{"roles": []any{"a", "", 3, "b"}},
+		"scalar":       "x",
+	}
+	if got := stringsAt(claims, "urn:zitadel:iam:org:project:roles"); len(got) != 2 || got[0] != "admins" || got[1] != "analysts" {
+		t.Fatalf("an object's keys, sorted: %v", got)
+	}
+	if got := stringsAt(claims, "realm_access.roles"); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("a list's strings: %v", got)
+	}
+	if got := stringsAt(claims, "scalar"); got != nil {
+		t.Fatalf("a scalar: %v", got)
+	}
+}

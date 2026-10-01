@@ -16,7 +16,7 @@ func serve(t *testing.T, status int, body string) *Client {
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	return &Client{TokenURL: srv.URL, ClientID: "c", ClientSecret: "s"}
+	return &Client{TokenURL: srv.URL, Auth: SecretAuth{ID: "c", Secret: "s"}}
 }
 
 func TestShapes(t *testing.T) {
@@ -56,7 +56,7 @@ func TestRefusalsNameNoToken(t *testing.T) {
 	if !IsUnsupported(err) {
 		t.Fatalf("unsupported: %v", err)
 	}
-	if _, err := (&Client{TokenURL: "http://127.0.0.1:1/token"}).Exchange(ctx, "s", "a", "", false); err == nil ||
+	if _, err := (&Client{TokenURL: "http://127.0.0.1:1/token", Auth: SecretAuth{ID: "c", Secret: "s"}}).Exchange(ctx, "s", "a", "", false); err == nil ||
 		strings.Contains(err.Error(), "127.0.0.1") {
 		t.Fatalf("unreachable, and the error names nothing: %v", err)
 	}

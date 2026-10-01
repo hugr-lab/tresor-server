@@ -37,6 +37,10 @@ type IdP struct {
 	Exchanges int               // exchanges answered
 	Refreshed int               // refreshes answered
 	LastForm  url.Values        // the last token request (tests read the parameters)
+	// ClientKeys lets the exchange client log in with a signed assertion (spec 006): kid -> public key. An
+	// assertion must name the client, the issuer as its audience, be live, and never come twice (its jti).
+	ClientKeys map[string]any
+	seenJTI    map[string]bool
 }
 
 // The service's exchange client at this IdP (specs/010).
@@ -148,7 +152,7 @@ func (idp *IdP) token(w http.ResponseWriter, r *http.Request) {
 	idp.mu.Lock()
 	defer idp.mu.Unlock()
 	idp.LastForm = r.PostForm
-	if r.PostForm.Get("client_id") != ExchangeClient || r.PostForm.Get("client_secret") != ExchangeSecret {
+	if !idp.clientAuthentic(r.PostForm) {
 		deny("invalid_client", "bad client")
 		return
 	}
@@ -216,3 +220,41 @@ func unverifiedClaims(raw string) (map[string]any, bool) {
 
 // Stop closes the issuer's server: the identity provider is down.
 func (idp *IdP) Stop() { idp.server.Close() }
+
+// clientAuthentic: the exchange client's secret, or a signed assertion (private_key_jwt) under one of
+// ClientKeys - its iss and sub the client, its aud the issuer, live, its jti never seen before.
+func (idp *IdP) clientAuthentic(form url.Values) bool {
+	if form.Get("client_id") != ExchangeClient {
+		return false
+	}
+	if form.Get("client_secret") != "" {
+		return form.Get("client_secret") == ExchangeSecret && form.Get("client_assertion") == ""
+	}
+	if form.Get("client_assertion_type") != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
+		return false
+	}
+	tok, err := jwt.ParseSigned(form.Get("client_assertion"), []jose.SignatureAlgorithm{jose.RS256, jose.ES256})
+	if err != nil || len(tok.Headers) != 1 {
+		return false
+	}
+	key, ok := idp.ClientKeys[tok.Headers[0].KeyID]
+	if !ok {
+		return false
+	}
+	var claims jwt.Claims
+	if err := tok.Claims(key, &claims); err != nil {
+		return false
+	}
+	if claims.Issuer != ExchangeClient || claims.Subject != ExchangeClient || claims.ID == "" ||
+		claims.ValidateWithLeeway(jwt.Expected{AnyAudience: jwt.Audience{idp.Issuer}, Time: time.Now()}, time.Minute) != nil {
+		return false
+	}
+	if idp.seenJTI == nil {
+		idp.seenJTI = map[string]bool{}
+	}
+	if idp.seenJTI[claims.ID] {
+		return false // replayed, as Keycloak refuses one
+	}
+	idp.seenJTI[claims.ID] = true
+	return true
+}

@@ -87,6 +87,9 @@ func (v *vault) WrapKey(_ context.Context, name, version string, p azkeys.KeyOpe
 
 func (v *vault) Sign(_ context.Context, name, version string, p azkeys.SignParameters, _ *azkeys.SignOptions) (azkeys.SignResponse, error) {
 	v.mu.Lock()
+	if version == "" { // the current one, as Key Vault takes it
+		version = v.current
+	}
 	key := v.versions[version]
 	v.mu.Unlock()
 	if key == nil || *p.Algorithm != azkeys.SignatureAlgorithmRS256 {
@@ -374,5 +377,25 @@ func TestPlantedDataKey(t *testing.T) {
 	if n, err := e.Rewrap(ctx, true, func(id string) { named = append(named, id) }); n != 1 || err != nil ||
 		len(store.keys["legacy"].Tag) == 0 || len(named) != 1 || named[0] != "legacy" {
 		t.Fatalf("rewrap --tag-untagged: %d %v %v", n, err, named)
+	}
+}
+
+// the exchange's signer (spec 006): RS256 with the key's current version, in the vault
+func TestSigner(t *testing.T) {
+	v := newVault(t)
+	s, err := NewSignerWithOps(context.Background(), "tresor-kek", v)
+	if err != nil || s.Alg() != "RS256" {
+		t.Fatalf("%v %v", s, err)
+	}
+	digest := sha256.Sum256([]byte("header.claims"))
+	sig, err := s.Sign(context.Background(), digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rsa.VerifyPKCS1v15(&v.versions[v.current].PublicKey, crypto.SHA256, digest[:], sig); err != nil {
+		t.Fatalf("the signature: %v", err)
+	}
+	if _, err := NewSignerWithOps(context.Background(), "other", v); err == nil {
+		t.Fatal("a key the vault has not")
 	}
 }
