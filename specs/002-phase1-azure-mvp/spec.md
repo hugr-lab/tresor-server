@@ -293,8 +293,8 @@ Entra on Azure.
 - Only a read with `use` opens params (`Get`). A descriptor, a permission, a list open nothing
   (`Describe`, `List`): with the KEK down they still answer, and a broken secret does not tell a
   caller with no verb that its name exists.
-- A value that does not open is `503 service_unavailable`, as the protocol has no other type for it.
-  It is not transient; a type of its own would be a protocol change (a follow-up for tresor).
+- A value that does not open is `500 service_error` (tresor spec 016): trying again will not help until
+  an operator acts. A KEK that does not answer stays `503 service_unavailable`: try later.
 
 ### Material by reference: `ref+azkv://`
 
@@ -523,8 +523,8 @@ fails it).
 ## Enforcement & security
 
 - **Fail closed:**
-  - a data key that does not unwrap, or a sealed row that does not open: 503 for that request, and
-    the row is never rewritten blind;
+  - a data key that does not unwrap, or a sealed row that does not open: `500 service_error` for that
+    request (a KEK that does not answer: 503), and the row is never rewritten blind;
   - a reference that does not resolve: 503 for that fetch;
   - an unreachable store: 503;
   - a store kind other than `memory` without a KEK: the service does not start;

@@ -24,6 +24,7 @@ import (
 
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
+	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/material"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
@@ -336,8 +337,15 @@ func (s *Server) visible(w http.ResponseWriter, r *http.Request, c *auth.Caller,
 }
 
 // unavailable answers a store that failed: 503, the reason in the log only.
+//
+// A value that does not open (keys.ErrSealed: its key changed, or it was tampered with) is no outage:
+// 500 service_error - trying again will not help until an operator acts (protocol, Errors; tresor spec 016).
 func (s *Server) unavailable(w http.ResponseWriter, what, name string, err error) {
 	s.log.Error("store "+what+" failed", "secret", name, "error", err.Error())
+	if errors.Is(err, keys.ErrSealed) {
+		problem(w, http.StatusInternalServerError, "service_error", "a value the service holds does not open")
+		return
+	}
 	problem(w, http.StatusServiceUnavailable, "service_unavailable", "the store could not be "+what)
 }
 
@@ -585,9 +593,10 @@ func validParams(params map[string]json.RawMessage, redact []string) error {
 // an index key.
 const maxNameLength = 200
 
-// validName checks a secret's name or a grant's id as written (spec 002): names are compared exactly, and a
-// store must keep it as it came - no edge space (SQL Server compares 'a' and 'a ' as equal), no control
-// character, at most maxNameLength characters. The error names the rule, not the name.
+// validName checks a secret's name or a grant's id as written (spec 002), as the protocol lets a service refuse
+// one (General, names; tresor spec 016): empty, over 200 code points, not UTF-8, edge whitespace
+// (unicode.IsSpace - SQL Server compares 'a' and 'a ' as equal), a control character (unicode.IsControl: C0,
+// DEL, C1). The error names the rule, not the name.
 func validName(what, name string) error {
 	switch {
 	case name == "":
