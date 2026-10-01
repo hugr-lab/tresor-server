@@ -19,6 +19,7 @@ import (
 
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
+	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/mint"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
@@ -155,7 +156,7 @@ func (s *Server) loadMinted(ctx context.Context, idHash []byte, key string) (*mi
 	if t.Token != nil {
 		token = &mint.Token{}
 		if err := json.Unmarshal(t.Token, token); err != nil {
-			return nil, "", 0, fmt.Errorf("a minted token does not read: %w", err)
+			return nil, "", 0, fmt.Errorf("a minted token does not read (%v): %w", err, keys.ErrSealed)
 		}
 	}
 	return token, t.Failed, t.Version, nil
@@ -179,6 +180,15 @@ func refusedMint(detail string) *mintProblem {
 
 func unavailableMint(detail string) *mintProblem {
 	return &mintProblem{http.StatusServiceUnavailable, "service_unavailable", detail}
+}
+
+// storeMintProblem is a store failure under a grant: a token that does not open is 500 service_error (an
+// operator acts), anything else 503 (try later).
+func storeMintProblem(err error, detail string) *mintProblem {
+	if errors.Is(err, keys.ErrSealed) {
+		return &mintProblem{http.StatusInternalServerError, "service_error", "a value the service holds does not open"}
+	}
+	return unavailableMint(detail)
 }
 
 func (s *Server) mintClient(ctx context.Context, issuer string) (*mint.Client, *mintProblem) {
@@ -359,7 +369,7 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 		token, failed, version, err := s.loadMinted(ctx, gr.idHash, key)
 		if err != nil {
 			s.log.Error("a grant's minted token: the store failed", "error", err.Error())
-			return nil, unavailableMint("the grant's token could not be read")
+			return nil, storeMintProblem(err, "the grant's token could not be read")
 		}
 		if usable(token) {
 			return token, nil
@@ -405,7 +415,7 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 			}
 			if err != nil {
 				s.log.Error("a grant's subject token: the store failed", "error", err.Error())
-				return nil, unavailableMint("the grant's token could not be read")
+				return nil, storeMintProblem(err, "the grant's token could not be read")
 			}
 			minted, err := client.Exchange(ctx, string(subject), audience, scope, true)
 			clear(subject)
