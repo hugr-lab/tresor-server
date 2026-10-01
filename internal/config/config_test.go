@@ -140,6 +140,10 @@ func TestDatabaseServer(t *testing.T) {
 	if _, err := Parse([]byte(entra)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := Parse([]byte(strings.Replace(base, "password_env: TRESOR_TEST_DB_PW", "password_ref: 'ref+k8s://db/pg/password'", 1) +
+		"material: {k8s: {allow: [{namespace: db, prefixes: [duckdb-]}, {namespace: data}]}}\n")); err != nil {
+		t.Fatalf("a password from a Kubernetes Secret, outside the allowlist: %v", err)
+	}
 	for name, doc := range map[string]string{
 		"no dsn":                  strings.Replace(base, "dsn: 'host=db user=tresor dbname=tresor', ", "", 1),
 		"a password in the dsn":   strings.Replace(base, "dbname=tresor'", "dbname=tresor password=x'", 1),
@@ -151,6 +155,16 @@ func TestDatabaseServer(t *testing.T) {
 		"a dsn for sqlite": strings.Replace(good, "state: {kind: memory}", "state: {kind: sqlite, path: /t.db, dsn: x}", 1) +
 			"keys: {kind: local, key_env: TRESOR_TEST_KEK}\n",
 		"no KEK": strings.Replace(base, "keys: {kind: local, key_env: TRESOR_TEST_KEK}\n", "", 1),
+		"a password from two places": strings.Replace(base, "password_env: TRESOR_TEST_DB_PW",
+			"password_env: TRESOR_TEST_DB_PW, password_ref: 'ref+k8s://db/pg/password'", 1),
+		"a password_ref not a reference": strings.Replace(base, "password_env: TRESOR_TEST_DB_PW", "password_ref: hunter2", 1),
+		"a password_ref of Key Vault with no identity": strings.Replace(base, "password_env: TRESOR_TEST_DB_PW",
+			"password_ref: 'ref+azkv://kv/pg-password'", 1),
+		"a password_ref an administrator could read": strings.Replace(base, "password_env: TRESOR_TEST_DB_PW",
+			"password_ref: 'ref+k8s://db/duckdb-pg/password'", 1) + "material: {k8s: {allow: [{namespace: db, prefixes: [duckdb-]}]}}\n",
+		"a password_ref in an allowed vault": strings.Replace(base, "password_env: TRESOR_TEST_DB_PW",
+			"password_ref: 'ref+azkv://KV1/PG-password'", 1) + "azure: {identity: managed}\nmaterial: {azkv: {allow: [{vault: kv1}]}}\n",
+		"entra and a password_ref": strings.Replace(entra, "auth: entra", "auth: entra, password_ref: 'ref+k8s://db/pg/password'", 1),
 	} {
 		if _, err := Parse([]byte(doc)); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -238,5 +252,19 @@ func TestKubernetesState(t *testing.T) {
 		if _, err := Parse([]byte(doc)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestMaterialK8s(t *testing.T) {
+	doc := good + "material: {k8s: {allow: [{namespace: data-team, prefixes: [duckdb-]}, {namespace: open}]}}\n"
+	cfg, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := cfg.Material.K8s.Allow; len(a) != 2 || a[0].Namespace != "data-team" || a[0].Prefixes[0] != "duckdb-" {
+		t.Fatalf("material.k8s: %+v", cfg.Material.K8s)
+	}
+	if _, err := Parse([]byte(strings.Replace(doc, "namespace: data-team", "namespace: Data_Team", 1))); err == nil {
+		t.Fatal("a namespace that is no DNS label")
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,8 +27,10 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/keys/azurekeyvault"
 	"github.com/hugr-lab/tresor-server/internal/keys/local"
+	"github.com/hugr-lab/tresor-server/internal/kube"
 	"github.com/hugr-lab/tresor-server/internal/material"
 	azkvsource "github.com/hugr-lab/tresor-server/internal/material/azurekeyvault"
+	k8ssource "github.com/hugr-lab/tresor-server/internal/material/k8s"
 	"github.com/hugr-lab/tresor-server/internal/state"
 	"github.com/hugr-lab/tresor-server/internal/state/kubestore"
 	"github.com/hugr-lab/tresor-server/internal/state/memory"
@@ -146,7 +149,11 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger) (state
 		if err != nil {
 			return nil, nil, err
 		}
-		rc, ns, err := kubestore.RESTConfig(cfg.State.Namespace)
+		rc, err := kube.Config()
+		if err != nil {
+			return nil, nil, err
+		}
+		ns, err := kube.Namespace(cfg.State.Namespace)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -187,24 +194,103 @@ func databaseLogin(cfg *config.Config, scope string) (sqlstore.Login, error) {
 		}
 		return sqlstore.EntraLogin{Credential: cred, Scope: scope}, nil
 	}
+	if ref := cfg.State.PasswordRef; ref != "" {
+		r, err := passwordResolver(cfg, ref)
+		if err != nil {
+			return nil, err
+		}
+		return sqlstore.RefLogin{Resolve: func(ctx context.Context) (string, error) { return r.ResolveOne(ctx, ref) }}, nil
+	}
 	return sqlstore.PasswordLogin{Env: cfg.State.PasswordEnv, File: cfg.State.PasswordFile}, nil
 }
 
-// materialResolver is where references may read (material:), or nil: then every reference is refused.
-func materialResolver(cfg *config.Config) (*material.Resolver, error) {
-	kv := cfg.Material.AzKV
-	if len(kv.Allow) == 0 {
-		return nil, nil
+// passwordResolver reads the database's password reference, and nothing else: its source's allowlist is that
+// one place (outside material's, config checks).
+func passwordResolver(cfg *config.Config, ref string) (*material.Resolver, error) {
+	if rest, ok := strings.CutPrefix(ref, "ref+k8s://"); ok {
+		parts := strings.Split(rest, "/")
+		if len(parts) != 3 {
+			return nil, errors.New("state.password_ref: ref+k8s://<namespace>/<secret>/<key>")
+		}
+		allow := []k8ssource.Allow{{Namespace: parts[0], Prefixes: []string{parts[1]}}}
+		if _, err := checkedPassword(material.New(k8ssource.NewWithGetter(allow, nil)), ref); err != nil {
+			return nil, err // before reaching for the API
+		}
+		rc, err := kube.Config()
+		if err != nil {
+			return nil, err
+		}
+		src, err := k8ssource.New(allow, rc)
+		if err != nil {
+			return nil, err
+		}
+		return material.New(src), nil
+	}
+	rest := strings.TrimPrefix(ref, "ref+azkv://")
+	parts := strings.Split(rest, "/")
+	if len(parts) < 2 {
+		return nil, errors.New("state.password_ref: ref+azkv://<vault>/<secret>[/<version>]")
 	}
 	cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
 	if err != nil {
 		return nil, err
 	}
-	allow := make([]azkvsource.Allow, len(kv.Allow))
-	for i, a := range kv.Allow {
-		allow[i] = azkvsource.Allow{Vault: a.Vault, Prefixes: a.Prefixes}
+	return checkedPassword(material.New(azkvsource.New([]azkvsource.Allow{{Vault: parts[0], Prefixes: []string{parts[1]}}}, cred,
+		azkvsource.Options{DNSSuffix: cfg.Material.AzKV.DNSSuffix})), ref)
+}
+
+// checkedPassword: the password reference parses, at start - not at the first connection.
+func checkedPassword(r *material.Resolver, ref string) (*material.Resolver, error) {
+	if !r.Admits(ref) {
+		return nil, errors.New("state.password_ref does not parse: ref+k8s://<namespace>/<secret>/<key> or " +
+			"ref+azkv://<vault>/<secret>[/<version>]")
 	}
-	return material.New(azkvsource.New(allow, cred, azkvsource.Options{DNSSuffix: kv.DNSSuffix, CacheTTL: kv.CacheTTL})), nil
+	return r, nil
+}
+
+// materialResolver is where references may read (material:), or nil: then every reference is refused.
+func materialResolver(cfg *config.Config) (*material.Resolver, error) {
+	var sources []material.Source
+	if kv := cfg.Material.AzKV; len(kv.Allow) > 0 {
+		cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
+		if err != nil {
+			return nil, err
+		}
+		allow := make([]azkvsource.Allow, len(kv.Allow))
+		for i, a := range kv.Allow {
+			allow[i] = azkvsource.Allow{Vault: a.Vault, Prefixes: a.Prefixes}
+		}
+		sources = append(sources, azkvsource.New(allow, cred, azkvsource.Options{DNSSuffix: kv.DNSSuffix, CacheTTL: kv.CacheTTL}))
+	}
+	if k := cfg.Material.K8s; len(k.Allow) > 0 {
+		// the service's own namespace holds its own credentials (a local KEK, a password, a client secret):
+		// never readable by a reference
+		if own, err := kube.Namespace(cfg.State.Namespace); err == nil {
+			for _, a := range k.Allow {
+				if a.Namespace == own {
+					return nil, fmt.Errorf("material.k8s.allow names %s, the service's own namespace: its credentials are "+
+						"there - keep the Secrets references read in another", own)
+				}
+			}
+		}
+		rc, err := kube.Config()
+		if err != nil {
+			return nil, err
+		}
+		allow := make([]k8ssource.Allow, len(k.Allow))
+		for i, a := range k.Allow {
+			allow[i] = k8ssource.Allow{Namespace: a.Namespace, Prefixes: a.Prefixes}
+		}
+		src, err := k8ssource.New(allow, rc)
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, src)
+	}
+	if len(sources) == 0 {
+		return nil, nil
+	}
+	return material.New(sources...), nil
 }
 
 // keyWrapper is the configured KEK.
@@ -245,6 +331,10 @@ func serve(configPath string, log *slog.Logger) error {
 	resolver, err := materialResolver(cfg)
 	if err != nil {
 		return err
+	}
+	// the sources' own parse, beside config's: the database's password is no administrator's to read
+	if ref := cfg.State.PasswordRef; ref != "" && resolver != nil && resolver.Admits(ref) {
+		return errors.New("state.password_ref is within material's allowlist: an administrator could read the database's password")
 	}
 	srv, err := api.New(ctx, cfg, verifier, st, log, api.WithMaterial(resolver))
 	if err != nil {

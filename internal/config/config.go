@@ -54,6 +54,9 @@ type State struct {
 	Auth         string `yaml:"auth"`
 	PasswordEnv  string `yaml:"password_env"`
 	PasswordFile string `yaml:"password_file"`
+	// PasswordRef is a reference to the password (ref+k8s:// or ref+azkv://), read for each new connection. It
+	// must be outside material's allowlists: an administrator must not be able to read it.
+	PasswordRef  string `yaml:"password_ref"`
 	MaxOpenConns int    `yaml:"max_open_conns"`
 	// Namespace is where the kubernetes store keeps its resources: the pod's own by default; outside a pod
 	// (KUBECONFIG) required.
@@ -64,6 +67,9 @@ type State struct {
 }
 
 // StateKinds are the stores this build knows.
+// k8sPrefix is how a Kubernetes Secret's name may start.
+var k8sPrefix = regexp.MustCompile(`^[a-z0-9][-a-z0-9.]*$`)
+
 var StateKinds = []string{"memory", "sqlite", "postgres", "sqlserver", "kubernetes"}
 
 // dnsLabel is a Kubernetes namespace's name.
@@ -89,6 +95,19 @@ var KeyKinds = []string{"local", "azurekeyvault"}
 // Material is where references (ref+...) may read (spec 002).
 type Material struct {
 	AzKV AzKV `yaml:"azkv"`
+	K8s  K8s  `yaml:"k8s"`
+}
+
+// K8s lets ref+k8s://<namespace>/<secret>/<key> read Kubernetes Secrets (spec 003): only in the namespaces and
+// under the name prefixes listed, with the service's ServiceAccount.
+type K8s struct {
+	Allow []K8sAllow `yaml:"allow"`
+}
+
+// K8sAllow is one namespace, and the prefixes its Secrets' names must start with (none: all).
+type K8sAllow struct {
+	Namespace string   `yaml:"namespace"`
+	Prefixes  []string `yaml:"prefixes"`
 }
 
 // AzKV lets ref+azkv://<vault>/<secret> read Key Vault secrets: only in the vaults and under the name prefixes
@@ -275,6 +294,24 @@ func (c *Config) validate() error {
 			return errors.New("material.azkv.dns_suffix is a domain's suffix (.vault.azure.net)")
 		}
 	}
+	for i, a := range c.Material.K8s.Allow {
+		if !dnsLabel.MatchString(a.Namespace) {
+			return fmt.Errorf("material.k8s.allow[%d].namespace: a namespace's name (a DNS label)", i)
+		}
+		for _, p := range a.Prefixes {
+			if !k8sPrefix.MatchString(p) {
+				return fmt.Errorf("material.k8s.allow[%d].prefixes: a Secret's name starts so - lower-case letters, "+
+					"digits, dashes and dots", i)
+			}
+		}
+	}
+	if strings.HasPrefix(c.State.PasswordRef, "ref+azkv://") && c.Azure.Identity == "" {
+		return errors.New("state.password_ref reads Key Vault with the service's Azure identity: azure.identity is required")
+	}
+	if c.State.PasswordRef != "" && c.Material.admits(c.State.PasswordRef) {
+		return errors.New("state.password_ref is within material's allowlist: an administrator could read the " +
+			"database's password through a reference - keep it in a namespace, a vault or a name no allowlist admits")
+	}
 	if len(c.Issuers) == 0 {
 		return errors.New("at least one issuer is required")
 	}
@@ -356,8 +393,8 @@ func (c *Config) validate() error {
 // validateServer checks a database server's settings (postgres, sqlserver).
 func (s *State) validateServer(identity string) error {
 	if s.Kind != "postgres" && s.Kind != "sqlserver" {
-		if s.DSN != "" || s.Auth != "" || s.PasswordEnv != "" || s.PasswordFile != "" || s.MaxOpenConns != 0 {
-			return fmt.Errorf("state: dsn, auth, password_env, password_file, max_open_conns are for a database server, not %s", s.Kind)
+		if s.DSN != "" || s.Auth != "" || s.PasswordEnv != "" || s.PasswordFile != "" || s.PasswordRef != "" || s.MaxOpenConns != 0 {
+			return fmt.Errorf("state: dsn, auth, password_env, password_file, password_ref, max_open_conns are for a database server, not %s", s.Kind)
 		}
 		return nil
 	}
@@ -374,12 +411,21 @@ func (s *State) validateServer(identity string) error {
 		if identity == "" {
 			return errors.New("state.auth: entra logs in with the service's Azure identity: azure.identity is required")
 		}
-		if s.PasswordEnv != "" || s.PasswordFile != "" {
+		if s.PasswordEnv != "" || s.PasswordFile != "" || s.PasswordRef != "" {
 			return errors.New("state.auth: entra takes no password")
 		}
 	case "password":
-		if (s.PasswordEnv == "") == (s.PasswordFile == "") {
-			return errors.New("state.auth: password comes from password_env or password_file - one of them")
+		n := 0
+		for _, v := range []string{s.PasswordEnv, s.PasswordFile, s.PasswordRef} {
+			if v != "" {
+				n++
+			}
+		}
+		if n != 1 {
+			return errors.New("state.auth: password comes from password_env, password_file or password_ref - one of them")
+		}
+		if s.PasswordRef != "" && !strings.HasPrefix(s.PasswordRef, "ref+k8s://") && !strings.HasPrefix(s.PasswordRef, "ref+azkv://") {
+			return errors.New("state.password_ref is a ref+k8s:// or ref+azkv:// reference")
 		}
 		if s.PasswordEnv != "" && IsSettingVariable(s.PasswordEnv) {
 			return fmt.Errorf("state.password_env names %s, which is read as configuration - give the password a "+
@@ -462,4 +508,30 @@ func IsLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// admits says whether a reference's place is within an allowlist, as the sources compare: Kubernetes names
+// exactly, Key Vault names without case. A reference that does not parse is admitted by none.
+func (m Material) admits(ref string) bool {
+	if rest, ok := strings.CutPrefix(ref, "ref+k8s://"); ok {
+		parts := strings.Split(rest, "/")
+		for _, a := range m.K8s.Allow {
+			if len(parts) == 3 && a.Namespace == parts[0] && (len(a.Prefixes) == 0 ||
+				slices.ContainsFunc(a.Prefixes, func(p string) bool { return strings.HasPrefix(parts[1], p) })) {
+				return true
+			}
+		}
+	}
+	if rest, ok := strings.CutPrefix(ref, "ref+azkv://"); ok {
+		parts := strings.Split(rest, "/")
+		for _, a := range m.AzKV.Allow {
+			if len(parts) >= 2 && strings.EqualFold(a.Vault, parts[0]) && (len(a.Prefixes) == 0 ||
+				slices.ContainsFunc(a.Prefixes, func(p string) bool {
+					return strings.HasPrefix(strings.ToLower(parts[1]), strings.ToLower(p))
+				})) {
+				return true
+			}
+		}
+	}
+	return false
 }

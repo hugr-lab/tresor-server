@@ -63,5 +63,22 @@ func (l PasswordLogin) Password(context.Context) (string, error) {
 	return "", fmt.Errorf("the database login: %s is empty", l.File)
 }
 
+// RefLogin reads the password a reference names (state.password_ref: a Kubernetes Secret, a Key Vault secret),
+// each time.
+type RefLogin struct {
+	Resolve func(ctx context.Context) (string, error)
+}
+
+func (l RefLogin) Password(ctx context.Context) (string, error) {
+	pw, err := l.Resolve(ctx)
+	if err != nil {
+		return "", fmt.Errorf("the database login: %w", err)
+	}
+	if pw == "" {
+		return "", errors.New("the database login: state.password_ref names an empty value")
+	}
+	return pw, nil
+}
+
 // dsnHasPassword says whether a DSN carries a password: never allowed - the password comes from the Login.
 func dsnHasPassword(dsn string) bool { return config.DSNHasPassword(dsn) }
