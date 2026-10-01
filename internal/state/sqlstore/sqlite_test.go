@@ -302,3 +302,18 @@ func TestRefLogin(t *testing.T) {
 		t.Fatal("a failure")
 	}
 }
+
+// a secret's sealed params copied into a variable's row (spec 004) do not open: the namespace is in the AAD
+func TestNamespaceInAAD(t *testing.T) {
+	s := openAt(t, filepath.Join(t.TempDir(), "tresor.db"), kek(t, 1))
+	put(t, s, "lake", "material")
+	if _, err := s.db.Exec(`INSERT INTO variables SELECT * FROM secrets WHERE name = 'lake'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Variables().Get(ctx, "lake"); !errors.Is(err, keys.ErrSealed) {
+		t.Fatalf("a secret's params as a variable: %v", err)
+	}
+	if _, err := s.Variables().Describe(ctx, "lake"); err != nil {
+		t.Fatalf("its descriptor opens nothing: %v", err)
+	}
+}

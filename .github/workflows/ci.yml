@@ -138,6 +138,6 @@ jobs:
         run: |
           set -o pipefail   # a failing script must fail the step, whatever the summary line says
           scripts/ci/conformance.sh _tresor "${{ matrix.state }}" 2>&1 | tee conformance.log
-          _tresor/scripts/ci/assert_ran.sh conformance.log 4 45 'require-env TRESOR_CONFORMANCE'
+          _tresor/scripts/ci/assert_ran.sh conformance.log 5 66 'require-env TRESOR_CONFORMANCE'
           grep -q "the reference server's tests passed" conformance.log
           grep -q "private_key_jwt: a node logged in to Keycloak with its key" conformance.log

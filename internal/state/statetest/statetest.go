@@ -39,6 +39,62 @@ func Run(t *testing.T, open Opener) {
 	t.Run("Delegations", func(t *testing.T) { testDelegations(t, open) })
 	t.Run("DelegationLimit", func(t *testing.T) { testDelegationLimit(t, open) })
 	t.Run("MintedTokens", func(t *testing.T) { testMintedTokens(t, open) })
+	t.Run("Namespaces", func(t *testing.T) { testNamespaces(t, open) })
+	// spec 004: the variables' namespace keeps to the same rules
+	variables := func(t *testing.T) Handles {
+		h := open(t)
+		v := Handles{First: h.First.Variables(), Replicas: h.Replicas}
+		if h.Another != nil {
+			v.Another = func() state.Store { return h.Another().Variables() }
+		}
+		return v
+	}
+	t.Run("Variables", func(t *testing.T) {
+		t.Run("CreateGetList", func(t *testing.T) { testCreateGetList(t, variables) })
+		t.Run("UpdateAndDelete", func(t *testing.T) { testUpdateAndDelete(t, variables) })
+		t.Run("Refusals", func(t *testing.T) { testRefusals(t, variables) })
+		t.Run("Isolation", func(t *testing.T) { testIsolation(t, variables) })
+		t.Run("ExactNames", func(t *testing.T) { testExactNames(t, variables) })
+		t.Run("ConcurrentWriters", func(t *testing.T) { testConcurrentWriters(t, variables) })
+		t.Run("SecondHandle", func(t *testing.T) { testSecondHandle(t, variables) })
+	})
+}
+
+// the secrets and the variables are two namespaces: one name in both is two entries, and a delete in one
+// leaves the other
+func testNamespaces(t *testing.T, open Opener) {
+	st := open(t).First
+	vars := st.Variables()
+	if vars.Variables() != vars {
+		t.Fatal("the variables' own Variables is not itself")
+	}
+	create(t, st, "lake")
+	if _, err := vars.Get(ctx, "lake"); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("a secret seen as a variable: %v", err)
+	}
+	v := create(t, vars, "lake")
+	v.Comment = "the variable"
+	if _, err := vars.Update(ctx, "lake", func(cur *state.Secret) (*state.Secret, error) {
+		cur.Comment, cur.Version = "the variable", cur.Version+1
+		return cur, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.Get(ctx, "lake"); got.Comment != "c" || got.Version != 1 {
+		t.Fatalf("a variable's write changed the secret: %+v", got)
+	}
+	if _, err := st.Update(ctx, "lake", func(*state.Secret) (*state.Secret, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := vars.Get(ctx, "lake"); err != nil || got.Comment != "the variable" {
+		t.Fatalf("a secret's delete took the variable: %v", err)
+	}
+	if list, _ := vars.List(ctx); len(list) != 1 {
+		t.Fatalf("%d variables", len(list))
+	}
+	if list, _ := st.List(ctx); len(list) != 0 {
+		t.Fatalf("%d secrets", len(list))
+	}
 }
 
 var ctx = context.Background()

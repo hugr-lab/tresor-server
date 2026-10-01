@@ -8,6 +8,7 @@ const sidebars: SidebarsConfig = {
     'state',
     'encryption',
     'references',
+    'variables',
     'azure-container-apps',
     'operations',
     'security',

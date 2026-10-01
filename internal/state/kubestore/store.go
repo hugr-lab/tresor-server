@@ -51,7 +51,9 @@ type Store struct {
 	envelope *keys.Envelope
 	log      *slog.Logger
 
-	secrets  client[secretSpec]
+	secrets  client[secretSpec] // this namespace's entries: TresorSecret, or TresorVariable (spec 004)
+	space    entries
+	vars     *Store
 	grants   client[grantSpec]
 	tokens   client[tokenSpec]
 	actors   client[actorSpec]
@@ -102,7 +104,13 @@ func Open(ctx context.Context, cfg *rest.Config, wrapper keys.KeyWrapper, opts O
 		actors:   newClient[actorSpec](dyn, opts.Namespace, kindActor),
 		dataKeys: newClient[dataKeySpec](dyn, opts.Namespace, kindDataKey),
 		keyrings: newClient[keyringSpec](dyn, opts.Namespace, kindKeyring)}
+	s.space = entries{kind: kindSecret, name: secretName, aad: "tresor-server/params/1"}
 	s.envelope = keys.NewEnvelope(wrapper, dataKeys{s}, opts.Keys)
+	v := *s
+	v.secrets = newClient[secretSpec](dyn, opts.Namespace, kindVar)
+	v.space = entries{kind: kindVar, name: variableName, aad: "tresor-server/variable/1"}
+	v.vars = &v
+	s.vars = &v
 	return s, nil
 }
 
@@ -152,19 +160,29 @@ func checkSchema(ctx context.Context, cfg *rest.Config) error {
 // Envelope is the store's envelope: its Check is the KEK's readiness.
 func (s *Store) Envelope() *keys.Envelope { return s.envelope }
 
-// paramsAAD binds sealed params to their resource, name and version, as on the SQL stores.
-func paramsAAD(rowID, name string, version int64) []byte {
-	return []byte("tresor-server/params/1\x00" + rowID + "\x00" + name + "\x00" + strconv.FormatInt(version, 10))
+// entries are what one store keeps (spec 004): the secrets, or the variables - their own kind, names and AAD.
+type entries struct {
+	kind kind
+	name func(string) string
+	aad  string
+}
+
+// Variables is the variables' namespace (spec 004).
+func (s *Store) Variables() state.Store { return s.vars }
+
+// paramsAAD binds sealed params to their namespace, resource, name and version, as on the SQL stores.
+func (s *Store) paramsAAD(rowID, name string, version int64) []byte {
+	return []byte(s.space.aad + "\x00" + rowID + "\x00" + name + "\x00" + strconv.FormatInt(version, 10))
 }
 
 // verified is a TresorSecret checked: its name, its metadata, its MAC. A KEK that does not answer is no
 // verdict (not ErrTampered).
 func (s *Store) verified(ctx context.Context, o *object[secretSpec]) (*state.Secret, error) {
 	sp := &o.Spec
-	if o.Metadata.Name != secretName(sp.Name) || !sameLabels(o.Metadata.Labels, nil) || !untouched(o.Metadata, "") {
+	if o.Metadata.Name != s.space.name(sp.Name) || !sameLabels(o.Metadata.Labels, nil) || !untouched(o.Metadata, "") {
 		return nil, fmt.Errorf("%w: %s", ErrTampered, o.Metadata.Name)
 	}
-	if err := s.envelope.Verify(ctx, sp.DataKeyID, sp.canonical(s.instance), sp.MAC); err != nil {
+	if err := s.envelope.Verify(ctx, sp.DataKeyID, sp.canonical(s.space.kind, s.instance), sp.MAC); err != nil {
 		if errors.Is(err, keys.ErrSealed) {
 			return nil, fmt.Errorf("%w: %s: %w", ErrTampered, o.Metadata.Name, err)
 		}
@@ -184,7 +202,7 @@ func (s *Store) verified(ctx context.Context, o *object[secretSpec]) (*state.Sec
 
 // read reads one secret, checked; nil when there is none.
 func (s *Store) read(ctx context.Context, name string) (*object[secretSpec], *state.Secret, error) {
-	o, err := s.secrets.get(ctx, secretName(name))
+	o, err := s.secrets.get(ctx, s.space.name(name))
 	if err != nil || o == nil {
 		return nil, nil, err
 	}
@@ -197,7 +215,7 @@ func (s *Store) read(ctx context.Context, name string) (*object[secretSpec], *st
 
 // opened is a secret with its params open.
 func (s *Store) opened(ctx context.Context, o *object[secretSpec], sec *state.Secret) (*state.Secret, error) {
-	plain, err := s.envelope.Open(ctx, o.Spec.DataKeyID, paramsAAD(o.Spec.RowID, sec.Name, sec.Version), o.Spec.Sealed)
+	plain, err := s.envelope.Open(ctx, o.Spec.DataKeyID, s.paramsAAD(o.Spec.RowID, sec.Name, sec.Version), o.Spec.Sealed)
 	if err != nil {
 		return nil, fmt.Errorf("secret %s: its params: %w", sec.Name, err)
 	}
@@ -219,7 +237,7 @@ func (s *Store) List(ctx context.Context) ([]*state.Secret, error) {
 		sec, err := s.verified(ctx, o)
 		if errors.Is(err, keys.ErrSealed) {
 			// one bad resource never fails a list (spec 002): left out, and logged
-			s.log.Error("a secret's resource was changed behind the store: left out", "resource", o.Metadata.Name,
+			s.log.Error("an entry's resource was changed behind the store: left out", "resource", o.Metadata.Name,
 				"error", err.Error())
 			continue
 		}
@@ -335,14 +353,14 @@ func (s *Store) write(ctx context.Context, o *object[secretSpec], next *state.Se
 		if _, err := rand.Read(raw); err != nil {
 			return false, err
 		}
-		out.Metadata.Name, out.Spec.RowID = secretName(next.Name), hex.EncodeToString(raw)
+		out.Metadata.Name, out.Spec.RowID = s.space.name(next.Name), hex.EncodeToString(raw)
 	}
 	plain, err := json.Marshal(next.Params)
 	if err != nil {
 		return false, err
 	}
 	sp := &out.Spec
-	sp.DataKeyID, sp.Sealed, err = s.envelope.Seal(ctx, paramsAAD(sp.RowID, next.Name, next.Version), plain)
+	sp.DataKeyID, sp.Sealed, err = s.envelope.Seal(ctx, s.paramsAAD(sp.RowID, next.Name, next.Version), plain)
 	clear(plain)
 	if err != nil {
 		return false, err
@@ -356,7 +374,7 @@ func (s *Store) write(ctx context.Context, o *object[secretSpec], next *state.Se
 			sp.Grants[i] = secretGrant{ID: g.ID, Principal: g.Principal, Verbs: g.Verbs}
 		}
 	}
-	if sp.MAC, err = s.envelope.MAC(ctx, sp.DataKeyID, sp.canonical(s.instance)); err != nil {
+	if sp.MAC, err = s.envelope.MAC(ctx, sp.DataKeyID, sp.canonical(s.space.kind, s.instance)); err != nil {
 		return false, err
 	}
 	if n, err := s.secrets.size(out); err != nil {

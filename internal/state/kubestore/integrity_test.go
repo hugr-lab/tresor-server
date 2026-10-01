@@ -322,3 +322,26 @@ func TestZeroTime(t *testing.T) {
 		t.Fatal("a value not UTF-8 was stored")
 	}
 }
+
+// a variable's resource made into a secret's (or back) does not verify: the kind is in the MAC, and the name
+func TestVariableNotASecret(t *testing.T) {
+	ns := namespace(t)
+	s := openIn(t, ns, kek(t, 1), "")
+	put(t, s.Variables().(*Store), "lake")
+	u, err := s.vars.secrets.ri.Get(ctx, variableName("lake"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.SetResourceVersion("")
+	u.SetUID("")
+	u.SetKind(kindSecret.name)
+	u.SetName(secretName("lake"))
+	if _, err := s.secrets.ri.Create(ctx, u, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Describe(ctx, "lake")
+	tampered(t, "a variable as a secret", err)
+	if got, err := s.Variables().Get(ctx, "lake"); err != nil || string(got.Params["secret"]) != `"material"` {
+		t.Fatalf("the variable itself: %v", err)
+	}
+}
