@@ -42,6 +42,10 @@ func Credential(id Identity) (azcore.TokenCredential, error) {
 					"azure.workload.identity/client-id", v)
 			}
 		}
+		if _, err := os.Stat(os.Getenv("AZURE_FEDERATED_TOKEN_FILE")); err != nil {
+			return nil, errors.New("azure.identity: workload: AZURE_FEDERATED_TOKEN_FILE does not read - is the " +
+				"projected token mounted?")
+		}
 		if id.ClientID == "" && os.Getenv("AZURE_CLIENT_ID") == "" {
 			return nil, errors.New("azure.identity: workload: no client id - annotate the ServiceAccount with " +
 				"azure.workload.identity/client-id, or set azure.client_id")
@@ -49,7 +53,7 @@ func Credential(id Identity) (azcore.TokenCredential, error) {
 		return azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{ClientID: id.ClientID})
 	case "default":
 		if id.ClientID != "" {
-			return nil, fmt.Errorf("azure.client_id is for identity: managed; the default credential reads AZURE_CLIENT_ID")
+			return nil, fmt.Errorf("azure.client_id is for identity: managed or workload; the default credential reads AZURE_CLIENT_ID")
 		}
 		return azidentity.NewDefaultAzureCredential(nil)
 	}

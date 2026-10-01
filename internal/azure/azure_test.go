@@ -22,6 +22,18 @@ func TestWorkload(t *testing.T) {
 	if _, err := Credential(Identity{Kind: "workload", ClientID: "00000000-0000-0000-0000-000000000003"}); err != nil {
 		t.Fatalf("a client id of its own: %v", err)
 	}
+	t.Run("a client id in the configuration only", func(t *testing.T) {
+		t.Setenv("AZURE_CLIENT_ID", "")
+		if _, err := Credential(Identity{Kind: "workload", ClientID: "00000000-0000-0000-0000-000000000003"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("no token mounted", func(t *testing.T) {
+		t.Setenv("AZURE_FEDERATED_TOKEN_FILE", filepath.Join(t.TempDir(), "none"))
+		if _, err := Credential(Identity{Kind: "workload"}); err == nil || !strings.Contains(err.Error(), "mounted") {
+			t.Fatalf("no token file: %v", err)
+		}
+	})
 	for _, unset := range []string{"AZURE_TENANT_ID", "AZURE_FEDERATED_TOKEN_FILE", "AZURE_CLIENT_ID"} {
 		t.Run(unset, func(t *testing.T) {
 			t.Setenv(unset, "")
