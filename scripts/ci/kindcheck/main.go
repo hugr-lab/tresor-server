@@ -1,0 +1,105 @@
+// kindcheck is the chart's CI helper (scripts/ci/kind.sh), not shipped:
+//
+//	kindcheck issuer <dir> <issuer>        an OIDC issuer's static files: its discovery, its JWKS, its key
+//	kindcheck smoke <dir> <issuer> <url>   through the protocol: an administrator writes a secret and grants
+//	                                       its use, a user reads it - the service is up on its store
+package main
+
+import (
+	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
+)
+
+const audience = "duckdb-secrets"
+
+func main() {
+	log.SetFlags(0)
+	switch {
+	case len(os.Args) == 4 && os.Args[1] == "issuer":
+		issuer(os.Args[2], os.Args[3])
+	case len(os.Args) == 5 && os.Args[1] == "smoke":
+		smoke(os.Args[2], os.Args[3], os.Args[4])
+	default:
+		log.Fatal("usage: kindcheck issuer <dir> <issuer> | kindcheck smoke <dir> <issuer> <url>")
+	}
+}
+
+func issuer(dir, iss string) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		log.Fatal(err)
+	}
+	must(os.MkdirAll(dir, 0o700))
+	must(os.WriteFile(filepath.Join(dir, "key.pem"),
+		pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0o600))
+	jwks, _ := json.Marshal(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "k1", Algorithm: "RS256", Use: "sig"}}})
+	must(os.WriteFile(filepath.Join(dir, "jwks"), jwks, 0o644))
+	discovery, _ := json.Marshal(map[string]any{"issuer": iss, "jwks_uri": iss + "/jwks",
+		"id_token_signing_alg_values_supported": []string{"RS256"}, "response_types_supported": []string{"code"},
+		"subject_types_supported": []string{"public"}})
+	must(os.WriteFile(filepath.Join(dir, "openid-configuration"), discovery, 0o644))
+}
+
+func token(dir, iss, sub string, roles ...string) string {
+	raw, err := os.ReadFile(filepath.Join(dir, "key.pem"))
+	must(err)
+	block, _ := pem.Decode(raw)
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	must(err)
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: key},
+		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", "k1"))
+	must(err)
+	now := time.Now()
+	t, err := jwt.Signed(signer).Claims(map[string]any{"iss": iss, "sub": sub, "aud": audience, "azp": "duckdb",
+		"iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(), "roles": roles}).Serialize()
+	must(err)
+	return t
+}
+
+func smoke(dir, iss, url string) {
+	admin, user := token(dir, iss, "admin", "secrets_admin"), token(dir, iss, "alice", "analysts")
+	call := func(method, path, tok, body string, want int) string {
+		req, err := http.NewRequest(method, strings.TrimSuffix(url, "/")+path, bytes.NewBufferString(body))
+		must(err)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		must(err)
+		defer res.Body.Close()
+		out, _ := io.ReadAll(res.Body)
+		if res.StatusCode != want {
+			log.Fatalf("kindcheck: %s %s: %d, want %d: %s", method, path, res.StatusCode, want, out)
+		}
+		return string(out)
+	}
+	call("GET", "/v1/whoami", admin, "", 200)
+	call("PUT", "/v1/secrets/lake", admin, `{"type":"s3","provider":"config","scope":["s3://lake"],
+		"params":{"key_id":"AKIA","secret":{"type":"VARCHAR","value":"kind-material"}},"redact_keys":["secret"]}`, 201)
+	call("PUT", "/v1/secrets/lake/grants/analysts", admin, `{"principal":"role:analysts","verbs":["use"]}`, 200)
+	if got := call("GET", "/v1/secrets/lake", user, "", 200); !strings.Contains(got, "kind-material") {
+		log.Fatal("kindcheck: the user's read holds no material")
+	}
+	call("GET", "/v1/secrets/lake", token(dir, iss, "bob", "others"), "", 404)
+	fmt.Println("kindcheck: a secret written, granted and read through the protocol")
+}
+
+func must(err error) {
+	if err != nil {
+		log.Fatalf("kindcheck: %v", err)
+	}
+}

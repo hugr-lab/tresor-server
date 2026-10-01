@@ -1,0 +1,107 @@
+{{- $kind := include "tresor.stateKind" . }}
+{{- if not (has $kind (list "memory" "sqlite" "postgres" "sqlserver" "kubernetes")) }}
+{{- fail "config.state.kind is memory, sqlite, postgres, sqlserver or kubernetes" }}
+{{- end }}
+{{- $scheme := ternary "HTTPS" "HTTP" (ne .Values.tlsSecret "") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tresor.fullname" . }}
+  labels: {{- include "tresor.labels" . | nindent 4 }}
+spec:
+  replicas: {{ include "tresor.replicas" . }}
+  {{- if eq $kind "sqlite" }}
+  strategy: {type: Recreate}   # one writer: the old pod lets go of the database first
+  {{- end }}
+  selector:
+    matchLabels: {{- include "tresor.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tresor.selectorLabels" . | nindent 8 }}
+        {{- if .Values.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      annotations:
+        checksum/config: {{ include "tresor.config" . | sha256sum }}
+        {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+    spec:
+      serviceAccountName: {{ include "tresor.serviceAccountName" . }}
+      automountServiceAccountToken: {{ include "tresor.usesAPI" . | eq "true" }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: tresor-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [-config, /etc/tresor/server.yaml]
+          ports:
+            - {name: http, containerPort: 8080}
+          {{- with .Values.env }}
+          env: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.envFrom }}
+          envFrom: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http, scheme: {{ $scheme }}}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http, scheme: {{ $scheme }}}
+            periodSeconds: 10
+            failureThreshold: 6
+          lifecycle:
+            # the endpoints drop the pod before it stops serving (the image has no shell: the kubelet sleeps)
+            preStop: {sleep: {seconds: 5}}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/tresor, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+            {{- if .Values.localKEK.secretName }}
+            - {name: kek, mountPath: /var/run/tresor/kek, readOnly: true}
+            {{- end }}
+            {{- if .Values.tlsSecret }}
+            - {name: tls, mountPath: /var/run/tresor/tls, readOnly: true}
+            {{- end }}
+            {{- if eq $kind "sqlite" }}
+            - {name: data, mountPath: /var/lib/tresor}
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}{{ toYaml . | nindent 12 }}{{ end }}
+      volumes:
+        - name: config
+          configMap: {name: {{ include "tresor.fullname" . }}}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.localKEK.secretName }}
+        - name: kek
+          secret:
+            secretName: {{ .Values.localKEK.secretName }}
+            items: [{key: {{ .Values.localKEK.key }}, path: {{ .Values.localKEK.key }}}]
+            defaultMode: 0400
+        {{- end }}
+        {{- if .Values.tlsSecret }}
+        - name: tls
+          secret: {secretName: {{ .Values.tlsSecret }}, defaultMode: 0400}
+        {{- end }}
+        {{- if eq $kind "sqlite" }}
+        - name: data
+          persistentVolumeClaim: {claimName: {{ include "tresor.fullname" . }}}
+        {{- end }}
+        {{- with .Values.extraVolumes }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints: {{- toYaml . | nindent 8 }}
+      {{- end }}

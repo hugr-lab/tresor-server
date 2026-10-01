@@ -1,0 +1,18 @@
+tresor-server {{ .Chart.AppVersion }} on the {{ include "tresor.stateKind" . }} store, {{ include "tresor.replicas" . }} replica(s).
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "tresor.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "tresor.fullname" . }} 8080:{{ .Values.service.port }}
+  curl {{ ternary "https" "http" (ne .Values.tlsSecret "") }}://127.0.0.1:8080/readyz
+{{- if eq (include "tresor.stateKind" .) "kubernetes" }}
+
+The CRDs come from the chart's crds/ at the first install only: an upgrade that changes them needs
+  kubectl apply --server-side -f crds/
+{{- if not .Values.admissionPolicy.enabled }}
+
+WARNING: the admission policy is off. Whoever can write this namespace's tresor resources can put an older
+copy back (a revoked grant, a deleted secret): the MAC refuses a changed resource, not a rollback.
+{{- end }}
+{{- end }}
+
+Whoever can create pods in {{ .Release.Namespace }} can run as the service's ServiceAccount: keep that right
+to the platform's operators.

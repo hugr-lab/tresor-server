@@ -1,0 +1,39 @@
+{{- if and (eq (include "tresor.stateKind" .) "kubernetes") .Values.admissionPolicy.enabled }}
+{{- $name := printf "%s-%s" (include "tresor.fullname" .) .Release.Namespace | trunc 63 | trimSuffix "-" }}
+# Only the service writes its resources (spec 003); the garbage collector and the namespace controller may
+# delete them, or a namespace could not be deleted. A deletecollection is admitted as one DELETE per object.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels: {{- include "tresor.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels: {kubernetes.io/metadata.name: {{ .Release.Namespace }}}
+    resourceRules:
+      - apiGroups: [tresor.hugr-lab.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: ["*/*"]   # every resource and subresource
+  validations:
+    - expression: >-
+        request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:{{ include "tresor.serviceAccountName" . }}' ||
+        (request.operation == 'DELETE' && request.userInfo.username in [
+          'system:serviceaccount:kube-system:generic-garbage-collector',
+          'system:serviceaccount:kube-system:namespace-controller',
+          'system:kube-controller-manager'])
+      message: only tresor-server writes its resources (spec 003)
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels: {{- include "tresor.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $name }}
+  validationActions: [Deny]
+{{- end }}

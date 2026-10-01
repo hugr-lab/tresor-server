@@ -1,0 +1,66 @@
+# The Helm chart (spec 003): linted and its manifests checked on every PR; installed on kind - the Kubernetes
+# store with the admission policy, PostgreSQL with its password from a Kubernetes Secret - through the protocol.
+# Pushed from a tag (vX.Y.Z) to oci://ghcr.io/hugr-lab/charts/tresor-server, at the image of the same tag.
+name: Chart
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: chart-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Chart (lint, kubeconform, kind)
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@v5
+      - name: Tools
+        run: |
+          go install sigs.k8s.io/kind@v0.31.0
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: helm lint
+        run: helm lint --strict deploy/helm/tresor-server
+      - name: kubeconform (every state store)
+        run: |
+          for kind in kubernetes postgres sqlserver sqlite memory; do
+            helm template t deploy/helm/tresor-server -n tresor --set config.state.kind=$kind \
+              --set ingress.enabled=true --set-json 'ingress.hosts=[{"host":"t.example.com"}]' \
+              --set localKEK.secretName=kek --set tlsSecret=tls \
+              | kubeconform -strict -summary -kubernetes-version 1.30.0 -
+          done
+      - name: kind (the Kubernetes store, PostgreSQL)
+        run: scripts/ci/kind.sh
+
+  publish:
+    name: Push the chart
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+      - name: helm package and push
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package deploy/helm/tresor-server --version "$version" --app-version "$TAG" -d out
+          helm push "out/tresor-server-$version.tgz" oci://ghcr.io/hugr-lab/charts

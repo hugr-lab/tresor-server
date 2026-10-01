@@ -200,7 +200,7 @@ under it. So the service derives a **root** from the KEK, which only the KEK's h
 
 #### A ValidatingAdmissionPolicy (Kubernetes 1.30+), in the chart
 
-- On `tresor.hugr-lab.io`, `resources: ["*", "*/*"]`, operations CREATE, UPDATE, DELETE,
+- On `tresor.hugr-lab.io`, `resources: ["*/*"]` (every resource and subresource; the API server refuses `"*"` beside it), operations CREATE, UPDATE, DELETE,
   `matchPolicy: Equivalent`, `failurePolicy: Fail`, the binding's `validationActions: [Deny]`.
 - Allowed: the service's ServiceAccount; for DELETE only, the garbage collector and the namespace
   controller (`system:serviceaccount:kube-system:generic-garbage-collector`,
@@ -285,7 +285,21 @@ are authenticated by the root.
 - **The admission policy** and its binding, with the Kubernetes store (`admissionPolicy.enabled`).
 - **values.yaml**: the issuers, the policy, the state, the keys, the material - typed as the service's
   configuration.
-- Published as an OCI chart, `oci://ghcr.io/hugr-lab/charts/tresor-server`, from a tag.
+- Published as an OCI chart, `oci://ghcr.io/hugr-lab/charts/tresor-server`, from a tag (`vX.Y.Z`: chart
+  `X.Y.Z`, the image `vX.Y.Z`).
+- **At (d)**:
+  - `values.config` is the service's `server.yaml` as it is. The chart derives the RBAC, the volumes, the
+    admission policy and the CRDs' use from it, and fails a render whose `material.k8s.allow` names the
+    release's namespace.
+  - A `preStop` sleep (the kubelet's own: the image has no shell): the endpoints drop the pod before it
+    stops serving.
+  - The policy also lets `system:kube-controller-manager` delete: a controller manager that runs without
+    per-controller credentials.
+  - CI on kind:
+    - a CA of the run's, an OIDC issuer (nginx, static discovery and JWKS), PostgreSQL with TLS;
+    - two installs, each checked through the protocol (`scripts/ci/kind.sh`);
+    - the policy checked by server dry runs: denied for the cluster's admin, admitted as the garbage
+      collector and the namespace controller.
 
 ### Configuration
 
@@ -325,7 +339,7 @@ development).
    conformance on it.
 3. **(b) `ref+k8s://`** (landed): the source, its allowlist, `state.password_ref`.
 4. **(c) workload identity** (landed): `azure.identity: workload`.
-5. **(d) the Helm chart**: every state store, the admission policy; lint, template, kind installs in CI
+5. **(d) the Helm chart** (landed): every state store, the admission policy; lint, template, kind installs in CI
    (the Kubernetes store, and PostgreSQL in the cluster); the OCI chart from a tag.
 6. **(e) docs and the live run**: a Kubernetes page on the site; AKS with the Kubernetes store, Key Vault
    by workload identity, the chart.
