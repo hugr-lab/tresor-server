@@ -19,6 +19,11 @@ go test -race ./...           # GOWORK=off inside a go.work tree
   under concurrent writers, two handles as two replicas, exact names, delegation grants and their limit,
   minted tokens.
   - Memory and SQLite always run.
+  - Kubernetes runs when envtest's API server is installed (no cluster):
+
+    ```bash
+    export KUBEBUILDER_ASSETS="$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.1 use 1.37.0 -p path)"
+    ```
   - PostgreSQL and SQL Server run when a server is given; each test gets a database of its own:
 
     ```bash
@@ -37,13 +42,14 @@ in the reference server's place.
 
 ```bash
 scripts/ci/tresor_checkout.sh ../tresor-pin --submodules   # tresor at the pinned commit; build it (make)
-scripts/ci/conformance.sh ../tresor-pin sqlite             # memory | sqlite | postgres | sqlserver
+scripts/ci/conformance.sh ../tresor-pin sqlite             # memory | sqlite | postgres | sqlserver | kubernetes
 TRESOR_CONFORMANCE_REPLICAS=2 scripts/ci/conformance.sh ../tresor-pin postgres   # two replicas, a proxy
 ```
 
-On SQLite, PostgreSQL and SQL Server the run then checks the database for the seeded material in the clear.
+On SQLite, PostgreSQL, SQL Server and Kubernetes (envtest's API server) the run then checks the store for the
+seeded material in the clear.
 
-CI runs it on every store, two replicas on PostgreSQL and SQL Server, with tresor at the commit
+CI runs it on every store, two replicas on PostgreSQL, SQL Server and Kubernetes, with tresor at the commit
 `scripts/ci/tresor_checkout.sh` pins.
 
 ## Live on Azure

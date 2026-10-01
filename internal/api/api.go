@@ -201,7 +201,7 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 			// a server acting for a user: its own token proved who it is, the grant says for whom
 			user, gr, err := s.delegated(r, caller)
 			if errors.Is(err, errGrantStore) {
-				problem(w, http.StatusServiceUnavailable, "service_unavailable", "the delegation grant could not be read")
+				grantStoreProblem(w, err, "the delegation grant could not be read")
 				return
 			}
 			if err != nil {
@@ -319,9 +319,15 @@ func (s *Server) mayCreate(c *auth.Caller, name string) bool {
 }
 
 // visible fetches a secret the caller holds any verb on (under a grant: the actor's use, an admin's management
-// through it); an invisible one is the same 404 as a missing one, so a name's existence does not leak.
+// through it); an invisible one is the same 404 as a missing one, so a name's existence does not leak. A secret
+// that does not verify (the Kubernetes store) is 500 to an administrator only: no one else can be shown to hold
+// a verb on it.
 func (s *Server) visible(w http.ResponseWriter, r *http.Request, c *auth.Caller, name string) (*state.Secret, []string, bool) {
 	sec, err := s.store.Describe(r.Context(), name) // no material: a permission needs none
+	if errors.Is(err, keys.ErrSealed) && !s.isAdmin(c) {
+		s.log.Error("store read failed", "secret", name, "error", err.Error())
+		err = state.ErrNotFound
+	}
 	if err != nil && !errors.Is(err, state.ErrNotFound) {
 		s.unavailable(w, "read", name, err)
 		return nil, nil, false
@@ -336,11 +342,16 @@ func (s *Server) visible(w http.ResponseWriter, r *http.Request, c *auth.Caller,
 	return nil, nil, false
 }
 
-// unavailable answers a store that failed: 503, the reason in the log only.
+// unavailable answers a store that failed: 503, the reason in the log only. A secret too large for the store
+// is the caller's: 422.
 //
 // A value that does not open (keys.ErrSealed: its key changed, or it was tampered with) is no outage:
 // 500 service_error - trying again will not help until an operator acts (protocol, Errors; tresor spec 016).
 func (s *Server) unavailable(w http.ResponseWriter, what, name string, err error) {
+	if errors.Is(err, state.ErrTooLarge) {
+		problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
+		return
+	}
 	s.log.Error("store "+what+" failed", "secret", name, "error", err.Error())
 	if errors.Is(err, keys.ErrSealed) {
 		problem(w, http.StatusInternalServerError, "service_error", "a value the service holds does not open")
@@ -772,6 +783,10 @@ func (s *Server) mutate(w http.ResponseWriter, r *http.Request, verb string,
 		problem(w, http.StatusUnprocessableEntity, "invalid_secret", strings.TrimPrefix(err.Error(), errInvalid.Error()+": "))
 	case errors.Is(err, state.ErrNotFound):
 		problem(w, http.StatusNotFound, "not_found", "no such grant")
+	case errors.Is(err, keys.ErrSealed) && !s.isAdmin(c) && !errors.Is(err, errInvalid):
+		// a secret that does not verify, to a caller who cannot be shown to hold a verb on it: as missing
+		s.log.Error("store write failed", "secret", name, "error", err.Error())
+		problem(w, http.StatusNotFound, "not_found", fmt.Sprintf("no secret %q", name))
 	case err != nil:
 		s.unavailable(w, "written", name, err)
 	default:

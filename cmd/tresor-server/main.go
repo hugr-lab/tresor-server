@@ -29,6 +29,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/material"
 	azkvsource "github.com/hugr-lab/tresor-server/internal/material/azurekeyvault"
 	"github.com/hugr-lab/tresor-server/internal/state"
+	"github.com/hugr-lab/tresor-server/internal/state/kubestore"
 	"github.com/hugr-lab/tresor-server/internal/state/memory"
 	"github.com/hugr-lab/tresor-server/internal/state/sqlstore"
 )
@@ -139,6 +140,22 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger) (state
 		if err != nil {
 			return nil, nil, err
 		}
+		return st, []health.Check{{Name: "keys", Run: st.Envelope().Check}}, nil
+	case "kubernetes":
+		wrapper, err := keyWrapper(cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		rc, ns, err := kubestore.RESTConfig(cfg.State.Namespace)
+		if err != nil {
+			return nil, nil, err
+		}
+		st, err := kubestore.Open(ctx, rc, wrapper, kubestore.Options{Namespace: ns, Instance: cfg.State.Instance, Log: log,
+			Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}})
+		if err != nil {
+			return nil, nil, err
+		}
+		log.Info("state in the Kubernetes API", "namespace", ns)
 		return st, []health.Check{{Name: "keys", Run: st.Envelope().Check}}, nil
 	}
 	return nil, nil, fmt.Errorf("state.kind %s is not built in", cfg.State.Kind)

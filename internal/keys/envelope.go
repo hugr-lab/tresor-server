@@ -7,6 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -34,6 +35,8 @@ type cachedRoot struct {
 
 type cached struct {
 	aead    cipher.AEAD
+	mac     []byte // the data key's MAC key (MAC)
+	v1      bool   // its tag is v1 (tagV1)
 	expires time.Time
 }
 
@@ -104,8 +107,20 @@ func (e *Envelope) root(ctx context.Context, kekID string) ([]byte, error) {
 	return root, nil
 }
 
-// Tag authenticates a data key under the root of the KEK version that wrapped it.
-func Tag(root []byte, id, kekID string, wrapped []byte) []byte {
+// Tag authenticates a data key under the root of the KEK version that wrapped it: its id, its KEK id, its
+// creation time (to the microsecond, as every store keeps it) and its wrapped bytes. The creation time decides
+// when the key is replaced: a writer of the store must not keep one active for ever.
+func Tag(root []byte, id, kekID string, wrapped []byte, created time.Time) []byte {
+	m := hmac.New(sha256.New, root)
+	m.Write([]byte("tresor-server/data-key/2\x00" + id + "\x00" + kekID + "\x00"))
+	m.Write(binary.BigEndian.AppendUint64(nil, uint64(created.UnixMicro())))
+	m.Write(wrapped)
+	return m.Sum(nil)
+}
+
+// tagV1 is the tag before the creation time was in it (spec 003, a0): a data key it authenticates still opens,
+// but is never the active one - its age is not authenticated - and rewrap tags it anew.
+func tagV1(root []byte, id, kekID string, wrapped []byte) []byte {
 	m := hmac.New(sha256.New, root)
 	m.Write([]byte("tresor-server/data-key/1\x00" + id + "\x00" + kekID + "\x00"))
 	m.Write(wrapped)
@@ -113,19 +128,23 @@ func Tag(root []byte, id, kekID string, wrapped []byte) []byte {
 }
 
 // authentic checks a stored data key's tag: one planted by whoever could write the store - wrapped with an RSA
-// KEK's public key, say - has none that matches (ErrSealed). A KEK that does not answer is not ErrSealed.
-func (e *Envelope) authentic(ctx context.Context, dk DataKey) error {
+// KEK's public key, say - has none that matches (ErrSealed). A KEK that does not answer is not ErrSealed. v1: the
+// tag is the former one, which does not cover the creation time.
+func (e *Envelope) authentic(ctx context.Context, dk DataKey) (v1 bool, err error) {
 	if len(dk.Tag) == 0 {
-		return fmt.Errorf("%w: data key %s has no tag (made before spec 003: tresor-server rewrap tags it)", ErrSealed, dk.ID)
+		return false, fmt.Errorf("%w: data key %s has no tag (made before spec 003: tresor-server rewrap tags it)", ErrSealed, dk.ID)
 	}
 	root, err := e.root(ctx, dk.KEKID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if !hmac.Equal(dk.Tag, Tag(root, dk.ID, dk.KEKID, dk.Wrapped)) {
-		return fmt.Errorf("%w: data key %s is not authentic", ErrSealed, dk.ID)
+	switch {
+	case hmac.Equal(dk.Tag, Tag(root, dk.ID, dk.KEKID, dk.Wrapped, dk.CreatedAt)):
+		return false, nil
+	case hmac.Equal(dk.Tag, tagV1(root, dk.ID, dk.KEKID, dk.Wrapped)):
+		return true, nil
 	}
-	return nil
+	return false, fmt.Errorf("%w: data key %s is not authentic", ErrSealed, dk.ID)
 }
 
 // Check wraps and unwraps a throwaway key, and computes the current root: the KEK answers (readiness).
@@ -173,11 +192,12 @@ func (e *Envelope) Rewrap(ctx context.Context, tagUntagged bool, tagged func(id 
 			skipped = append(skipped, fmt.Errorf("data key %s has no tag: not tagged without --tag-untagged", dk.ID))
 			continue
 		case !untagged:
-			if err := e.authentic(ctx, dk); err != nil {
+			v1, err := e.authentic(ctx, dk)
+			if err != nil {
 				skipped = append(skipped, fmt.Errorf("data key %s: %w", dk.ID, err))
 				continue
 			}
-			if dk.KEKID == current {
+			if dk.KEKID == current && !v1 {
 				continue
 			}
 		}
@@ -220,7 +240,7 @@ func (e *Envelope) rewrapOne(ctx context.Context, dk DataKey, current string) (b
 	if err != nil {
 		return false, err
 	}
-	return e.keys.Rewrapped(ctx, dk.ID, dk.KEKID, wrapped, kekID, Tag(root, dk.ID, kekID, wrapped))
+	return e.keys.Rewrapped(ctx, dk.ID, dk.KEKID, wrapped, kekID, Tag(root, dk.ID, kekID, wrapped, dk.CreatedAt))
 }
 
 // active is the data key new values are sealed with: the active one, or a new one when there is none, it
@@ -237,8 +257,13 @@ func (e *Envelope) active(ctx context.Context) (string, cipher.AEAD, error) {
 				return "", nil, fmt.Errorf("the KEK: %w", err)
 			}
 			if dk.KEKID == current && e.now().Sub(dk.CreatedAt) < e.maxAge {
-				aead, err := e.aead(ctx, dk.ID)
-				return dk.ID, aead, err
+				c, err := e.key(ctx, dk.ID)
+				if err != nil {
+					return "", nil, err
+				}
+				if !c.v1 { // a v1 tag does not vouch for the key's age: replaced
+					return dk.ID, c.aead, nil
+				}
 			}
 		}
 		id, aead, err := e.rotate(ctx, slot)
@@ -253,6 +278,7 @@ func (e *Envelope) active(ctx context.Context) (string, cipher.AEAD, error) {
 // rotate makes a new data key, wraps it and makes it the active one.
 func (e *Envelope) rotate(ctx context.Context, slot int64) (string, cipher.AEAD, error) {
 	dek := make([]byte, 32)
+	defer clear(dek)
 	if _, err := rand.Read(dek); err != nil {
 		return "", nil, err
 	}
@@ -264,74 +290,121 @@ func (e *Envelope) rotate(ctx context.Context, slot int64) (string, cipher.AEAD,
 	if _, err := rand.Read(raw); err != nil {
 		return "", nil, err
 	}
-	dk := DataKey{ID: hex.EncodeToString(raw), KEKID: kekID, Wrapped: wrapped, CreatedAt: e.now().UTC()}
+	dk := DataKey{ID: hex.EncodeToString(raw), KEKID: kekID, Wrapped: wrapped, CreatedAt: e.now().UTC().Truncate(time.Microsecond)}
 	root, err := e.root(ctx, kekID)
 	if err != nil {
 		return "", nil, err
 	}
-	dk.Tag = Tag(root, dk.ID, dk.KEKID, dk.Wrapped)
+	dk.Tag = Tag(root, dk.ID, dk.KEKID, dk.Wrapped, dk.CreatedAt)
 	if err := e.keys.Activate(ctx, dk, slot); err != nil {
 		return "", nil, err
 	}
-	aead, err := newAEAD(dek)
+	c, err := newKey(dek)
 	if err != nil {
 		return "", nil, err
 	}
-	e.remember(dk.ID, aead)
-	return dk.ID, aead, nil
+	return dk.ID, e.remember(dk.ID, c).aead, nil
 }
 
 // aead is a data key's cipher: from the cache, or unwrapped now.
 func (e *Envelope) aead(ctx context.Context, id string) (cipher.AEAD, error) {
+	c, err := e.key(ctx, id)
+	return c.aead, err
+}
+
+// key is a data key, unwrapped: from the cache, or unwrapped now.
+func (e *Envelope) key(ctx context.Context, id string) (cached, error) {
 	e.mu.Lock()
 	c, ok := e.cache[id]
 	e.mu.Unlock()
 	if ok && e.now().Before(c.expires) {
-		return c.aead, nil
+		return c, nil
 	}
 	dk, err := e.keys.Get(ctx, id)
 	if errors.Is(err, ErrNoDataKey) {
-		return nil, fmt.Errorf("%w: data key %s is not stored", ErrSealed, id)
+		return cached{}, fmt.Errorf("%w: data key %s is not stored", ErrSealed, id)
 	}
 	if err != nil {
-		return nil, err
+		return cached{}, err
 	}
-	if err := e.authentic(ctx, dk); err != nil {
-		return nil, err
+	v1, err := e.authentic(ctx, dk)
+	if err != nil {
+		return cached{}, err
 	}
 	dek, err := e.wrapper.Unwrap(ctx, dk.Wrapped, dk.KEKID)
 	if err != nil {
 		// the KEK may be unreachable: not ErrSealed - the value is not known to be bad
-		return nil, fmt.Errorf("data key %s does not unwrap: %w", id, err)
+		return cached{}, fmt.Errorf("data key %s does not unwrap: %w", id, err)
 	}
-	aead, err := newAEAD(dek)
+	c, err = newKey(dek)
 	clear(dek)
 	if err != nil {
-		return nil, err
+		return cached{}, err
 	}
-	e.remember(id, aead)
-	return aead, nil
+	c.v1 = v1
+	return e.remember(id, c), nil
 }
 
-func (e *Envelope) remember(id string, aead cipher.AEAD) {
+func (e *Envelope) remember(id string, c cached) cached {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	now := e.now()
-	for k, c := range e.cache {
-		if !now.Before(c.expires) {
+	for k, old := range e.cache {
+		if !now.Before(old.expires) {
 			delete(e.cache, k)
 		}
 	}
-	e.cache[id] = cached{aead: aead, expires: now.Add(e.ttl)}
+	c.expires = now.Add(e.ttl)
+	e.cache[id] = c
+	return c
 }
 
-func newAEAD(dek []byte) (cipher.AEAD, error) {
+// newKey is an unwrapped data key's cipher, and its MAC key: HMAC-SHA256 under the data key of a fixed label.
+func newKey(dek []byte) (cached, error) {
 	if len(dek) != 32 {
-		return nil, fmt.Errorf("a data key must be 32 bytes, not %d", len(dek))
+		return cached{}, fmt.Errorf("a data key must be 32 bytes, not %d", len(dek))
 	}
 	block, err := aes.NewCipher(dek)
 	if err != nil {
+		return cached{}, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return cached{}, err
+	}
+	m := hmac.New(sha256.New, dek)
+	m.Write([]byte("tresor-server/mac-key/1"))
+	return cached{aead: aead, mac: m.Sum(nil)}, nil
+}
+
+// ActiveID names the data key new values are sealed with - made now if there is none: what a value with
+// nothing sealed is authenticated under (MAC).
+func (e *Envelope) ActiveID(ctx context.Context) (string, error) {
+	id, _, err := e.active(ctx)
+	return id, err
+}
+
+// MAC authenticates msg under the data key id names (spec 003): HMAC-SHA256 under a key derived from the data
+// key. The data key is authenticated by the KEK's root, so only the KEK's holder can make a MAC that verifies;
+// a rewrap keeps the data key, and so every MAC made under it.
+func (e *Envelope) MAC(ctx context.Context, dataKeyID string, msg []byte) ([]byte, error) {
+	c, err := e.key(ctx, dataKeyID)
+	if err != nil {
 		return nil, err
 	}
-	return cipher.NewGCM(block)
+	m := hmac.New(sha256.New, c.mac)
+	m.Write(msg)
+	return m.Sum(nil), nil
+}
+
+// Verify checks a MAC made by MAC: one that does not match is ErrSealed; a KEK that does not answer is not.
+func (e *Envelope) Verify(ctx context.Context, dataKeyID string, msg, mac []byte) error {
+	want, err := e.MAC(ctx, dataKeyID, msg)
+	if err != nil {
+		return err
+	}
+	if !hmac.Equal(mac, want) {
+		return fmt.Errorf("%w: its MAC does not match", ErrSealed)
+	}
+	return nil
 }

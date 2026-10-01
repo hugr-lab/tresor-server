@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/state"
@@ -91,5 +92,59 @@ func TestSealedMintedToken(t *testing.T) {
 	f.srv.store = withSealedTokens{f.srv.store}
 	if _, _, r := f.mintedMaterial(node, "Delegation", g); r.status != 500 || r.problemType(t) != "service_error" {
 		t.Fatalf("a token that does not open: %d %s", r.status, r.body)
+	}
+}
+
+// sealedGrants is a store whose delegation grants were changed behind it (the Kubernetes store's MAC)
+type sealedGrants struct{ state.DelegationStore }
+
+func (s sealedGrants) Get(context.Context, []byte, time.Time) (*state.Delegation, error) {
+	return nil, fmt.Errorf("a grant: %w", keys.ErrSealed)
+}
+
+type withSealedGrants struct{ state.Store }
+
+func (s withSealedGrants) Delegations() state.DelegationStore {
+	return sealedGrants{s.Store.Delegations()}
+}
+
+// a grant that does not verify: 500 service_error where it is used, not a retry
+func TestSealedGrant(t *testing.T) {
+	f := newFixture(t, "")
+	node := f.idp.Service(t, "duckdb-secrets", "node", "nodes")
+	f.do("PUT", "/v1/secrets/echo", f.admin, mintedSecret)
+	g, r := f.grantFor(node, f.alice)
+	if g == "" {
+		t.Fatalf("exchange: %d %s", r.status, r.body)
+	}
+	f.srv.store = withSealedGrants{f.srv.store}
+	for what, r := range map[string]reply{
+		"used":    f.do("GET", "/v1/secrets", node, "", "Delegation", g),
+		"revoked": f.do("DELETE", "/v1/delegations/"+g, node, ""),
+	} {
+		if r.status != 500 || r.problemType(t) != "service_error" {
+			t.Errorf("a grant that does not verify, %s: %d %s", what, r.status, r.body)
+		}
+	}
+}
+
+// tampered is a store whose secret's descriptor does not verify (the Kubernetes store's MAC)
+type tampered struct{ state.Store }
+
+func (t tampered) Describe(context.Context, string) (*state.Secret, error) {
+	return nil, fmt.Errorf("a secret: %w", keys.ErrSealed)
+}
+
+// a secret that does not verify is 500 to an administrator; to anyone else, the 404 of a missing one - its
+// existence does not leak
+func TestTamperedSecretHidden(t *testing.T) {
+	f := newFixture(t, "")
+	f.do("PUT", "/v1/secrets/lake", f.admin, s3Secret)
+	f.srv.store = tampered{f.srv.store}
+	if r := f.do("GET", "/v1/secrets/lake", f.alice, ""); r.status != 404 {
+		t.Fatalf("to a user: %d %s", r.status, r.body)
+	}
+	if r := f.do("GET", "/v1/secrets/lake", f.admin, ""); r.status != 500 || r.problemType(t) != "service_error" {
+		t.Fatalf("to an administrator: %d %s", r.status, r.body)
 	}
 }

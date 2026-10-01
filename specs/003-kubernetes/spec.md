@@ -14,7 +14,7 @@ cluster.
   allowlist. It also gives a database its password.
 - **Workload identity**: on AKS, the pod's federated identity reaches Key Vault (the KEK, `ref+azkv`) and an
   Azure database. No secret of the service's own.
-- **Integrity of what is not sealed**: on the Kubernetes store, a MAC under the data key over every field
+- **Integrity of what is not sealed**: on the Kubernetes store, a MAC under a data key over every field
   that is not sealed, and an admission policy that lets only the service write its resources.
 - **A Helm chart**: the Deployment, the Service, an Ingress, a PodDisruptionBudget, the ServiceAccount and
   its RBAC, the CRDs, the admission policy. It deploys the service on any state store: the Kubernetes
@@ -78,7 +78,10 @@ never part of a secret's write.
   is live first.
 - **The per-actor limit**: a `TresorActor` counter, compare-and-set. A put reads it, counts the actor's live
   grants by label, creates the grant, then moves the counter on at the version read; on a conflict it
-  deletes the grant it made and runs again. No lock, no clock.
+  deletes the grant it made and runs again. No lock, no clock. A replica that dies between the two leaves
+  a grant no caller holds: it counts until it expires. The limit is never passed; under racing puts near
+  it, one may be refused while another's grant, about to be deleted, still counts (the SQL stores' lock does
+  not do that). A put runs at most 16 times.
 - Expired grants and their tokens are purged every minute, as on the SQL stores.
 
 **Data keys**: a data key is created first, then `TresorKeyring` is moved on compare-and-set on its slot
@@ -96,7 +99,8 @@ whole object - descriptor, grants, sealed params - is refused (`422`) over 256 K
 1000 grants.
 
 **The schema**: the CRDs are the chart's. At start the service checks, by API discovery (no cluster-scope
-right needed), that its group serves the version it knows; otherwise it does not start.
+right needed), that its group serves the version it knows, every kind; otherwise it does not start. The
+discovery is one GET, not client-go's discovery client: that one links every built-in API type (+25 MB).
 
 **Material is never in a resource in the clear**: sealed, or a reference. Whoever can read the resources
 still needs the KEK.
@@ -122,15 +126,22 @@ under it. So the service derives a **root** from the KEK, which only the KEK's h
 
 - The root is per KEK version (the version is in the label), never stored, kept in memory for
   `keys.cache_ttl` with the data keys - one TTL: when the service loses its KEK rights, it stops within it.
-- **Every data key is authenticated**, on every store: a tag, HMAC under the root, over its id, its wrapped
-  bytes and its KEK id. A data key whose tag does not match is refused (`ErrSealed`). This closes a planted
-  data key on the SQL stores too.
+- **Every data key is authenticated**, on every store: a tag, HMAC under the root, over its id, its KEK id,
+  its creation time (to the microsecond) and its wrapped bytes. A data key whose tag does not match is
+  refused (`ErrSealed`). This closes a planted data key on the SQL stores too. The creation time decides
+  when a data key is replaced: in the tag, no writer of the store keeps one active for ever.
+- **Tags from (a0)** (format 1, no creation time): the data key still opens, is never the active one (a new
+  one is made), and `rewrap` tags it anew.
 - **Keys from before**: no tag, refused until tagged. `tresor-server rewrap -tag-untagged` tags them once,
   at the upgrade, and logs each; a routine `rewrap` never tags a key with none (one planted since has none
   either).
-- **The MAC key** (below) is derived from the root, with the installation's id
-  (`state.instance`, default the namespace's name; kept stable, so a restore still verifies): a resource
-  moved from another installation that shares the KEK (dev and prod) does not verify.
+- **The MAC key** (below) is derived from a **data key**: HMAC-SHA256 under the data key of a fixed label.
+  The data key is authenticated by the root, so only the KEK's holder can make a MAC that verifies. A
+  rotation of the KEK and a `rewrap` keep the data key, and so every MAC made under it: nothing is
+  re-MACed. Each resource names its data key, in what the MAC covers.
+- **The installation's id** (`state.instance`, default the namespace's name; kept stable, so a restore
+  still verifies) is in every MAC: a resource moved from another installation that shares the KEK (dev and
+  prod) does not verify.
 - **The right it needs**: Key Vault `sign` on the KEK, beside get, wrapKey and unwrapKey. No built-in role
   gives exactly that (*Key Vault Crypto Service Encryption User* has no `sign`; *Key Vault Crypto User*
   gives encrypt and decrypt too): the recipes make a **custom role** with these four data actions, on the
@@ -138,34 +149,52 @@ under it. So the service derives a **root** from the KEK, which only the KEK's h
 
 #### A MAC over every field that is not sealed
 
-- HMAC-SHA256 under the MAC key, over a canonical encoding:
-  - the resource's kind and the format's version first;
-  - every field length-prefixed, every list count-prefixed in a defined order (scope and redact keys as
-    written, grants by id, verbs as written), absent and empty told apart, times as int64 nanoseconds;
+- HMAC-SHA256 under the MAC key of the data key the resource names, over a canonical encoding:
+  - the format's version, the resource's kind and the installation's id first;
+  - every field length-prefixed, every list count-prefixed in its order as stored (scope, redact keys,
+    grants, verbs), absent and empty told apart, times as int64 nanoseconds;
   - a `TresorSecret`: its name, row id, type, provider, scope, redact keys, comment, owner, version,
-    times, grants, data key id;
-  - a `TresorGrant`: its id hash, actor (owner, client, issuer), user, expiries, data key id;
-  - a `TresorMintedToken`: its grant, key, version, refusal, data key id;
-  - a `TresorActor`: its actor and counter; the `TresorKeyring`: its active key and slot version.
+    times, grants, data key id, sealed params;
+  - a `TresorGrant`: its id hash, actor (owner, client, issuer), user, expiries, data key id, sealed
+    subject token;
+  - a `TresorMintedToken`: its grant, key, version, refusal, data key id, sealed token;
+  - a `TresorActor`: its actor, counter and data key id.
+- A resource with nothing sealed (a grant with no subject token, a refusal, a counter) is MACed under the
+  active data key.
+- **No MAC on the data keys and the keyring**: a data key is authenticated by its tag; the keyring only
+  names one, and one planted is refused by its tag. A keyring changed to name another authentic data key:
+  that key's age (in its tag) and KEK version decide whether it seals, as for any active key.
+- **The installation's mark**: a `TresorKeyring` named `installation` holds the instance, MACed. Readiness
+  (the `state` check) verifies it, and the first replica to look makes it. A wrong KEK or `state.instance`
+  is not ready - not a service that lists nothing because every resource fails to verify.
 - **What the MAC covers decides; the metadata is checked against it.** On every read the store recomputes
   the resource's name and labels from the MACed fields and refuses a mismatch (a relabelled grant would
-  slip past revocation and the per-actor count). A resource with a `deletionTimestamp`, or a finalizer or
-  an owner reference the service did not set, is treated as gone - or refused, for a secret.
+  slip past revocation and the per-actor count). A resource with a `deletionTimestamp` is treated as gone
+  (a secret: refused); one with a finalizer or an owner reference the service did not set is refused.
 - **Checked before it is used**: on every read, and before `fn` runs in `Update` and before the actor's
   counter is moved - so a tampered resource is never re-MACed by the next honest write.
 - **What a failure answers**:
-  - a `Describe` or a `Get`: `500 service_error` (tresor spec 016), never a descriptor, never material;
-  - a list: the resource is left out, and logged and counted - one bad resource never fails a list
-    (spec 002);
+  - a `Describe` or a `Get`: `500 service_error` (tresor spec 016) to an administrator, never a
+    descriptor, never material; to anyone else the `404` of a missing secret - no one can be shown to hold
+    a verb on it, and its existence does not leak (but during a KEK outage, `503` for a name that exists);
+  - a list: the resource is left out, and logged - one bad resource never fails a list (spec 002); a
+    delegation grant changed is not counted toward its actor's limit;
+  - a delegation grant or a minted token: `500` where it is used, never honoured;
   - a KEK that does not answer while a check needs it: `503`, not 500.
 - It does not stop a **rollback** - a whole older object put back, its MAC valid then: a revoked grant back
   again, a deleted secret back, an actor's counter back, a spent minted token back (which may make the IdP
   revoke the token's whole family). A delegation grant's expiry bounds it (8 hours at most). The admission
   policy is the guard; without it (`admissionPolicy.enabled: false`, or a stolen ServiceAccount token)
-  there is none, and the service warns at start. A replayed keyring can only be an older one: the age and
-  KEK-version check on the active data key stays.
-- A hand edit (`kubectl edit`) makes the resource unreadable, as meant. A backup restored (Velero) or a
-  move with the same KEK and `state.instance` keeps it.
+  there is none. The service cannot see the policy (that needs a cluster-scope right): the chart's notes
+  warn when it is off.
+- A hand edit (`kubectl edit`) makes the resource unreadable, as meant. A secret changed behind the store is
+  refused to every request, a delete included (its grants cannot be trusted to say who may delete it): an
+  operator deletes its resource by hand, past the admission policy.
+- A revocation (`DeleteWhere`) and the purge delete what the labels select, a changed resource included: a
+  delete gives no one anything.
+- A backup restored (Velero) or a move with the same KEK and `state.instance` verifies. Minted tokens do
+  not survive it: their owner references name the grants' old UIDs, and the garbage collector deletes them
+  (they are minted again).
 - The purge also sweeps minted tokens whose grant is gone (a stripped label or owner reference would
   leave them otherwise).
 
@@ -278,9 +307,9 @@ development).
 
 ### The PRs
 
-1. **(a0) the root**: the KEK's `Derive` (RSA sign, AES wrap, local HMAC), data keys authenticated on
+1. **(a0) the root** (landed): the KEK's `Derive` (RSA sign, AES wrap, local HMAC), data keys authenticated on
    every store, `keys.cache_ttl` for all; the custom role in the Container Apps recipe.
-2. **(a) the Kubernetes store**: the CRDs, `state.kind: kubernetes`, the MAC, the suite on envtest,
+2. **(a) the Kubernetes store** (landed): the CRDs, `state.kind: kubernetes`, the MAC, the suite on envtest,
    conformance on it.
 3. **(b) `ref+k8s://`**: the source, its allowlist, `state.password_ref`.
 4. **(c) workload identity**: `azure.identity: workload`.
@@ -360,8 +389,13 @@ development).
 - **The chart**: in this repository, `deploy/helm/tresor-server`, published to
   `oci://ghcr.io/hugr-lab/charts`. It deploys the service on any state store, SQL included.
 
+- **At (a), the MAC key from the data key**, not the root: a KEK rotation and its `rewrap` would otherwise
+  have to re-MAC every resource before the old KEK version is retired.
+
 ## Follow-ups
 
 - An operator for GitOps (resources applied by hand, checked as the protocol checks a write).
 - AWS IRSA and GCP Workload Identity (phase 4).
 - The MAC on the SQL stores, as a setting.
+- Metrics: a count of the resources a list left out.
+- `TresorActor` counters are never deleted: one per actor ever seen.

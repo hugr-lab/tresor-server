@@ -83,12 +83,14 @@ Where the service keeps secrets, grants and delegation grants. See [State stores
 
 | Setting | |
 | --- | --- |
-| `state.kind` | `memory`, `sqlite`, `postgres` or `sqlserver`. Required. |
+| `state.kind` | `memory`, `sqlite`, `postgres`, `sqlserver` or `kubernetes`. Required. |
 | `state.path` | SQLite: the database's file. |
 | `state.dsn` | PostgreSQL, SQL Server: the server, the database, the user. Never a password. |
 | `state.auth` | `entra` (the service's Azure token) or `password`. |
 | `state.password_env`, `state.password_file` | `auth: password`: where the password is. |
 | `state.max_open_conns` | The connection pool; default 10. |
+| `state.namespace` | Kubernetes: where the resources are. The pod's own by default; required outside a pod. |
+| `state.instance` | Kubernetes: the installation's id, in every MAC. The namespace by default; keep it stable. |
 
 ### `keys`
 

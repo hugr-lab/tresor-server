@@ -39,7 +39,10 @@ material of their choice under it. So a data key that unwraps proves nothing. Th
 | local | HMAC-SHA256 of a fixed label under the key |
 
 - The root is never stored; it stays in memory for `keys.cache_ttl`, as the data keys do.
-- A data key's tag is an HMAC under the root over its id, its KEK id and its wrapped bytes.
+- A data key's tag is an HMAC under the root over its id, its KEK id, its creation time and its wrapped
+  bytes: no one who writes the store keeps a data key active past its age.
+- A data key tagged by the first version of this (no creation time in the tag) still opens, but a new one
+  is made for new values; `rewrap` tags it anew.
 - A data key whose tag does not match is refused, on every store.
 - **Upgrading from a version before this**: its data keys have no tag, and every value sealed under them is
   refused (`500`) until they are tagged. Once, at the upgrade, with the service's new version:
@@ -48,6 +51,9 @@ material of their choice under it. So a data key that unwraps proves nothing. Th
      identity the custom role (get, wrap, unwrap, sign) on the key;
   2. `tresor-server rewrap -tag-untagged -config …`: it tags the data keys that have none - you vouch for
      the store as it is - and logs each one it tagged.
+- **On the Kubernetes store**, what is not sealed (a secret's grants, a delegation grant's user) carries a
+  MAC under a key derived from a data key: only the KEK's holder can make one that verifies. A `rewrap` keeps
+  the data keys, so it keeps every MAC.
 - A routine `rewrap` (after a rotation) never tags a data key with no tag: it skips and names it, for a key
   planted since would carry none either. It never tags a data key whose tag does not match.
 
