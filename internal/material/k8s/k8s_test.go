@@ -2,14 +2,19 @@ package k8s
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -145,5 +150,42 @@ func TestAPIServer(t *testing.T) {
 	_, err = r.ResolveOne(ctx, "ref+k8s://data-team/duckdb-gone/secret")
 	if !errors.Is(err, material.ErrUnresolved) || !strings.Contains(err.Error(), "404 NotFound") {
 		t.Fatalf("a missing Secret: %v", err)
+	}
+}
+
+// an error names the status and reason, never a message or a body: a decoding error may quote the Secret's data
+func TestDescribe(t *testing.T) {
+	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "duckdb-s3", errors.New("hunter2"))
+	if err := describe(forbidden); err.Error() != "the Kubernetes API answered 403 Forbidden" {
+		t.Fatalf("a status: %v", err)
+	}
+	for _, err := range []error{
+		runtime.NewMissingKindErr(`{"data":{"secret":"aHVudGVyMg=="}}`),
+		&url.Error{Op: "Get", URL: "https://api/x", Err: errors.New("hunter2")},
+		fmt.Errorf("x: %w", context.DeadlineExceeded),
+	} {
+		if got := describe(err).Error(); strings.Contains(got, "hunter2") || strings.Contains(got, "aHVudGVyMg") {
+			t.Errorf("%q leaks", got)
+		}
+	}
+}
+
+// a Secret with no data, or data that is not base64: no value
+func TestOddData(t *testing.T) {
+	s := NewWithGetter(allow, fake{"data-team/duckdb-empty": {}})
+	if _, _, err := s.Resolve(ctx, material.Ref{Scheme: "k8s", Vault: "data-team", Name: "duckdb-empty", Key: "k"}); err == nil {
+		t.Fatal("a Secret with no data")
+	}
+}
+
+// at a write: a reference outside the allowlist is refused (422), one within it is redacted
+func TestCheckWrite(t *testing.T) {
+	r := material.New(NewWithGetter(allow, fake{}))
+	redact, err := r.CheckWrite("config", map[string]json.RawMessage{"secret": json.RawMessage(`"ref+k8s://data-team/duckdb-s3/secret"`)}, nil)
+	if err != nil || len(redact) != 1 || redact[0] != "secret" {
+		t.Fatalf("within: %v %v", redact, err)
+	}
+	if _, err := r.CheckWrite("config", map[string]json.RawMessage{"secret": json.RawMessage(`"ref+k8s://tresor/tresor-kek/key"`)}, nil); !errors.Is(err, material.ErrInvalid) {
+		t.Fatalf("outside: %v", err)
 	}
 }

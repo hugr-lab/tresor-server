@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -15,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 
@@ -53,9 +55,7 @@ func NewWithGetter(allow []Allow, g Getter) *Source { return &Source{allow: allo
 func (s *Source) Scheme() string { return "k8s" }
 
 var (
-	namespaceName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
-	secretName    = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
-	keyName       = regexp.MustCompile(`^[-._a-zA-Z0-9]{1,253}$`)
+	keyName = regexp.MustCompile(`^[-._a-zA-Z0-9]{1,253}$`)
 )
 
 // Parse checks <namespace>/<secret>/<key>: Kubernetes' own rules for each, no escape, no other segment, no
@@ -67,9 +67,9 @@ func (s *Source) Parse(text string) (material.Ref, error) {
 	}
 	ref := material.Ref{Scheme: "k8s", Vault: parts[0], Name: parts[1], Key: parts[2]}
 	switch {
-	case !namespaceName.MatchString(ref.Vault):
+	case len(validation.IsDNS1123Label(ref.Vault)) > 0:
 		return material.Ref{}, errors.New("a namespace's name is a DNS label: lower-case letters, digits and dashes")
-	case !secretName.MatchString(ref.Name):
+	case len(validation.IsDNS1123Subdomain(ref.Name)) > 0:
 		return material.Ref{}, errors.New("a Secret's name is a DNS subdomain: lower-case letters, digits, dashes and dots")
 	case !keyName.MatchString(ref.Key) || ref.Key == "." || ref.Key == "..":
 		return material.Ref{}, errors.New("a Secret's key is letters, digits, dashes, underscores and dots")
@@ -141,12 +141,19 @@ func (g secrets) Get(ctx context.Context, namespace, name string) (map[string][]
 	return data, u.GetResourceVersion(), nil
 }
 
-// describe is an API error: its status and reason, never a body.
+// describe is an API error: its status and reason, never a body nor a message - a decoding error may quote the
+// whole response, which for a Secret is its data.
 func describe(err error) error {
 	var status apierrors.APIStatus
-	if errors.As(err, &status) {
+	var urlErr *url.Error
+	switch {
+	case errors.As(err, &status):
 		s := status.Status()
 		return fmt.Errorf("the Kubernetes API answered %d %s", s.Code, s.Reason)
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return errors.New("the Kubernetes API did not answer in time")
+	case errors.As(err, &urlErr):
+		return errors.New("the Kubernetes API is unreachable")
 	}
-	return fmt.Errorf("the Kubernetes API: %w", err)
+	return errors.New("the Kubernetes API answered something unreadable")
 }

@@ -84,6 +84,10 @@ func Open(ctx context.Context, cfg *rest.Config, wrapper keys.KeyWrapper, opts O
 	if opts.Log == nil {
 		opts.Log = slog.New(slog.DiscardHandler)
 	}
+	if cfg.QPS == 0 { // client-go's own (5 a second) would throttle a service; kube.Config sets it too
+		cfg = rest.CopyConfig(cfg)
+		cfg.QPS, cfg.Burst = 100, 200
+	}
 	if err := checkSchema(ctx, cfg); err != nil {
 		return nil, err
 	}

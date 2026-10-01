@@ -212,11 +212,15 @@ func passwordResolver(cfg *config.Config, ref string) (*material.Resolver, error
 		if len(parts) != 3 {
 			return nil, errors.New("state.password_ref: ref+k8s://<namespace>/<secret>/<key>")
 		}
+		allow := []k8ssource.Allow{{Namespace: parts[0], Prefixes: []string{parts[1]}}}
+		if _, err := checkedPassword(material.New(k8ssource.NewWithGetter(allow, nil)), ref); err != nil {
+			return nil, err // before reaching for the API
+		}
 		rc, err := kube.Config()
 		if err != nil {
 			return nil, err
 		}
-		src, err := k8ssource.New([]k8ssource.Allow{{Namespace: parts[0], Prefixes: []string{parts[1]}}}, rc)
+		src, err := k8ssource.New(allow, rc)
 		if err != nil {
 			return nil, err
 		}
@@ -231,8 +235,17 @@ func passwordResolver(cfg *config.Config, ref string) (*material.Resolver, error
 	if err != nil {
 		return nil, err
 	}
-	return material.New(azkvsource.New([]azkvsource.Allow{{Vault: parts[0], Prefixes: []string{parts[1]}}}, cred,
-		azkvsource.Options{DNSSuffix: cfg.Material.AzKV.DNSSuffix})), nil
+	return checkedPassword(material.New(azkvsource.New([]azkvsource.Allow{{Vault: parts[0], Prefixes: []string{parts[1]}}}, cred,
+		azkvsource.Options{DNSSuffix: cfg.Material.AzKV.DNSSuffix})), ref)
+}
+
+// checkedPassword: the password reference parses, at start - not at the first connection.
+func checkedPassword(r *material.Resolver, ref string) (*material.Resolver, error) {
+	if !r.Admits(ref) {
+		return nil, errors.New("state.password_ref does not parse: ref+k8s://<namespace>/<secret>/<key> or " +
+			"ref+azkv://<vault>/<secret>[/<version>]")
+	}
+	return r, nil
 }
 
 // materialResolver is where references may read (material:), or nil: then every reference is refused.
@@ -250,6 +263,16 @@ func materialResolver(cfg *config.Config) (*material.Resolver, error) {
 		sources = append(sources, azkvsource.New(allow, cred, azkvsource.Options{DNSSuffix: kv.DNSSuffix, CacheTTL: kv.CacheTTL}))
 	}
 	if k := cfg.Material.K8s; len(k.Allow) > 0 {
+		// the service's own namespace holds its own credentials (a local KEK, a password, a client secret):
+		// never readable by a reference
+		if own, err := kube.Namespace(cfg.State.Namespace); err == nil {
+			for _, a := range k.Allow {
+				if a.Namespace == own {
+					return nil, fmt.Errorf("material.k8s.allow names %s, the service's own namespace: its credentials are "+
+						"there - keep the Secrets references read in another", own)
+				}
+			}
+		}
 		rc, err := kube.Config()
 		if err != nil {
 			return nil, err
@@ -308,6 +331,10 @@ func serve(configPath string, log *slog.Logger) error {
 	resolver, err := materialResolver(cfg)
 	if err != nil {
 		return err
+	}
+	// the sources' own parse, beside config's: the database's password is no administrator's to read
+	if ref := cfg.State.PasswordRef; ref != "" && resolver != nil && resolver.Admits(ref) {
+		return errors.New("state.password_ref is within material's allowlist: an administrator could read the database's password")
 	}
 	srv, err := api.New(ctx, cfg, verifier, st, log, api.WithMaterial(resolver))
 	if err != nil {

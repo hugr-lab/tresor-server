@@ -59,7 +59,10 @@ material:
 ```
 
 - Only the namespaces listed, and only the Secrets whose names start with a listed prefix (none listed: all).
-  Names are compared exactly, as Kubernetes has them.
+  Names are compared exactly, as Kubernetes has them. A prefix is a plain start: `duckdb` also matches
+  `duckdbx-…` - end it with a dash.
+- **Never the service's own namespace**: its own credentials are there (a local KEK, a password, a client
+  secret). The service does not start if the allowlist names it.
 - The service reads with its ServiceAccount: it needs `get` on Secrets in each namespace listed (the chart
   makes a Role per namespace). A Role cannot match name prefixes: the prefixes are the allowlist's alone.
 - The value must be UTF-8 text: a reference is a VARCHAR value.
@@ -102,5 +105,9 @@ state:
   password_ref: ref+k8s://db/tresor-pg/password
 ```
 
-It must be outside every `material` allowlist: otherwise an administrator could write a secret that names it,
-and read the database's password. The service does not start if it is not.
+- It must be outside every `material` allowlist: otherwise an administrator could write a secret that names
+  it, and read the database's password. The service does not start if it is not, nor if it does not parse.
+- The allowlist compares where a reference points, not the credential: a copy of the password synced into an
+  allowlisted namespace or vault (External Secrets, say) is readable there.
+- The service needs `get` on that one Secret (the chart grants it by name), or *Key Vault Secrets User* on
+  that one secret.

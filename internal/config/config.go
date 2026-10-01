@@ -67,6 +67,9 @@ type State struct {
 }
 
 // StateKinds are the stores this build knows.
+// k8sPrefix is how a Kubernetes Secret's name may start.
+var k8sPrefix = regexp.MustCompile(`^[a-z0-9][-a-z0-9.]*$`)
+
 var StateKinds = []string{"memory", "sqlite", "postgres", "sqlserver", "kubernetes"}
 
 // dnsLabel is a Kubernetes namespace's name.
@@ -294,6 +297,12 @@ func (c *Config) validate() error {
 	for i, a := range c.Material.K8s.Allow {
 		if !dnsLabel.MatchString(a.Namespace) {
 			return fmt.Errorf("material.k8s.allow[%d].namespace: a namespace's name (a DNS label)", i)
+		}
+		for _, p := range a.Prefixes {
+			if !k8sPrefix.MatchString(p) {
+				return fmt.Errorf("material.k8s.allow[%d].prefixes: a Secret's name starts so - lower-case letters, "+
+					"digits, dashes and dots", i)
+			}
 		}
 	}
 	if strings.HasPrefix(c.State.PasswordRef, "ref+azkv://") && c.Azure.Identity == "" {
