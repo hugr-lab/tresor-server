@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/hugr-lab/tresor-server/internal/material"
+	"github.com/hugr-lab/tresor-server/internal/vault"
 )
 
 // Caller is the Vault client: vault.Client, or a fake in tests.
@@ -117,11 +118,18 @@ func (s *Source) Resolve(ctx context.Context, ref material.Ref) (string, string,
 		} `json:"data"`
 	}
 	if err := s.vault.Do(ctx, http.MethodGet, ref.Vault+"/data/"+ref.Name, nil, &out); err != nil {
+		var ve *vault.Error
+		if errors.As(err, &ve) && ve.Status == http.StatusNotFound {
+			return "", "", errors.New("no such KV secret (missing, deleted or destroyed)")
+		}
 		return "", "", err // the client's error: a status and Vault's words, never a value
+	}
+	if out.Data.Metadata.Version < 1 {
+		return "", "", errors.New("not a KV v2 secret: the mount is not KV version 2")
 	}
 	raw, ok := out.Data.Data[ref.Key]
 	if !ok {
-		return "", "", errors.New("the KV secret has no such field (or was deleted)")
+		return "", "", errors.New("the KV secret has no such field")
 	}
 	value, ok := raw.(string)
 	if !ok || !utf8.ValidString(value) {

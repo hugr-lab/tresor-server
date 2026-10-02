@@ -260,8 +260,8 @@ func passwordResolver(cfg *config.Config, ref string) (*material.Resolver, error
 // checkedPassword: the password reference parses, at start - not at the first connection.
 func checkedPassword(r *material.Resolver, ref string) (*material.Resolver, error) {
 	if !r.Admits(ref) {
-		return nil, errors.New("state.password_ref does not parse: ref+k8s://<namespace>/<secret>/<key> or " +
-			"ref+azkv://<vault>/<secret>[/<version>]")
+		return nil, errors.New("state.password_ref does not parse: ref+k8s://<namespace>/<secret>/<key>, " +
+			"ref+azkv://<vault>/<secret>[/<version>] or ref+vault://<mount>/<path>#<field>")
 	}
 	return r, nil
 }

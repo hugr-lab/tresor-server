@@ -58,7 +58,8 @@ type State struct {
 	Auth         string `yaml:"auth"`
 	PasswordEnv  string `yaml:"password_env"`
 	PasswordFile string `yaml:"password_file"`
-	// PasswordRef is a reference to the password (ref+k8s:// or ref+azkv://), read for each new connection. It
+	// PasswordRef is a reference to the password (ref+k8s://, ref+azkv:// or ref+vault://), read for each new
+	// connection. It
 	// must be outside material's allowlists: an administrator must not be able to read it.
 	PasswordRef  string `yaml:"password_ref"`
 	MaxOpenConns int    `yaml:"max_open_conns"`
@@ -373,8 +374,8 @@ func (c *Config) validate() error {
 			return errors.New("material.vault: allow lists the KV mounts references may read, with vault: configured")
 		}
 		for i, a := range mv.Allow {
-			if !vaultMount.MatchString(a.Mount) || a.Mount == ".." {
-				return fmt.Errorf("material.vault.allow[%d].mount: a mount's name, one segment", i)
+			if !vaultMount.MatchString(a.Mount) || slices.Contains([]string{"sys", "auth", "identity", "cubbyhole"}, a.Mount) {
+				return fmt.Errorf("material.vault.allow[%d].mount: a KV v2 mount's name, one segment", i)
 			}
 		}
 		if mv.CacheTTL < 0 || mv.CacheTTL > 5*time.Minute {
@@ -643,8 +644,9 @@ func IsLoopback(host string) bool {
 // vaultMount is a Vault mount's name: one segment.
 var vaultMount = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$`)
 
-// admits says whether a reference's place is within an allowlist, as the sources compare: Kubernetes names
-// exactly, Key Vault names without case. A reference that does not parse is admitted by none.
+// admits says whether a reference's place is within an allowlist, as the sources compare: Kubernetes and Vault
+// names exactly, Key Vault names without case. It errs toward admitting: a reference that does not parse may be
+// said admitted, and the service refuses it at start anyway.
 func (m Material) admits(ref string) bool {
 	if rest, ok := strings.CutPrefix(ref, "ref+k8s://"); ok {
 		parts := strings.Split(rest, "/")

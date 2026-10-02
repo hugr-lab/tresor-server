@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hugr-lab/tresor-server/internal/material"
 	"github.com/hugr-lab/tresor-server/internal/vault"
@@ -78,5 +79,45 @@ func TestKV(t *testing.T) {
 				t.Fatalf("outside the allowlist now: %v", err)
 			}
 		})
+	}
+}
+
+// counting is a Vault that counts reads and answers one KV secret
+type counting struct{ reads int }
+
+func (c *counting) Do(_ context.Context, _, path string, _, out any) error {
+	c.reads++
+	raw := `{"data":{"data":{"secret":"v"},"metadata":{"version":3}}}`
+	if strings.Contains(path, "/data/kv1") {
+		raw = `{"data":{"data":{"secret":"v"}}}` // a KV v1 mount: no metadata
+	}
+	return json.Unmarshal([]byte(raw), out)
+}
+
+// the cache serves within its time, after the allowlist; a prefix is a plain start; a mount not KV v2 is
+// refused at the read
+func TestCache(t *testing.T) {
+	v := &counting{}
+	s := New(v, []Allow{{Mount: "secret", Prefixes: []string{"duckdb"}}}, time.Minute)
+	ref, _ := s.Parse("secret/duckdb/lake#secret")
+	for range 3 {
+		if val, ver, err := s.Resolve(ctx, ref); err != nil || val != "v" || ver != "3" {
+			t.Fatalf("%q %q %v", val, ver, err)
+		}
+	}
+	if v.reads != 1 {
+		t.Fatalf("%d reads within the cache's time", v.reads)
+	}
+	if _, err := s.Parse("secret/duckdb2/x#secret"); err != nil {
+		t.Fatalf("a plain prefix admits duckdb2/: %v (end prefixes with /)", err)
+	}
+	s.allow = []Allow{{Mount: "secret", Prefixes: []string{"other/"}}}
+	if _, _, err := s.Resolve(ctx, ref); err == nil {
+		t.Fatal("a cached value outside the allowlist now")
+	}
+	kv1 := New(&counting{}, []Allow{{Mount: "secret"}}, 0)
+	ref1, _ := kv1.Parse("secret/kv1#secret")
+	if _, _, err := kv1.Resolve(ctx, ref1); err == nil || !strings.Contains(err.Error(), "KV v2") {
+		t.Fatalf("a KV v1 mount: %v", err)
 	}
 }

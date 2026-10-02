@@ -63,7 +63,7 @@ azure: {identity: managed}
   - `auth: entra`: the service's Entra token, for Azure Database for PostgreSQL. The database role is the
     managed identity's;
   - `auth: password`: from `password_env`, `password_file` or `password_ref` (a Kubernetes Secret,
-    `ref+k8s://<namespace>/<secret>/<key>`, or a Key Vault secret), read again for each connection - a rotation
+    `ref+k8s://<namespace>/<secret>/<key>`, a Key Vault secret, or a Vault KV field), read again for each connection - a rotation
     needs no restart.
 - **Off this machine, `sslmode=verify-full` is required.** The password (a token) goes over the
   connection. pgx's default, `prefer`, falls back to plain text; `require` checks no certificate.

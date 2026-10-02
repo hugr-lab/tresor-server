@@ -85,10 +85,12 @@ material:
 vault: {address: https://bao.example.eu:8200, auth: {method: kubernetes, role: tresor-server}}
 ```
 
+- **The mount is KV version 2**. A mount of another kind is refused at the read.
 - **The allowlist**: only the mounts listed, and only the paths that start with a listed prefix (none listed:
-  all). The service's Vault policy gives `read` on `<mount>/data/<prefix>*`.
-- **Each read** fetches the secret's current version and logs that version, never the value. A new version
-  in Vault reaches DuckDB at its next fetch.
+  all). A prefix is a plain start: end it with `/` (`duckdb/`), as the service's Vault policy does with
+  `read` on `<mount>/data/<prefix>*`.
+- **Each read** fetches the secret's current version (or, with `cache_ttl`, one read within it) and logs that
+  version, never the value. A new version in Vault reaches DuckDB at its next fetch.
 - **The field must be text**. A deleted secret, a missing field or one that is not a string fails the fetch.
 - **The parse is strict**:
   - a one-segment mount;
