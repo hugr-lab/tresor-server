@@ -1,6 +1,6 @@
 # Spec 006: token exchange without a client secret, and ZITADEL
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-01
 - **Author**: hugr lab
 
@@ -118,9 +118,22 @@ issuers:
    - ZITADEL's refusal of a refresh (`TypeNotSupported`) read as unsupported: a grant gets an access
      token only, and exchanges again (from its documented wording, checked live in b);
    - `x5t` in the header, for Entra's certificates.
-2. **(b) ZITADEL in CI, and the stack with no Azure on kind**:
-   - ZITADEL in docker, an exchange through `key_file`;
-   - the recipe: ZITADEL, the Kubernetes store, a local KEK.
+2. **(b) ZITADEL in CI, and the stack with no Azure** (landed):
+   - `scripts/ci/zitadel.sh`: ZITADEL 4.19 in docker, set up through its API:
+     - a project with roles, the service's OIDC app (token exchange, private key JWT, JWT access tokens
+       with roles) and its key file;
+     - machine users with keys (the JWT profile grant);
+   - then tresor-server with ZITADEL as its issuer:
+     - roles from its object;
+     - a `token_exchange` secret minted for a caller through `key_file`;
+     - the refusal of a refresh read as unsupported (`Errors.TokenExchange.Token.TypeNotSupported`, live);
+   - the recipe for a stack with no Azure documented as chart values. Its parts are checked apart: the chart,
+     the Kubernetes store and a local KEK on kind (`kind.sh`); ZITADEL here. ZITADEL is not run in kind.
+   - **Learnt live**:
+     - ZITADEL names a project's roles in a claim of its own (`urn:zitadel:iam:org:project:<id>:roles`);
+     - a token's `aud` is the project;
+     - client credentials ignore the scopes, so a machine user's token for a project comes by the JWT
+       profile grant.
 
 ## Enforcement & security
 

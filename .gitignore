@@ -5,3 +5,4 @@ design/
 *.db-shm
 .env
 .claude/worktrees/
+scripts/ci/zitadel/state/
