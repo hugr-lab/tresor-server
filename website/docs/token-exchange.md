@@ -27,7 +27,7 @@ Every way but `secret` needs no secret of the service's own (spec 006).
 | `file` | the token in `assertion_file`, read at each request: a projected ServiceAccount token | Keycloak, any IdP trusting the cluster's issuer |
 | `keyvault` | a JWT it signs with `key` in Key Vault (RS256 or ES256), as `kid` | any IdP with `private_key_jwt`, on Azure |
 | `key_file` | a JWT it signs with `key_file`: ZITADEL's key file, or a PEM key with `kid` | ZITADEL; any IdP with `private_key_jwt`, with no KMS |
-| `vault` | a JWT it signs with `key` (`<mount>/<key>`) in Transit, OpenBao's or Vault's (RS256 or ES256), as `kid` | ZITADEL's key imported; any IdP with `private_key_jwt`, with OpenBao or Vault |
+| `vault` | a JWT it signs with `key` (`<mount>/<key>`) in Transit, OpenBao's or Vault's (RS256 or ES256), as `kid` or `x5t` | ZITADEL's key imported; any IdP with `private_key_jwt`, with OpenBao or Vault |
 
 - **Signed JWTs**: `iss` and `sub` are the client id, plus a fresh `jti`, valid for one minute. The header
   names the key by `kid`, and by `x5t` (a certificate's thumbprint) when it is set.
@@ -186,8 +186,10 @@ service then signs in Vault with no key of its own.
    ```sh
    jq -r .key key.json | openssl pkcs8 -topk8 -nocrypt -outform DER | base64 | tr -d '\n' > key.b64
    bao transit import transit/keys/zitadel-app @key.b64 type=rsa-2048   # vault transit import, the same
-   shred -u key.json key.b64
+   rm -P key.json key.b64     # shred -u on Linux
    ```
+
+   The importer needs `read` on `transit/wrapping_key` and `update` on `transit/keys/zitadel-app/import`.
 
 2. Let the service's Vault policy sign with it:
 
@@ -205,17 +207,24 @@ service then signs in Vault with no key of its own.
        exchange: {client_id: "<clientId>", client_auth: vault, key: transit/zitadel-app, kid: "<keyId>"}
    ```
 
-- An imported key is not exportable, and cannot be rotated in Transit. Rotate it in ZITADEL: a new key,
-  imported under a new name, then `key` and `kid` changed.
+- An imported key is not exportable, and cannot be rotated in Transit (unless imported with
+  `allow_rotation`). Rotate it in ZITADEL: a new key, imported under a new name, then `key` and `kid` changed.
 - See [`vault` in the configuration](configuration.md#vault) for the login.
 
 ## Keys in Transit
 
-- `vault` signs with the key's **latest version**: an RSA key with PKCS#1 v1.5 (RS256), an ECDSA P-256 key in
-  JWS form (ES256). Other types are refused at start.
-- A key made in Transit (not imported) is registered at the IdP by its public key: `bao read transit/keys/<key>`.
-  Rotating it changes that key: register the new one, then change `kid`.
-- The service reads the key's type at start. A Vault that does not answer then stops the start, as for the KEK.
+- `vault` signs an RSA key with PKCS#1 v1.5 (RS256), an ECDSA P-256 key in JWS form (ES256). Other types are
+  refused at start.
+- **The version is pinned at start**: the key's latest then. A rotation in Transit takes effect at the next
+  restart, never before:
+  1. rotate the key;
+  2. register its new public key at the IdP (`bao read transit/keys/<key>`);
+  3. change `kid`, and restart.
+  - Do not set `auto_rotate_period` on the key: a restart would then change the key before the IdP knows it.
+- **At start** the service reads the key and signs once. A Vault that does not answer, a missing right to sign
+  or a key that cannot sign (a public key imported alone) stops the start, as for the KEK.
+- Readiness signs a test assertion every 30 seconds per replica.
+- `<mount>` and `<key>` are each one path segment: a nested mount is not supported.
 
 ## Keys in Key Vault
 

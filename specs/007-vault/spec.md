@@ -118,6 +118,9 @@ exchange: {client_id: …, client_auth: vault, key: transit/zitadel-app, kid: <t
 - **ZITADEL's key** is imported into Transit (BYOK) and the file destroyed: the stack with no cloud then holds
   no static key of the service's own.
 - **The key's type** is read at start: `rsa-2048`, `rsa-3072`, `rsa-4096` or `ecdsa-p256`; any other is refused.
+- **The version is pinned** at start (`key_version`): the IdP knows one public key, named by `kid`, so a
+  rotation takes effect at a restart, with the new `kid`. A signature of another version is refused.
+- **One signature at start**: a missing right to sign, or a key that cannot sign, stops the start.
 - **Tested** against OpenBao and Vault: keys made in Transit checked with their public keys, and an RSA key
   imported (wrapped by Transit's wrapping key, as `bao transit import` does) checked with the key held outside.
 

@@ -1,6 +1,7 @@
 package vaultkek
 
 import (
+	"context"
 	"crypto"
 	"crypto/aes"
 	"crypto/rand"
@@ -9,7 +10,9 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"encoding/pem"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,13 +53,26 @@ func TestSigner(t *testing.T) {
 				}
 				return pub
 			}
-			for typ, alg := range map[string]jose.SignatureAlgorithm{"rsa-2048": jose.RS256, "ecdsa-p256": jose.ES256} {
+			for typ, alg := range map[string]jose.SignatureAlgorithm{"rsa-2048": jose.RS256, "rsa-3072": jose.RS256,
+				"rsa-4096": jose.RS256, "ecdsa-p256": jose.ES256} {
 				srv.Call(t, "POST", mount+"/keys/"+typ, map[string]any{"type": typ}, nil)
 				signer, err := NewSigner(ctx, client, mount, typ)
 				if err != nil {
 					t.Fatal(err)
 				}
 				checkAssertion(t, signer, alg, publicKey(typ))
+			}
+
+			// a rotation: the running signer keeps v1 (the IdP's key, its kid); a new one (a restart) takes v2
+			pinned, err := NewSigner(ctx, client, mount, "ecdsa-p256")
+			if err != nil {
+				t.Fatal(err)
+			}
+			v1 := publicKey("ecdsa-p256")
+			srv.Call(t, "POST", mount+"/keys/ecdsa-p256/rotate", nil, nil)
+			checkAssertion(t, pinned, jose.ES256, v1)
+			if restarted, err := NewSigner(ctx, client, mount, "ecdsa-p256"); err != nil || restarted.version != 2 {
+				t.Fatalf("after a restart: %v", err)
 			}
 
 			// ZITADEL makes the key; Transit imports it and signs with it, the file destroyed
@@ -180,4 +196,46 @@ func kwp(t *testing.T, kek, plain []byte) []byte {
 		out = append(out, ri...)
 	}
 	return out
+}
+
+// fake answers Transit's calls as told
+type fake struct {
+	keyType, signature string
+	signErr            error
+}
+
+func (f fake) Do(_ context.Context, _, path string, _, out any) error {
+	var answer string
+	if strings.Contains(path, "/keys/") {
+		answer = `{"data":{"type":"` + f.keyType + `","latest_version":3}}`
+	} else {
+		if f.signErr != nil {
+			return f.signErr
+		}
+		answer = `{"data":{"signature":"` + f.signature + `"}}`
+	}
+	return json.Unmarshal([]byte(answer), out)
+}
+
+// a signature that is not the pinned version's, not of its encoding or length, or refused: no signer, never
+// an empty signature; the error names the key, not the token
+func TestSignerRefuses(t *testing.T) {
+	es := base64.RawURLEncoding.EncodeToString(make([]byte, 64))
+	if _, err := NewSigner(ctx, fake{keyType: "ecdsa-p256", signature: "vault:v3:" + es}, "transit", "k"); err != nil {
+		t.Fatalf("a good one: %v", err)
+	}
+	for name, f := range map[string]fake{
+		"another version":  {keyType: "ecdsa-p256", signature: "vault:v2:" + es},
+		"no prefix":        {keyType: "ecdsa-p256", signature: es},
+		"short":            {keyType: "ecdsa-p256", signature: "vault:v3:" + base64.RawURLEncoding.EncodeToString(make([]byte, 63))},
+		"base64 for ES256": {keyType: "ecdsa-p256", signature: "vault:v3:" + base64.StdEncoding.EncodeToString(make([]byte, 65))},
+		"url for RS256":    {keyType: "rsa-2048", signature: "vault:v3:" + es},
+		"empty":            {keyType: "rsa-2048", signature: "vault:v3:"},
+		"refused":          {keyType: "rsa-2048", signErr: &vault.Error{Status: 403, Msg: "permission denied"}},
+	} {
+		_, err := NewSigner(ctx, f, "transit", "k")
+		if err == nil || !strings.Contains(err.Error(), "transit/k") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
 }

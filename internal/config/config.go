@@ -736,9 +736,9 @@ func (ex *ExchangeClient) validate(identity string, vaultUsed bool) error {
 			return errors.New("exchange.client_auth: keyvault signs with the service's Azure identity: azure.identity is required")
 		}
 	case "vault":
-		if mount, key, ok := strings.Cut(ex.Key, "/"); !ok || mount == "" || key == "" || strings.Contains(key, "/") ||
+		if mount, key, ok := strings.Cut(ex.Key, "/"); !ok || !vaultMount.MatchString(mount) || !vaultMount.MatchString(key) ||
 			(ex.KID == "" && ex.X5T == "") {
-			return errors.New("exchange.client_auth: vault signs with key (<mount>/<key>, a Transit key), named by kid or x5t")
+			return errors.New("exchange.client_auth: vault signs with key (<mount>/<key>: a Transit key, each one segment), named by kid or x5t")
 		}
 		if !vaultUsed {
 			return errors.New("exchange.client_auth: vault signs in Vault: vault: is required")

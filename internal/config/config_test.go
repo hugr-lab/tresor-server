@@ -311,6 +311,8 @@ func TestExchangeClientAuth(t *testing.T) {
 		"vault with no vault":          issuer("{client_id: app, client_auth: vault, key: transit/zitadel, kid: k}"),
 		"vault with no kid":            issuer("{client_id: app, client_auth: vault, key: transit/zitadel}") + bao,
 		"vault with no mount":          issuer("{client_id: app, client_auth: vault, key: zitadel, kid: k}") + bao,
+		"vault with a dot key":         issuer("{client_id: app, client_auth: vault, key: transit/.., kid: k}") + bao,
+		"vault with a nested mount":    issuer("{client_id: app, client_auth: vault, key: team/transit/k, kid: k}") + bao,
 		"vault with a deep key":        issuer("{client_id: app, client_auth: vault, key: transit/a/b, kid: k}") + bao,
 		"vault with a key_file":        issuer("{client_id: app, client_auth: vault, key: transit/z, kid: k, key_file: /k}") + bao,
 	} {
