@@ -81,6 +81,9 @@ func exchange(keyFile, issuer, subject, audience string) {
 	if err != nil {
 		log.Fatalf("zitadelcheck: the exchange: %v", err)
 	}
+	if t.Access == "" || t.Access == subject || t.Refresh != "" {
+		log.Fatal("zitadelcheck: the exchange gave no new access token (or a refresh token)")
+	}
 	parts := strings.Split(t.Access, ".")
 	if len(parts) == 3 {
 		payload, _ := base64.RawURLEncoding.DecodeString(parts[1])

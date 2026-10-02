@@ -65,6 +65,7 @@ jobs:
   zitadel:
     name: ZITADEL (token exchange, key_file)
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

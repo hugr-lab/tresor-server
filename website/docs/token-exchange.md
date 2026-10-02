@@ -156,10 +156,18 @@ config:
   issuers:
     - issuer: https://auth.example.eu
       audience: "<project id>"
+      client_id: "<the login app's client id>"     # people log in with it (tresor's human flows)
+      scopes: [openid, "urn:zitadel:iam:org:project:id:<project id>:aud",
+               "urn:zitadel:iam:org:project:id:<downstream project id>:aud", "urn:zitadel:iam:org:projects:roles"]
       roles_claim: "urn:zitadel:iam:org:project:<project id>:roles"
       exchange: {client_auth: key_file, key_file: /etc/tresor-zitadel/key.json}
   policy: {admins: [role:secrets_admin]}
 ```
+
+- The `scopes` are what tresor asks for at a login: the project's audience, every downstream project a
+  `token_exchange` secret names, and the roles. Without them a caller's token has neither the audience nor
+  the roles.
+- The key file's Secret: `kubectl create secret generic tresor-zitadel-key --from-file=key.json=<the file>`.
 
 `scripts/ci/zitadel.sh` checks this in CI, against ZITADEL in docker:
 - roles from ZITADEL's object;

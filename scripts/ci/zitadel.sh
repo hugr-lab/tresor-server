@@ -39,10 +39,16 @@ for _ in $(seq 120); do
 done
 [ -s "$dir/state/admin.pat" ] || { docker compose -f "$dir/compose.yaml" logs zitadel | tail -30; exit 1; }
 pat="$(cat "$dir/state/admin.pat")"
-api() { curl -sf -X "$1" "$z$2" -H "Authorization: Bearer $pat" -H "Content-Type: application/json" ${3:+-d "$3"}; }
+api() { curl -sS --fail-with-body -X "$1" "$z$2" -H "Authorization: Bearer $pat" -H "Content-Type: application/json" ${3:+-d "$3"}; }
+fail() {
+	echo "zitadel: $1" >&2
+	docker compose -f "$dir/compose.yaml" logs zitadel 2>&1 | tail -20 >&2
+	exit 1
+}
 field() { python3 -c "import json,sys; print(json.load(sys.stdin)$1)"; }
 # the API answers once the instance's first projections are done: well after the PAT and the health check
 for _ in $(seq 60); do api GET /management/v1/orgs/me >/dev/null 2>&1 && break; sleep 2; done
+api GET /management/v1/orgs/me >/dev/null || fail "the API does not answer"
 
 echo "zitadel: the projects, the service's app and its key file"
 project="$(api POST /management/v1/projects '{"name":"tresor","projectRoleAssertion":true}' | field '["id"]')"
@@ -86,6 +92,10 @@ EOF
 server_pid=$!
 s=http://127.0.0.1:18591
 for _ in $(seq 30); do curl -sf "$s/readyz" >/dev/null && break; sleep 1; done
+if ! kill -0 "$server_pid" 2>/dev/null || ! curl -sf "$s/readyz" >/dev/null; then
+	cat "$work/server.log" >&2
+	fail "tresor-server is not ready"
+fi
 call() { # token method path want [body]
 	local out
 	out="$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer $1" -H "Content-Type: application/json" -X "$2" "$s$3" ${5:+-d "$5"})"
@@ -95,10 +105,15 @@ call() { # token method path want [body]
 call "$alice" GET /v1/whoami 200 | grep -q '"role:analysts"' || { echo "zitadel: no roles from ZITADEL's object" >&2; exit 1; }
 call "$admin" PUT /v1/secrets/downstream 201 "{\"type\":\"http\",\"provider\":\"token_exchange\",\"scope\":[\"https://api.example\"],\"params\":{\"audience\":\"${downstream}\"},\"redact_keys\":[]}" >/dev/null
 call "$admin" PUT /v1/secrets/downstream/grants/a 200 '{"principal":"role:analysts","verbs":["use"]}' >/dev/null
-call "$alice" GET /v1/secrets/downstream 200 | python3 -c 'import json,sys; t=json.load(sys.stdin)["params"]["bearer_token"]; assert len(t) > 20, "no token"'
-grep -q '"kind":"mint","outcome":"ok"' "$work/audit.log" || { echo "zitadel: no mint in the audit" >&2; exit 1; }
+minted="$(call "$alice" GET /v1/secrets/downstream 200 | python3 -c 'import json,sys; print(json.load(sys.stdin)["params"]["bearer_token"])')"
+[ "${#minted}" -gt 20 ] && [ "$minted" != "$alice" ] || fail "no token minted for alice"
+grep -q '"kind":"mint","outcome":"ok"' "$work/audit.log" || fail "no mint in the audit"
 if grep -qE "BEGIN (RSA )?PRIVATE KEY|client_assertion" "$work/server.log" "$work/audit.log"; then
-	echo "zitadel: a key or an assertion reached a log" >&2
-	exit 1
+	fail "a key or an assertion reached a log"
 fi
+for token in "$alice" "$admin" "$minted" "$pat"; do
+	if grep -qF "$token" "$work/server.log" "$work/audit.log"; then
+		fail "a token reached a log"
+	fi
+done
 echo "zitadel: passed - roles from ZITADEL, a token minted by exchange with the key file, no secret of the service's own"
