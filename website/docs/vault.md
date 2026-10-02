@@ -26,10 +26,13 @@ The service logs in with no static secret:
 | `jwt` | a projected ServiceAccount token (`jwt_file`) | the JWT auth method, trusting the cluster's issuer |
 | `token_file` | a token a Vault Agent writes and renews | the Agent's own login |
 
-- `kubernetes` suits Vault in the cluster, or one that can reach the cluster's API (it asks the API to review
-  the token).
+- `kubernetes` suits Vault in the cluster: it asks the cluster's API to review the token, as its own
+  ServiceAccount.
+  - A Vault outside the cluster needs a reviewer of its own: `token_reviewer_jwt` (a ServiceAccount bound to
+    `system:auth-delegator`) and `kubernetes_ca_cert`. Without it Vault reviews with the service's own token,
+    which `vaultToken` binds to Vault's audience: the review fails. Prefer `jwt` there.
 - `jwt` suits a Vault outside, which checks the token against the cluster's OIDC issuer and never calls the
-  cluster.
+  cluster's API.
 
 ### Kubernetes auth
 
@@ -53,6 +56,10 @@ bao write auth/jwt/role/tresor role_type=jwt user_claim=sub \
   bound_audiences=vault bound_subject=system:serviceaccount:tresor:tresor-tresor-server \
   token_policies=tresor token_ttl=1h token_type=batch
 ```
+
+- Vault must reach the issuer's discovery and JWKS. On a self-managed cluster that is the API server: let
+  anyone read them (bind `system:service-account-issuer-discovery` to `system:unauthenticated`), and give
+  `oidc_discovery_ca_pem` for its CA. Or give the keys themselves: `jwt_validation_pubkeys`.
 
 ## The policy
 
@@ -79,7 +86,6 @@ path "transit/sign/zitadel-app/sha2-256" { capabilities = ["update"] }
 
 ```yaml
 vaultToken: {enabled: true, audience: vault}     # a projected token at /var/run/tresor/vault-token/token
-env: [{name: SSL_CERT_DIR, value: /etc/tresor-ca}]
 extraVolumes: [{name: ca, configMap: {name: vault-ca}}]
 extraVolumeMounts: [{name: ca, mountPath: /etc/tresor-ca, readOnly: true}]
 config:
@@ -97,7 +103,7 @@ config:
   it. `jwt` needs it (or a `jwt_file` of your own).
 - With `kubernetes` and no `vaultToken`, the pod's own ServiceAccount token is mounted. It is good for the
   Kubernetes API too: prefer `vaultToken`.
-- `ca_file` is Vault's alone. `SSL_CERT_DIR` is needed only when the issuer has a private CA too.
+- `ca_file` is Vault's alone. When the issuer has a private CA too, add `SSL_CERT_DIR` in `env`.
 
 `scripts/ci/kind.sh` checks this in CI: OpenBao in the cluster with Kubernetes auth and the projected token,
 the KEK in Transit, a `ref+vault` reference read through the protocol, on the Kubernetes store.

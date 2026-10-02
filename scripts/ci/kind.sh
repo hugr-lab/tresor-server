@@ -242,8 +242,9 @@ spec:
       containers:
         - name: openbao
           image: openbao/openbao:2.4.1
-          # a dev server (in memory, unsealed, root token "root" on 127.0.0.1:8200) with a TLS listener of the run's CA
-          args: [server, -dev, -dev-root-token-id=root, -config=/conf/tls.hcl]
+          # a dev server (in memory, unsealed, root token "root" on plain http, kept to the pod's loopback; the image's
+          # entrypoint would put it on 0.0.0.0, the last flag wins) with a TLS listener of the run's CA
+          args: [server, -dev, -dev-root-token-id=root, -dev-listen-address=127.0.0.1:8200, -config=/conf/tls.hcl]
           ports: [{containerPort: 8443}]
           readinessProbe: {httpGet: {path: /v1/sys/health, port: 8443, scheme: HTTPS}, periodSeconds: 2}
           volumeMounts:
@@ -260,10 +261,14 @@ spec:
   selector: {app: bao}
   ports: [{port: 8200, targetPort: 8443}]
 EOF
-kubectl -n bao rollout status deploy/bao --timeout 180s
+baodump() {
+	kubectl -n bao get pods -o wide || true
+	kubectl -n bao logs deploy/bao --tail 50 || true
+}
+kubectl -n bao rollout status deploy/bao --timeout 180s || { baodump; exit 1; }
 # the service's role: its ServiceAccount, the audience of the chart's projected token (vaultToken); its policy:
 # the KEK's Transit key and the KV paths it may read
-kubectl -n bao exec -i deploy/bao -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN=root sh -eu >/dev/null <<'EOF'
+kubectl -n bao exec -i deploy/bao -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN=root sh -eu >/dev/null <<'EOF' || { baodump; exit 1; }
 bao auth enable kubernetes
 bao write auth/kubernetes/config kubernetes_host=https://kubernetes.default.svc
 bao policy write tresor - <<'HCL'

@@ -91,8 +91,11 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 {{- $vault := .Values.config.vault | default dict -}}
 {{- $auth := $vault.auth | default dict -}}
-{{- if and (eq ($keys.kind | default "") "vault") (not $vault.address) -}}
-{{- fail "config.keys.kind vault: config.vault.address is required" -}}
+{{- if and (or (eq ($keys.kind | default "") "vault") $auth.method .Values.vaultToken.enabled) (not $vault.address) -}}
+{{- fail "config.vault.address is required (a vault KEK, config.vault.auth, vaultToken)" -}}
+{{- end -}}
+{{- if and .Values.vaultToken.enabled $auth.jwt_file -}}
+{{- fail "vaultToken: config.vault.auth.jwt_file is set - the chart's token would not be read; unset one" -}}
 {{- end -}}
 {{- if and (eq ($auth.method | default "") "jwt") (not $auth.jwt_file) (not .Values.vaultToken.enabled) -}}
 {{- fail "config.vault.auth.method jwt: vaultToken.enabled (or config.vault.auth.jwt_file)" -}}
