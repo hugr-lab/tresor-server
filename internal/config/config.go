@@ -22,6 +22,7 @@ type Config struct {
 	State     State    `yaml:"state"`
 	Keys      Keys     `yaml:"keys"`
 	Azure     Azure    `yaml:"azure"`
+	Vault     Vault    `yaml:"vault"`
 	Material  Material `yaml:"material"`
 	Issuers   []Issuer `yaml:"issuers"`
 	Policy    Policy   `yaml:"policy"`
@@ -98,8 +99,11 @@ type Keys struct {
 	Kind    string `yaml:"kind"`
 	KeyEnv  string `yaml:"key_env"`
 	KeyFile string `yaml:"key_file"`
-	// Key is the azurekeyvault key's URL, https://<vault>/keys/<name>, with no version.
+	// Key is the azurekeyvault key's URL, https://<vault>/keys/<name>, with no version; or the vault KEK's
+	// Transit key name.
 	Key string `yaml:"key"`
+	// Mount is the vault KEK's Transit mount (default transit).
+	Mount string `yaml:"mount"`
 	// DataKeyMaxAge: a data key older than this is replaced for new values (default 30 days).
 	DataKeyMaxAge time.Duration `yaml:"data_key_max_age"`
 	// CacheTTL: how long an unwrapped data key stays in memory (default 5 minutes).
@@ -107,7 +111,54 @@ type Keys struct {
 }
 
 // KeyKinds are the KEKs this build knows.
-var KeyKinds = []string{"local", "azurekeyvault"}
+var KeyKinds = []string{"local", "azurekeyvault", "vault"}
+
+// Vault is OpenBao or HashiCorp Vault (spec 007): where it is, and how the service logs in with no static
+// secret.
+type Vault struct {
+	Address   string    `yaml:"address"`
+	Namespace string    `yaml:"namespace"`
+	CAFile    string    `yaml:"ca_file"`
+	Auth      VaultAuth `yaml:"auth"`
+}
+
+// VaultAuth: kubernetes (the pod's ServiceAccount token, or JWTFile), jwt (JWTFile: a projected token), or
+// token_file (a token a Vault Agent writes).
+type VaultAuth struct {
+	Method    string `yaml:"method"`
+	Mount     string `yaml:"mount"`
+	Role      string `yaml:"role"`
+	JWTFile   string `yaml:"jwt_file"`
+	TokenFile string `yaml:"token_file"`
+}
+
+// used: a Vault is configured.
+func (v Vault) used() bool { return v.Address != "" }
+
+func (v Vault) validate() error {
+	if !v.used() {
+		if v.Namespace != "" || v.CAFile != "" || v.Auth != (VaultAuth{}) {
+			return errors.New("vault: address is required")
+		}
+		return nil
+	}
+	switch v.Auth.Method {
+	case "kubernetes", "jwt":
+		if v.Auth.Role == "" || v.Auth.TokenFile != "" {
+			return fmt.Errorf("vault.auth: %s logs in with a role (and jwt_file), no token_file", v.Auth.Method)
+		}
+		if v.Auth.Method == "jwt" && v.Auth.JWTFile == "" {
+			return errors.New("vault.auth: jwt logs in with jwt_file (a projected ServiceAccount token)")
+		}
+	case "token_file":
+		if v.Auth.TokenFile == "" || v.Auth.Role != "" || v.Auth.JWTFile != "" || v.Auth.Mount != "" {
+			return errors.New("vault.auth: token_file reads token_file, and nothing else")
+		}
+	default:
+		return errors.New("vault.auth.method is kubernetes, jwt or token_file")
+	}
+	return nil
+}
 
 // Material is where references (ref+...) may read (spec 002).
 type Material struct {
@@ -298,6 +349,12 @@ func (c *Config) validate() error {
 	}
 	if err := c.Keys.validate(c.State.Kind != "memory"); err != nil {
 		return err
+	}
+	if err := c.Vault.validate(); err != nil {
+		return err
+	}
+	if c.Keys.Kind == "vault" && !c.Vault.used() {
+		return errors.New("keys: a vault KEK needs vault: (address, auth)")
 	}
 	if c.Keys.Kind == "azurekeyvault" && c.Azure.Identity == "" {
 		return errors.New("keys: azurekeyvault needs azure.identity: managed | workload | default")
@@ -499,10 +556,20 @@ func (k *Keys) validate(required bool) error {
 	}
 	switch k.Kind {
 	case "local":
-		if (k.KeyEnv == "") == (k.KeyFile == "") || k.Key != "" {
+		if (k.KeyEnv == "") == (k.KeyFile == "") || k.Key != "" || k.Mount != "" {
 			return errors.New("keys: a local KEK comes from key_env or key_file - one of them")
 		}
+	case "vault":
+		if k.Key == "" || k.KeyEnv != "" || k.KeyFile != "" || strings.Contains(k.Key, "/") {
+			return errors.New("keys: a vault KEK is keys.key, a Transit key's name (and keys.mount, default transit)")
+		}
+		if k.Mount == "" {
+			k.Mount = "transit"
+		}
 	case "azurekeyvault":
+		if k.Mount != "" {
+			return errors.New("keys.mount is a vault KEK's")
+		}
 		if k.Key == "" || k.KeyEnv != "" || k.KeyFile != "" {
 			return errors.New("keys: an azurekeyvault KEK is keys.key, https://<vault>/keys/<name> - nothing else")
 		}

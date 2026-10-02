@@ -50,7 +50,11 @@ file. With OpenBao, neither leaves the vault.
 
 - **Rules**:
   - `https` unless the address is a loopback one.
-  - The token from a login is renewed while renewable, and the service logs in again before it expires.
+  - A login's token is replaced by a new login at two thirds of its lease, not renewed. While a new login
+    fails, the old token serves until its own end.
+  - A 403 is checked with `lookup-self`: a dead token is replaced, while a live one (the policy's refusal)
+    costs no login.
+  - Redirects are never followed: they would carry the token and a data key elsewhere, http included.
   - A token file is read again when it changes.
   - Nothing logs a token.
 
@@ -64,6 +68,14 @@ keys: {kind: vault, mount: transit, key: tresor-kek}
 - **Wrap and unwrap**: `transit/encrypt/<key>` and `transit/decrypt/<key>`.
   - The KEK id is `vault:<mount>/<key>:v<N>`, with N the version the ciphertext names.
   - `Current` reads the key's `latest_version`, at most once a minute (as Key Vault's).
+- **The key is checked** on every read of its version, and refused unless it is:
+  - `aes256-gcm96` or `chacha20-poly1305`, not derived;
+  - not exportable, and not backed up in plaintext: its HMAC keys would leave Vault;
+  - `min_encryption_version` 0: anything else refuses the HMAC at older versions.
+- **A replica learns of a rotation from its own wrap**: Transit wraps under the latest version. Otherwise a
+  stale cache would make a new data key at every seal.
+- **`ErrSealed` only for Transit's lasting answers about a value or a version**: a ciphertext that does not
+  open, a version retired or never made. A key not found or a permission is a configuration (`503`).
 - **The root (spec 003)** is `transit/hmac/<key>/sha2-256` of the fixed label at the KEK id's version.
   - Every Transit key carries an HMAC key per version, deterministic and never exported: only a holder of
     the right computes it.
@@ -115,7 +127,8 @@ exchange: {client_id: …, client_auth: vault, key: transit/zitadel-app, kid: <t
 
 ## The PRs
 
-1. **(a)** the client, its three logins, the KEK in Transit with its root;
+1. **(a)** the client, its three logins, the KEK in Transit with its root (landed: tested against OpenBao 2.4.1
+   and HashiCorp Vault 2.1.1 in CI);
 2. **(b)** `ref+vault`, `state.password_ref`;
 3. **(c)** `client_auth: vault`;
 4. **(d)** the docs, the chart, and the stack with no cloud on kind: OpenBao with Kubernetes auth, the KEK
