@@ -27,6 +27,9 @@ type Ref struct {
 
 // String is the reference as logged: where, never a value.
 func (r Ref) String() string {
+	if r.Scheme == "vault" { // <mount>/<path>#<field>: a path has slashes of its own
+		return Prefix + "vault://" + r.Vault + "/" + r.Name + "#" + r.Key
+	}
 	s := Prefix + r.Scheme + "://" + r.Vault + "/" + r.Name
 	for _, part := range []string{r.Key, r.Version} {
 		if part != "" {

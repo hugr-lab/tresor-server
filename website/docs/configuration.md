@@ -87,7 +87,7 @@ Where the service keeps secrets, grants and delegation grants. See [State stores
 | `state.path` | SQLite: the database's file. |
 | `state.dsn` | PostgreSQL, SQL Server: the server, the database, the user. Never a password. |
 | `state.auth` | `entra` (the service's Azure token) or `password`. |
-| `state.password_env`, `state.password_file`, `state.password_ref` | `auth: password`: where the password is - one of them. `password_ref` is `ref+k8s://…` or `ref+azkv://…`, outside every `material` allowlist. |
+| `state.password_env`, `state.password_file`, `state.password_ref` | `auth: password`: where the password is - one of them. `password_ref` is `ref+k8s://…`, `ref+azkv://…` or `ref+vault://…`, outside every `material` allowlist. |
 | `state.max_open_conns` | The connection pool; default 10. |
 | `state.namespace` | Kubernetes: where the resources are. The pod's own by default; required outside a pod. |
 | `state.instance` | Kubernetes: the installation's id, in every MAC. The namespace by default; keep it stable. |
@@ -115,6 +115,8 @@ Where references may read. See [References](references.md).
 | `material.azkv.cache_ttl` | Keep a value read for this long; default `0` (none), at most `5m`. |
 | `material.azkv.dns_suffix` | Another cloud's Key Vault suffix; default `.vault.azure.net`. |
 | `material.k8s.allow` | `[{namespace: data-team, prefixes: [duckdb-]}]`: the namespaces, and the Secret-name prefixes (none: all). |
+| `material.vault.allow` | `[{mount: secret, prefixes: [duckdb/]}]`: the KV v2 mounts, and the path prefixes (none: all). Needs `vault:`. |
+| `material.vault.cache_ttl` | Keep a value read for this long; default `0`, at most `5m`. |
 
 ### `azure`
 
