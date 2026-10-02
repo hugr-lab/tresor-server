@@ -61,6 +61,19 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+  # ZITADEL in docker (spec 006): the service as its issuer's client with key_file, a token minted by exchange
+  zitadel:
+    name: ZITADEL (token exchange, key_file)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: ZITADEL, live
+        run: scripts/ci/zitadel.sh
+
   # the Container Apps recipe compiles, lint included
   bicep:
     name: Bicep

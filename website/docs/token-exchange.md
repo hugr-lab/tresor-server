@@ -109,9 +109,14 @@ identity and no KMS.
 ```yaml
 issuers:
   - issuer: https://acme.zitadel.cloud
-    audience: <the app's client id>
-    roles_claim: urn:zitadel:iam:org:project:roles     # an object: its keys are the roles
+    audience: "<the project's id>"                                  # a token's aud is the project
+    roles_claim: "urn:zitadel:iam:org:project:<the project's id>:roles"   # an object: its keys are the roles
 ```
+
+- The caller asks for the project's audience and its roles with the scopes
+  `urn:zitadel:iam:org:project:id:<project>:aud` and `urn:zitadel:iam:org:projects:roles`.
+- ZITADEL names the roles in a claim of the project's own. `urn:zitadel:iam:org:project:roles` is there
+  only for some flows, so use the project's.
 
 **For token exchange** (ZITADEL 4.11 or later):
 - The service's client is an OIDC app with the grant type *Token Exchange*. Use *Private Key JWT* and
@@ -126,14 +131,48 @@ issuers:
 - **The audience can only be narrowed.** A downstream project must already be in the caller's token. The
   caller's login asks for it with the scope `urn:zitadel:iam:org:project:id:<project>:aud`: add it to the
   issuer's `scopes`, which tresor sends.
-- **No refresh token by exchange.** When the token expires, the service exchanges again, as long as the
-  delegation grant's subject token lives.
+- **No refresh token by exchange.** ZITADEL answers `Errors.TokenExchange.Token.TypeNotSupported`. The
+  service then asks for an access token only, and exchanges again when it expires, as long as the delegation
+  grant's subject token lives.
 - **The key file is a static key**:
   - It is asymmetric, never sent, and revoked and replaced in ZITADEL. Rotate it there.
   - ZITADEL generates it, so a key of your own cannot be registered.
   - Where there is Azure after all, import it into Key Vault and use `keyvault`.
 - **The chart** mounts the key file from a Secret through `extraVolumes` and `extraVolumeMounts`.
 - **The service reads the key file at start.** After a rotation, update the Secret and restart the pods.
+
+### A stack with no Azure
+
+The chart on any Kubernetes (Hetzner, say). It has the Kubernetes store, a local KEK from a Secret, ZITADEL as
+the issuer and ZITADEL's key file for the exchange: nothing of a cloud identity, no KMS.
+
+```yaml
+localKEK: {secretName: tresor-kek}                 # 32 random bytes, base64
+extraVolumes: [{name: zitadel, secret: {secretName: tresor-zitadel-key}}]
+extraVolumeMounts: [{name: zitadel, mountPath: /etc/tresor-zitadel, readOnly: true}]
+config:
+  public_url: https://tresor.example.eu
+  state: {kind: kubernetes}
+  issuers:
+    - issuer: https://auth.example.eu
+      audience: "<project id>"
+      client_id: "<the login app's client id>"     # people log in with it (tresor's human flows)
+      scopes: [openid, "urn:zitadel:iam:org:project:id:<project id>:aud",
+               "urn:zitadel:iam:org:project:id:<downstream project id>:aud", "urn:zitadel:iam:org:projects:roles"]
+      roles_claim: "urn:zitadel:iam:org:project:<project id>:roles"
+      exchange: {client_auth: key_file, key_file: /etc/tresor-zitadel/key.json}
+  policy: {admins: [role:secrets_admin]}
+```
+
+- The `scopes` are what tresor asks for at a login: the project's audience, every downstream project a
+  `token_exchange` secret names, and the roles. Without them a caller's token has neither the audience nor
+  the roles.
+- The key file's Secret: `kubectl create secret generic tresor-zitadel-key --from-file=key.json=<the file>`.
+
+`scripts/ci/zitadel.sh` checks this in CI, against ZITADEL in docker:
+- roles from ZITADEL's object;
+- a token minted by exchange, with the service logged in by the key file;
+- ZITADEL's refusal of a refresh, read as such.
 
 ## Keys in Key Vault
 

@@ -19,4 +19,4 @@ Research lives in the local, gitignored `design/` folder.
 | [003](003-kubernetes/spec.md) | phase 3 - Kubernetes: the CRD store, ref+k8s, workload identity, the Helm chart | implemented |
 | [004](004-variables/spec.md) | variables (tresor spec 018): a second namespace on every store, sealed | implemented |
 | [005](005-observability/spec.md) | observability: the audit (stdout, OTLP), spans under tresor's trace, metrics | implemented |
-| [006](006-exchange-without-secret/spec.md) | token exchange without a client secret; ZITADEL, for a stack with no Azure | accepted |
+| [006](006-exchange-without-secret/spec.md) | token exchange without a client secret; ZITADEL, for a stack with no Azure | implemented |
