@@ -14,7 +14,7 @@ issuers:
     audience: duckdb-secrets
     exchange:
       client_id: duckdb-secrets
-      client_auth: secret          # secret | azure | file | keyvault | key_file
+      client_auth: secret          # secret | azure | file | keyvault | key_file | vault
       client_secret_env: TRESOR_EXCHANGE_SECRET
 ```
 
@@ -27,6 +27,7 @@ Every way but `secret` needs no secret of the service's own (spec 006).
 | `file` | the token in `assertion_file`, read at each request: a projected ServiceAccount token | Keycloak, any IdP trusting the cluster's issuer |
 | `keyvault` | a JWT it signs with `key` in Key Vault (RS256 or ES256), as `kid` | any IdP with `private_key_jwt`, on Azure |
 | `key_file` | a JWT it signs with `key_file`: ZITADEL's key file, or a PEM key with `kid` | ZITADEL; any IdP with `private_key_jwt`, with no KMS |
+| `vault` | a JWT it signs with `key` (`<mount>/<key>`) in Transit, OpenBao's or Vault's (RS256 or ES256), as `kid` | ZITADEL's key imported; any IdP with `private_key_jwt`, with OpenBao or Vault |
 
 - **Signed JWTs**: `iss` and `sub` are the client id, plus a fresh `jti`, valid for one minute. The header
   names the key by `kid`, and by `x5t` (a certificate's thumbprint) when it is set.
@@ -137,6 +138,7 @@ issuers:
 - **The key file is a static key**:
   - It is asymmetric, never sent, and revoked and replaced in ZITADEL. Rotate it there.
   - ZITADEL generates it, so a key of your own cannot be registered.
+  - Where there is OpenBao or Vault, import it into Transit and use `vault` (below): no key file remains.
   - Where there is Azure after all, import it into Key Vault and use `keyvault`.
 - **The chart** mounts the key file from a Secret through `extraVolumes` and `extraVolumeMounts`.
 - **The service reads the key file at start.** After a rotation, update the Secret and restart the pods.
@@ -173,6 +175,47 @@ config:
 - roles from ZITADEL's object;
 - a token minted by exchange, with the service logged in by the key file;
 - ZITADEL's refusal of a refresh, read as such.
+
+### ZITADEL's key in Transit
+
+Where OpenBao or HashiCorp Vault runs, ZITADEL's key goes into Transit (BYOK) and the file is destroyed. The
+service then signs in Vault with no key of its own.
+
+1. Import the key (the key file's `key` field, PKCS#1 PEM, as PKCS#8 DER in base64):
+
+   ```sh
+   jq -r .key key.json | openssl pkcs8 -topk8 -nocrypt -outform DER | base64 | tr -d '\n' > key.b64
+   bao transit import transit/keys/zitadel-app @key.b64 type=rsa-2048   # vault transit import, the same
+   shred -u key.json key.b64
+   ```
+
+2. Let the service's Vault policy sign with it:
+
+   ```hcl
+   path "transit/keys/zitadel-app"          { capabilities = ["read"] }
+   path "transit/sign/zitadel-app/sha2-256" { capabilities = ["update"] }
+   ```
+
+3. Configure the exchange with the key file's `clientId` and `keyId`:
+
+   ```yaml
+   vault: {address: https://bao.example.eu:8200, auth: {method: kubernetes, role: tresor}}
+   issuers:
+     - issuer: https://auth.example.eu
+       exchange: {client_id: "<clientId>", client_auth: vault, key: transit/zitadel-app, kid: "<keyId>"}
+   ```
+
+- An imported key is not exportable, and cannot be rotated in Transit. Rotate it in ZITADEL: a new key,
+  imported under a new name, then `key` and `kid` changed.
+- See [`vault` in the configuration](configuration.md#vault) for the login.
+
+## Keys in Transit
+
+- `vault` signs with the key's **latest version**: an RSA key with PKCS#1 v1.5 (RS256), an ECDSA P-256 key in
+  JWS form (ES256). Other types are refused at start.
+- A key made in Transit (not imported) is registered at the IdP by its public key: `bao read transit/keys/<key>`.
+  Rotating it changes that key: register the new one, then change `kid`.
+- The service reads the key's type at start. A Vault that does not answer then stops the start, as for the KEK.
 
 ## Keys in Key Vault
 

@@ -137,10 +137,10 @@ The service's client at the issuer, for `token_exchange` secrets. See [Token exc
 | Setting | |
 | --- | --- |
 | `client_id` | The service's client. With `key_file`, read from ZITADEL's key file when unset. |
-| `client_auth` | `secret` (default), `azure`, `file`, `keyvault` or `key_file`. |
+| `client_auth` | `secret` (default), `azure`, `file`, `keyvault`, `key_file` or `vault`. |
 | `client_secret_env` | `secret`: the variable holding the client secret. |
 | `assertion_file` | `file`: a token read at each request (a projected ServiceAccount token). |
-| `key`, `key_file` | `keyvault`: a Key Vault key URL. `key_file`: ZITADEL's key file or a PEM key. |
+| `key`, `key_file` | `keyvault`: a Key Vault key URL. `vault`: a Transit key, `<mount>/<key>` (needs `vault`). `key_file`: ZITADEL's key file or a PEM key. |
 | `kid`, `x5t` | What the JWT's header names the key by (`kid`; `x5t` for Entra's certificates). |
 | `assertion_audience` | `issuer` (default) or `token_endpoint` (Entra). |
 

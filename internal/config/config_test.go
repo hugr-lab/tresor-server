@@ -284,12 +284,14 @@ func TestExchangeClientAuth(t *testing.T) {
 	issuer := func(exchange string) string {
 		return strings.Replace(good, "audience: duckdb-secrets\n", "audience: duckdb-secrets\n    exchange: "+exchange+"\n", 1)
 	}
+	bao := "vault: {address: 'https://bao.example:8200', auth: {method: kubernetes, role: tresor}}\n"
 	for name, doc := range map[string]string{
 		"azure (managed)":    issuer("{client_id: app, client_auth: azure}") + "azure: {identity: managed}\n",
 		"file":               issuer("{client_id: app, client_auth: file, assertion_file: /var/run/secrets/tokens/idp}"),
 		"key_file (ZITADEL)": issuer("{client_auth: key_file, key_file: /etc/tresor/zitadel.json}"),
 		"key_file, PEM":      issuer("{client_id: app, client_auth: key_file, key_file: /k.pem, kid: k1, assertion_audience: token_endpoint}"),
 		"keyvault":           issuer("{client_id: app, client_auth: keyvault, key: 'https://kv.vault.azure.net/keys/sign', kid: x5t}") + "azure: {identity: workload}\n",
+		"vault":              issuer("{client_id: app, client_auth: vault, key: transit/zitadel, kid: '2861'}") + bao,
 	} {
 		if _, err := Parse([]byte(doc)); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -306,6 +308,11 @@ func TestExchangeClientAuth(t *testing.T) {
 		"an odd audience":              issuer("{client_id: app, client_auth: key_file, key_file: /k, assertion_audience: everyone}"),
 		"secret with no variable":      issuer("{client_id: app}"),
 		"no client_id for file":        issuer("{client_auth: file, assertion_file: /t}"),
+		"vault with no vault":          issuer("{client_id: app, client_auth: vault, key: transit/zitadel, kid: k}"),
+		"vault with no kid":            issuer("{client_id: app, client_auth: vault, key: transit/zitadel}") + bao,
+		"vault with no mount":          issuer("{client_id: app, client_auth: vault, key: zitadel, kid: k}") + bao,
+		"vault with a deep key":        issuer("{client_id: app, client_auth: vault, key: transit/a/b, kid: k}") + bao,
+		"vault with a key_file":        issuer("{client_id: app, client_auth: vault, key: transit/z, kid: k, key_file: /k}") + bao,
 	} {
 		if _, err := Parse([]byte(doc)); err == nil {
 			t.Errorf("%s: accepted", name)

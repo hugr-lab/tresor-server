@@ -512,6 +512,17 @@ func exchangeAuth(ctx context.Context, cfg *config.Config) (map[string]mint.Clie
 				return nil, nil, err
 			}
 			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
+		case "vault":
+			v, err := vaultClient(cfg)
+			if err != nil {
+				return nil, nil, err
+			}
+			mount, key, _ := strings.Cut(ex.Key, "/")
+			signer, err := vaultkek.NewSigner(ctx, v, mount, key)
+			if err != nil {
+				return nil, nil, err
+			}
+			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
 		}
 		out[config.IssuerKey(is.Issuer)] = mint.AssertionAuth{ID: clientID, Assertion: source}
 		checks = append(checks, health.Check{
