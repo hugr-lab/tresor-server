@@ -1,6 +1,6 @@
 # Spec 007: OpenBao and HashiCorp Vault
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-02
 - **Author**: hugr lab
 
@@ -126,10 +126,16 @@ exchange: {client_id: …, client_auth: vault, key: transit/zitadel-app, kid: <t
 
 ### Deployment
 
-- **The chart**: `vault` in `config`, a projected token for the `jwt` method (the same mechanism as
-  `exchangeToken`), `ca_file` through `extraVolumes`.
-- **The docs**: a Vault page, covering the policies, the Kubernetes and JWT auth set-up, Transit, KV, and
-  ZITADEL's key import.
+- **The chart**: `vault` in `config`; `vaultToken`, a projected ServiceAccount token bound to the Vault role's
+  audience (the same mechanism as `exchangeToken`), for the `kubernetes` and `jwt` methods, with
+  `vault.auth.jwt_file` set to it; `ca_file` through `extraVolumes`.
+  - With `kubernetes` and no `vaultToken`, the pod's own ServiceAccount token is mounted.
+  - The render refuses `keys.kind: vault` with no `vault.address`, and `jwt` with no token.
+- **The docs**: a Vault page (`website/docs/vault.md`), covering the logins, the policies, the chart, and links
+  to Transit, KV and ZITADEL's key import.
+- **kind** (`scripts/ci/kind.sh`): OpenBao in the cluster with TLS of the run's CA, Kubernetes auth with the
+  projected token (`audience=vault`), the KEK in Transit, the Kubernetes store, and a `ref+vault` reference read
+  through the protocol.
 
 ## The PRs
 
@@ -138,7 +144,7 @@ exchange: {client_id: …, client_auth: vault, key: transit/zitadel-app, kid: <t
 2. **(b)** `ref+vault`, `state.password_ref` (landed);
 3. **(c)** `client_auth: vault` (landed);
 4. **(d)** the docs, the chart, and the stack with no cloud on kind: OpenBao with Kubernetes auth, the KEK
-   in Transit, the Kubernetes store.
+   in Transit, the Kubernetes store (landed).
 
 ## Enforcement & security
 

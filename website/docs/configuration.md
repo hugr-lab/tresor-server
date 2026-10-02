@@ -150,7 +150,8 @@ gets the keys: check the claim it names.
 
 ### `vault`
 
-OpenBao or HashiCorp Vault (spec 007): the KEK in Transit (`keys.kind: vault`).
+OpenBao or HashiCorp Vault (spec 007): the KEK in Transit (`keys.kind: vault`), `ref+vault`, `client_auth: vault`. See
+[OpenBao and Vault](vault.md).
 
 | Setting | |
 | --- | --- |
@@ -159,7 +160,7 @@ OpenBao or HashiCorp Vault (spec 007): the KEK in Transit (`keys.kind: vault`).
 | `vault.ca_file` | A private CA; the system's roots otherwise. |
 | `vault.auth.method` | `kubernetes`, `jwt` or `token_file`. |
 | `vault.auth.mount`, `vault.auth.role` | The auth method's mount (default: the method's name), and the role. |
-| `vault.auth.jwt_file` | `jwt`: the token to log in with. `kubernetes`: the pod's own by default. |
+| `vault.auth.jwt_file` | `jwt`: the token to log in with. `kubernetes`: the pod's own by default. The chart's `vaultToken` sets it. |
 | `vault.auth.token_file` | `token_file`: the token a Vault Agent writes, read again when it changes. |
 | `keys.kind: vault`, `keys.key`, `keys.mount` | The Transit key, and its mount (default `transit`). |
 

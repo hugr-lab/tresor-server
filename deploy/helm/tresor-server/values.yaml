@@ -19,6 +19,8 @@ config:
   state:
     kind: kubernetes       # memory | sqlite | postgres | sqlserver | kubernetes
   # keys: {kind: azurekeyvault, key: https://<vault>.vault.azure.net/keys/<key>}   # with workloadIdentity
+  # keys: {kind: vault, key: <transit key>}                                         # with vault, vaultToken
+  # vault: {address: https://bao.example:8200, ca_file: ..., auth: {method: kubernetes, role: tresor}}
   issuers: []              # required
   policy:
     admins: []
@@ -51,6 +53,15 @@ serviceAccount:
 exchangeToken:
   enabled: false
   audience: ""
+  expirationSeconds: 3600
+
+# A projected ServiceAccount token for the Vault login (spec 007: vault.auth.method kubernetes or jwt): mounted
+# at /var/run/tresor/vault-token/token, and config.vault.auth.jwt_file set to it when unset. Bound to an audience
+# (the Vault role's audience), it is good for Vault only, not for the Kubernetes API. Off with method
+# kubernetes: the pod's own ServiceAccount token is mounted instead.
+vaultToken:
+  enabled: false
+  audience: vault
   expirationSeconds: 3600
 
 # AKS workload identity (azure.identity: workload): the pod's label and the ServiceAccount's annotation.

@@ -106,6 +106,11 @@ config:
 - The chart makes a Role per namespace listed, with `get` on Secrets.
 - The service's own namespace is refused: its credentials are there.
 
+## OpenBao or Vault
+
+The KEK in Transit, `ref+vault` and the exchange's key in Vault, with the chart's `vaultToken`: see
+[OpenBao and Vault](vault.md).
+
 ## Other stores
 
 - **PostgreSQL or SQL Server**: `config.state` as on any host.
