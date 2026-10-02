@@ -146,6 +146,21 @@ The service's client at the issuer, for `token_exchange` secrets. See [Token exc
 `urn:zitadel:iam:org:project:roles`). An issuer whose claim points at an object used to get nothing, and now
 gets the keys: check the claim it names.
 
+### `vault`
+
+OpenBao or HashiCorp Vault (spec 007): the KEK in Transit (`keys.kind: vault`).
+
+| Setting | |
+| --- | --- |
+| `vault.address` | `https://…` (http only to this machine). |
+| `vault.namespace` | A namespace, when one is used. |
+| `vault.ca_file` | A private CA; the system's roots otherwise. |
+| `vault.auth.method` | `kubernetes`, `jwt` or `token_file`. |
+| `vault.auth.mount`, `vault.auth.role` | The auth method's mount (default: the method's name), and the role. |
+| `vault.auth.jwt_file` | `jwt`: the token to log in with. `kubernetes`: the pod's own by default. |
+| `vault.auth.token_file` | `token_file`: the token a Vault Agent writes, read again when it changes. |
+| `keys.kind: vault`, `keys.key`, `keys.mount` | The Transit key, and its mount (default `transit`). |
+
 ### `audit`, `telemetry`
 
 See [Observability](observability.md).

@@ -312,3 +312,36 @@ func TestExchangeClientAuth(t *testing.T) {
 		}
 	}
 }
+
+func TestVaultConfig(t *testing.T) {
+	base := strings.Replace(good, "state: {kind: memory}", "state: {kind: sqlite, path: /d/t.db}", 1)
+	vaultKEK := base + "keys: {kind: vault, key: tresor-kek}\nvault: {address: 'https://bao.example:8200', auth: {method: kubernetes, role: tresor}}\n"
+	cfg, err := Parse([]byte(vaultKEK))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Keys.Mount != "transit" || cfg.Vault.Auth.Role != "tresor" {
+		t.Fatalf("%+v %+v", cfg.Keys, cfg.Vault)
+	}
+	for name, doc := range map[string]string{
+		"jwt":        strings.Replace(vaultKEK, "method: kubernetes, role: tresor", "method: jwt, role: tresor, jwt_file: /var/run/tresor/vault-token/token", 1),
+		"token_file": strings.Replace(vaultKEK, "method: kubernetes, role: tresor", "method: token_file, token_file: /vault/secrets/token", 1),
+	} {
+		if _, err := Parse([]byte(doc)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, doc := range map[string]string{
+		"a vault KEK with no vault":  base + "keys: {kind: vault, key: k}\n",
+		"a key with a slash":         strings.Replace(vaultKEK, "key: tresor-kek", "key: transit/tresor-kek", 1),
+		"jwt with no file":           strings.Replace(vaultKEK, "method: kubernetes", "method: jwt", 1),
+		"approle":                    strings.Replace(vaultKEK, "method: kubernetes", "method: approle", 1),
+		"token_file with a role":     strings.Replace(vaultKEK, "method: kubernetes, role: tresor", "method: token_file, token_file: /t, role: x", 1),
+		"a mount for a local KEK":    base + "keys: {kind: local, key_env: TRESOR_TEST_KEK, mount: transit}\n",
+		"vault settings, no address": base + "keys: {kind: local, key_env: TRESOR_TEST_KEK}\nvault: {namespace: x}\n",
+	} {
+		if _, err := Parse([]byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

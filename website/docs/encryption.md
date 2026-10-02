@@ -37,6 +37,7 @@ material of their choice under it. So a data key that unwraps proves nothing. Th
 | Key Vault RSA | a deterministic signature (RS256) of a fixed label, made in the vault |
 | Managed HSM AES | a deterministic wrap (A256KW) of a fixed label |
 | local | HMAC-SHA256 of a fixed label under the key |
+| OpenBao / Vault Transit | a Transit HMAC of a fixed label, at the KEK's version |
 
 - The root is never stored; it stays in memory for `keys.cache_ttl`, as the data keys do.
 - A data key's tag is an HMAC under the root over its id, its KEK id, its creation time and its wrapped
@@ -85,6 +86,38 @@ azure: {identity: managed}
   key records the version it was wrapped under.
 - The current version is read at most once a minute. While the vault does not answer, the last one read
   serves for up to an hour: a seal needs no vault when its data key is in memory.
+
+### `vault`: OpenBao or HashiCorp Vault Transit
+
+```yaml
+keys: {kind: vault, mount: transit, key: tresor-kek}
+vault:
+  address: https://bao.example.eu:8200
+  auth: {method: kubernetes, role: tresor-server}     # kubernetes | jwt | token_file
+```
+
+- **The key**: an `aes256-gcm96` Transit key. The KEK never leaves Vault; the service asks it to encrypt and
+  decrypt data keys.
+- **The KEK id** is `vault:<mount>/<key>:v<N>`, the version the ciphertext names.
+- **The root** is Transit's HMAC of a fixed label at that version. Every Transit key has an HMAC key per
+  version, and it is never exported.
+- **The service's policy**, on that one key:
+
+  ```hcl
+  path "transit/encrypt/tresor-kek"  { capabilities = ["update"] }
+  path "transit/decrypt/tresor-kek"  { capabilities = ["update"] }
+  path "transit/hmac/tresor-kek/*"   { capabilities = ["update"] }
+  path "transit/keys/tresor-kek"     { capabilities = ["read"] }
+  ```
+
+- **Rotation**:
+  1. `bao write -f transit/keys/tresor-kek/rotate`;
+  2. `tresor-server rewrap`;
+  3. raise the key's `min_decryption_version` to retire the old versions.
+- **The login has no static secret**:
+  - `kubernetes`: the pod's ServiceAccount token, against Vault's Kubernetes auth method;
+  - `jwt`: a projected token (`jwt_file`), against its JWT auth method;
+  - `token_file`: a token a Vault Agent writes and renews.
 
 ## Rotation
 

@@ -115,7 +115,8 @@ exchange: {client_id: …, client_auth: vault, key: transit/zitadel-app, kid: <t
 
 ## The PRs
 
-1. **(a)** the client, its three logins, the KEK in Transit with its root;
+1. **(a)** the client, its three logins, the KEK in Transit with its root (landed: tested against OpenBao 2.4.1
+   and HashiCorp Vault 2.1.1 in CI);
 2. **(b)** `ref+vault`, `state.password_ref`;
 3. **(c)** `client_auth: vault`;
 4. **(d)** the docs, the chart, and the stack with no cloud on kind: OpenBao with Kubernetes auth, the KEK

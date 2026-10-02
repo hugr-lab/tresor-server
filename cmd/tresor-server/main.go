@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/keys/azurekeyvault"
 	"github.com/hugr-lab/tresor-server/internal/keys/local"
+	"github.com/hugr-lab/tresor-server/internal/keys/vaultkek"
 	"github.com/hugr-lab/tresor-server/internal/kube"
 	"github.com/hugr-lab/tresor-server/internal/material"
 	azkvsource "github.com/hugr-lab/tresor-server/internal/material/azurekeyvault"
@@ -40,6 +42,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/state/sqlstore"
 	"github.com/hugr-lab/tresor-server/internal/telemetry"
 	"github.com/hugr-lab/tresor-server/internal/traced"
+	"github.com/hugr-lab/tresor-server/internal/vault"
 )
 
 // version is the build's (-ldflags -X main.version=...): the image's tag.
@@ -314,6 +317,12 @@ func kekOf(cfg *config.Config) (keys.KeyWrapper, error) {
 		return local.FromEnv(k.KeyEnv)
 	case k.Kind == "local":
 		return local.FromFile(k.KeyFile)
+	case k.Kind == "vault":
+		v, err := vaultClient(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return vaultkek.New(v, k.Mount, k.Key)
 	case k.Kind == "azurekeyvault":
 		cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
 		if err != nil {
@@ -494,4 +503,27 @@ func exchangeAuth(ctx context.Context, cfg *config.Config) (map[string]mint.Clie
 		})
 	}
 	return out, checks, nil
+}
+
+// vaultOnce is the process's one Vault client (spec 007): one login, shared by the KEK, references and signing.
+var vaultOnce struct {
+	sync.Mutex
+	client *vault.Client
+}
+
+func vaultClient(cfg *config.Config) (*vault.Client, error) {
+	vaultOnce.Lock()
+	defer vaultOnce.Unlock()
+	if vaultOnce.client != nil {
+		return vaultOnce.client, nil
+	}
+	v := cfg.Vault
+	c, err := vault.New(vault.Config{Address: v.Address, Namespace: v.Namespace, CAFile: v.CAFile,
+		Auth: vault.Auth{Method: v.Auth.Method, Mount: v.Auth.Mount, Role: v.Auth.Role, JWTFile: v.Auth.JWTFile,
+			TokenFile: v.Auth.TokenFile}})
+	if err != nil {
+		return nil, err
+	}
+	vaultOnce.client = c
+	return c, nil
 }

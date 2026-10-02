@@ -36,11 +36,24 @@ jobs:
         options: >-
           --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Tresor-Test-2026!' -Q 'SELECT 1'"
           --health-interval 5s --health-timeout 5s --health-retries 40
+      # spec 007: OpenBao and HashiCorp Vault, dev servers
+      openbao:
+        image: openbao/openbao:2.4.1
+        env:
+          BAO_DEV_ROOT_TOKEN_ID: root
+        ports: ['18200:8200']
+      hashicorp-vault:
+        image: hashicorp/vault:2.1.1
+        env:
+          VAULT_DEV_ROOT_TOKEN_ID: root
+        ports: ['18201:8200']
     env:
       TRESOR_TEST_POSTGRES: postgres://postgres@127.0.0.1:55432/postgres?sslmode=disable
       TRESOR_TEST_POSTGRES_PASSWORD: tresor-test
       TRESOR_TEST_SQLSERVER: sqlserver://sa@127.0.0.1:51433?encrypt=disable
       TRESOR_TEST_SQLSERVER_PASSWORD: Tresor-Test-2026!
+      TRESOR_TEST_VAULT: http://127.0.0.1:18200,http://127.0.0.1:18201
+      TRESOR_TEST_VAULT_TOKEN: root
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
