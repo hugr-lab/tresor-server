@@ -17,7 +17,8 @@ CREATE PERSISTENT SECRET lake IN corp (
 ```
 
 The service reads the value at each fetch, with its own identity. DuckDB gets the value; the store keeps only
-the reference. Two sources: Azure Key Vault (`ref+azkv://`) and Kubernetes Secrets (`ref+k8s://`).
+the reference. Three sources: Azure Key Vault (`ref+azkv://`), Kubernetes Secrets (`ref+k8s://`), and OpenBao or
+HashiCorp Vault KV v2 (`ref+vault://`).
 
 ## Key Vault: the syntax
 
@@ -69,6 +70,32 @@ material:
 - The resolution is logged with the Secret's observed `resourceVersion`, never the value.
 - A Secret synced from a vault by another tool (External Secrets, the CSI driver) is served the same way: a
   rotation reaches DuckDB at its next fetch.
+
+## OpenBao and HashiCorp Vault: KV v2
+
+`ref+vault://<mount>/<path>#<field>`: one field of a KV v2 secret.
+
+```yaml
+material:
+  vault:
+    allow:
+      - mount: secret
+        prefixes: [duckdb/]
+    cache_ttl: 0s
+vault: {address: https://bao.example.eu:8200, auth: {method: kubernetes, role: tresor-server}}
+```
+
+- **The allowlist**: only the mounts listed, and only the paths that start with a listed prefix (none listed:
+  all). The service's Vault policy gives `read` on `<mount>/data/<prefix>*`.
+- **Each read** fetches the secret's current version and logs that version, never the value. A new version
+  in Vault reaches DuckDB at its next fetch.
+- **The field must be text**. A deleted secret, a missing field or one that is not a string fails the fetch.
+- **The parse is strict**:
+  - a one-segment mount;
+  - path segments of letters, digits, `_`, `.` and `-`, with no `.` or `..`;
+  - no escape, no query, one `#field`.
+- **`state.password_ref: ref+vault://…`** reads a database's password. As for every source, it must be
+  outside `material.vault.allow`.
 
 ## The rules
 

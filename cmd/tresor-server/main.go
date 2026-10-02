@@ -35,6 +35,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/material"
 	azkvsource "github.com/hugr-lab/tresor-server/internal/material/azurekeyvault"
 	k8ssource "github.com/hugr-lab/tresor-server/internal/material/k8s"
+	"github.com/hugr-lab/tresor-server/internal/material/vaultkv"
 	"github.com/hugr-lab/tresor-server/internal/mint"
 	"github.com/hugr-lab/tresor-server/internal/state"
 	"github.com/hugr-lab/tresor-server/internal/state/kubestore"
@@ -234,6 +235,15 @@ func passwordResolver(cfg *config.Config, ref string) (*material.Resolver, error
 		}
 		return material.New(src), nil
 	}
+	if rest, ok := strings.CutPrefix(ref, "ref+vault://"); ok {
+		where, _, _ := strings.Cut(rest, "#")
+		mount, path, _ := strings.Cut(where, "/")
+		v, err := vaultClient(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return checkedPassword(material.New(vaultkv.New(v, []vaultkv.Allow{{Mount: mount, Prefixes: []string{path}}}, 0)), ref)
+	}
 	rest := strings.TrimPrefix(ref, "ref+azkv://")
 	parts := strings.Split(rest, "/")
 	if len(parts) < 2 {
@@ -294,6 +304,17 @@ func materialResolver(cfg *config.Config) (*material.Resolver, error) {
 			return nil, err
 		}
 		sources = append(sources, traced.Source(src))
+	}
+	if mv := cfg.Material.Vault; len(mv.Allow) > 0 {
+		v, err := vaultClient(cfg)
+		if err != nil {
+			return nil, err
+		}
+		allow := make([]vaultkv.Allow, len(mv.Allow))
+		for i, a := range mv.Allow {
+			allow[i] = vaultkv.Allow{Mount: a.Mount, Prefixes: a.Prefixes}
+		}
+		sources = append(sources, traced.Source(vaultkv.New(v, allow, mv.CacheTTL)))
 	}
 	if len(sources) == 0 {
 		return nil, nil

@@ -115,6 +115,8 @@ Where references may read. See [References](references.md).
 | `material.azkv.cache_ttl` | Keep a value read for this long; default `0` (none), at most `5m`. |
 | `material.azkv.dns_suffix` | Another cloud's Key Vault suffix; default `.vault.azure.net`. |
 | `material.k8s.allow` | `[{namespace: data-team, prefixes: [duckdb-]}]`: the namespaces, and the Secret-name prefixes (none: all). |
+| `material.vault.allow` | `[{mount: secret, prefixes: [duckdb/]}]`: the KV v2 mounts, and the path prefixes (none: all). Needs `vault:`. |
+| `material.vault.cache_ttl` | Keep a value read for this long; default `0`, at most `5m`. |
 
 ### `azure`
 

@@ -345,3 +345,27 @@ func TestVaultConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestMaterialVault(t *testing.T) {
+	vaultCfg := "vault: {address: 'https://bao.example', auth: {method: kubernetes, role: tresor}}\n"
+	doc := good + vaultCfg + "material: {vault: {allow: [{mount: secret, prefixes: [duckdb/]}], cache_ttl: 1m}}\n"
+	if _, err := Parse([]byte(doc)); err != nil {
+		t.Fatal(err)
+	}
+	pg := strings.Replace(good, "state: {kind: memory}", "state: {kind: postgres, dsn: 'host=db user=t dbname=t', auth: password, password_ref: 'ref+vault://secret/tresor/db#password'}", 1) +
+		"keys: {kind: local, key_env: TRESOR_TEST_KEK}\n" + vaultCfg
+	if _, err := Parse([]byte(pg + "material: {vault: {allow: [{mount: secret, prefixes: [duckdb/]}]}}\n")); err != nil {
+		t.Fatalf("a password outside the allowlist: %v", err)
+	}
+	for name, d := range map[string]string{
+		"no vault":              good + "material: {vault: {allow: [{mount: secret}]}}\n",
+		"a nested mount":        good + vaultCfg + "material: {vault: {allow: [{mount: team/kv}]}}\n",
+		"a long cache":          good + vaultCfg + "material: {vault: {allow: [{mount: secret}], cache_ttl: 1h}}\n",
+		"the password readable": pg + "material: {vault: {allow: [{mount: secret, prefixes: [tresor/]}]}}\n",
+		"a password, no vault":  strings.Replace(pg, vaultCfg, "", 1),
+	} {
+		if _, err := Parse([]byte(d)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

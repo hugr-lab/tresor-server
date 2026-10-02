@@ -1,0 +1,137 @@
+// Package vaultkv resolves `ref+vault://<mount>/<path>#<field>` (spec 007): one field of a KV v2 secret in
+// OpenBao or HashiCorp Vault, read with the service's Vault login, within an allowlist of mounts and path
+// prefixes. The URL is built from the parsed parts, never from the text.
+package vaultkv
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"github.com/hugr-lab/tresor-server/internal/material"
+)
+
+// Caller is the Vault client: vault.Client, or a fake in tests.
+type Caller interface {
+	Do(ctx context.Context, method, path string, body, out any) error
+}
+
+// Allow lets references read one mount's secrets whose paths start with one of the prefixes (all, when none).
+type Allow struct {
+	Mount    string
+	Prefixes []string
+}
+
+// Source resolves vault references.
+type Source struct {
+	vault    Caller
+	allow    []Allow
+	cacheTTL time.Duration
+
+	mu    sync.Mutex
+	cache map[string]cached
+}
+
+type cached struct {
+	value, version string
+	until          time.Time
+}
+
+// New returns a source over the allowlist; cacheTTL keeps a value read that long (0: read at every fetch).
+func New(v Caller, allow []Allow, cacheTTL time.Duration) *Source {
+	return &Source{vault: v, allow: allow, cacheTTL: cacheTTL, cache: map[string]cached{}}
+}
+
+func (s *Source) Scheme() string { return "vault" }
+
+var (
+	segment = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$`)
+	field   = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
+)
+
+// Parse checks <mount>/<path>#<field>: a one-segment mount, a path of KV's characters (no . nor .. segment, no
+// escape, no query), a field - and the allowlist.
+func (s *Source) Parse(text string) (material.Ref, error) {
+	where, fld, ok := strings.Cut(text, "#")
+	if !ok || !field.MatchString(fld) {
+		return material.Ref{}, errors.New("ref+vault://<mount>/<path>#<field>")
+	}
+	mount, path, ok := strings.Cut(where, "/")
+	if !ok || !segment.MatchString(mount) || mount == ".." || path == "" {
+		return material.Ref{}, errors.New("ref+vault://<mount>/<path>#<field>: a mount, then a path")
+	}
+	for _, seg := range strings.Split(path, "/") {
+		if !segment.MatchString(seg) || seg == ".." {
+			return material.Ref{}, errors.New("a vault path's segments are letters, digits, _ . - (no . nor ..)")
+		}
+	}
+	ref := material.Ref{Scheme: "vault", Vault: mount, Name: path, Key: fld}
+	if !s.allowed(ref) {
+		return material.Ref{}, fmt.Errorf("%s is outside the allowlist (material.vault.allow)", ref)
+	}
+	return ref, nil
+}
+
+func (s *Source) allowed(ref material.Ref) bool {
+	for _, a := range s.allow {
+		if a.Mount != ref.Vault {
+			continue
+		}
+		if len(a.Prefixes) == 0 {
+			return true
+		}
+		for _, p := range a.Prefixes {
+			if strings.HasPrefix(ref.Name, p) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Resolve reads the field now (or from the cache); the version is the KV secret's.
+func (s *Source) Resolve(ctx context.Context, ref material.Ref) (string, string, error) {
+	if !s.allowed(ref) { // the allowlist again: a reference is never resolved outside it
+		return "", "", fmt.Errorf("%s is outside the allowlist", ref)
+	}
+	key := ref.String()
+	s.mu.Lock()
+	if c, ok := s.cache[key]; ok && time.Now().Before(c.until) {
+		s.mu.Unlock()
+		return c.value, c.version, nil
+	}
+	s.mu.Unlock()
+	var out struct {
+		Data struct {
+			Data     map[string]any `json:"data"`
+			Metadata struct {
+				Version int `json:"version"`
+			} `json:"metadata"`
+		} `json:"data"`
+	}
+	if err := s.vault.Do(ctx, http.MethodGet, ref.Vault+"/data/"+ref.Name, nil, &out); err != nil {
+		return "", "", err // the client's error: a status and Vault's words, never a value
+	}
+	raw, ok := out.Data.Data[ref.Key]
+	if !ok {
+		return "", "", errors.New("the KV secret has no such field (or was deleted)")
+	}
+	value, ok := raw.(string)
+	if !ok || !utf8.ValidString(value) {
+		return "", "", errors.New("the KV secret's field is not text: a reference is a VARCHAR value")
+	}
+	version := strconv.Itoa(out.Data.Metadata.Version)
+	if s.cacheTTL > 0 {
+		s.mu.Lock()
+		s.cache[key] = cached{value: value, version: version, until: time.Now().Add(s.cacheTTL)}
+		s.mu.Unlock()
+	}
+	return value, version, nil
+}

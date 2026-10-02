@@ -162,8 +162,23 @@ func (v Vault) validate() error {
 
 // Material is where references (ref+...) may read (spec 002).
 type Material struct {
-	AzKV AzKV `yaml:"azkv"`
-	K8s  K8s  `yaml:"k8s"`
+	AzKV  AzKV       `yaml:"azkv"`
+	K8s   K8s        `yaml:"k8s"`
+	Vault VaultAllow `yaml:"vault"`
+}
+
+// VaultAllow lets ref+vault://<mount>/<path>#<field> read KV v2 secrets (spec 007): only in the mounts and under
+// the path prefixes listed, with the service's Vault login.
+type VaultAllow struct {
+	Allow []VaultMount `yaml:"allow"`
+	// CacheTTL keeps a value read for this long (default 0: read at every fetch), at most 5 minutes.
+	CacheTTL time.Duration `yaml:"cache_ttl"`
+}
+
+// VaultMount is one KV v2 mount, and the prefixes its secrets' paths must start with (none: all).
+type VaultMount struct {
+	Mount    string   `yaml:"mount"`
+	Prefixes []string `yaml:"prefixes"`
 }
 
 // K8s lets ref+k8s://<namespace>/<secret>/<key> read Kubernetes Secrets (spec 003): only in the namespaces and
@@ -353,6 +368,22 @@ func (c *Config) validate() error {
 	if err := c.Vault.validate(); err != nil {
 		return err
 	}
+	if mv := c.Material.Vault; len(mv.Allow) > 0 || mv.CacheTTL != 0 {
+		if len(mv.Allow) == 0 || !c.Vault.used() {
+			return errors.New("material.vault: allow lists the KV mounts references may read, with vault: configured")
+		}
+		for i, a := range mv.Allow {
+			if !vaultMount.MatchString(a.Mount) || a.Mount == ".." {
+				return fmt.Errorf("material.vault.allow[%d].mount: a mount's name, one segment", i)
+			}
+		}
+		if mv.CacheTTL < 0 || mv.CacheTTL > 5*time.Minute {
+			return errors.New("material.vault.cache_ttl is 0 to 5m: the longest a value may be read stale")
+		}
+	}
+	if strings.HasPrefix(c.State.PasswordRef, "ref+vault://") && !c.Vault.used() {
+		return errors.New("state.password_ref reads Vault: vault: is required")
+	}
 	if c.Keys.Kind == "vault" && !c.Vault.used() {
 		return errors.New("keys: a vault KEK needs vault: (address, auth)")
 	}
@@ -512,8 +543,9 @@ func (s *State) validateServer(identity string) error {
 		if n != 1 {
 			return errors.New("state.auth: password comes from password_env, password_file or password_ref - one of them")
 		}
-		if s.PasswordRef != "" && !strings.HasPrefix(s.PasswordRef, "ref+k8s://") && !strings.HasPrefix(s.PasswordRef, "ref+azkv://") {
-			return errors.New("state.password_ref is a ref+k8s:// or ref+azkv:// reference")
+		if s.PasswordRef != "" && !strings.HasPrefix(s.PasswordRef, "ref+k8s://") && !strings.HasPrefix(s.PasswordRef, "ref+azkv://") &&
+			!strings.HasPrefix(s.PasswordRef, "ref+vault://") {
+			return errors.New("state.password_ref is a ref+k8s://, ref+azkv:// or ref+vault:// reference")
 		}
 		if s.PasswordEnv != "" && IsSettingVariable(s.PasswordEnv) {
 			return fmt.Errorf("state.password_env names %s, which is read as configuration - give the password a "+
@@ -608,6 +640,9 @@ func IsLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// vaultMount is a Vault mount's name: one segment.
+var vaultMount = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$`)
+
 // admits says whether a reference's place is within an allowlist, as the sources compare: Kubernetes names
 // exactly, Key Vault names without case. A reference that does not parse is admitted by none.
 func (m Material) admits(ref string) bool {
@@ -616,6 +651,16 @@ func (m Material) admits(ref string) bool {
 		for _, a := range m.K8s.Allow {
 			if len(parts) == 3 && a.Namespace == parts[0] && (len(a.Prefixes) == 0 ||
 				slices.ContainsFunc(a.Prefixes, func(p string) bool { return strings.HasPrefix(parts[1], p) })) {
+				return true
+			}
+		}
+	}
+	if rest, ok := strings.CutPrefix(ref, "ref+vault://"); ok {
+		where, _, _ := strings.Cut(rest, "#")
+		mount, path, _ := strings.Cut(where, "/")
+		for _, a := range m.Vault.Allow {
+			if a.Mount == mount && (len(a.Prefixes) == 0 ||
+				slices.ContainsFunc(a.Prefixes, func(p string) bool { return strings.HasPrefix(path, p) })) {
 				return true
 			}
 		}
