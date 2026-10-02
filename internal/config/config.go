@@ -267,7 +267,7 @@ type ExchangeClient struct {
 }
 
 // ClientAuthKinds are the ways the service logs in at a token endpoint.
-var ClientAuthKinds = []string{"secret", "azure", "file", "keyvault", "key_file"}
+var ClientAuthKinds = []string{"secret", "azure", "file", "keyvault", "key_file", "vault"}
 
 // ServiceRule marks a token as a service's: Claim is present (and equals Equals, when set); the
 // client's name is ClientClaim (default azp).
@@ -472,7 +472,7 @@ func (c *Config) validate() error {
 			}
 		}
 		if ex := is.Exchange; ex != nil {
-			if err := ex.validate(c.Azure.Identity); err != nil {
+			if err := ex.validate(c.Azure.Identity, c.Vault.used()); err != nil {
 				return fmt.Errorf("issuers[%d]: %w", i, err)
 			}
 		}
@@ -682,7 +682,7 @@ func (m Material) admits(ref string) bool {
 }
 
 // validate checks an exchange client's login: one way, and what that way needs - nothing of another.
-func (ex *ExchangeClient) validate(identity string) error {
+func (ex *ExchangeClient) validate(identity string, vaultUsed bool) error {
 	if ex.ClientAuth == "" {
 		ex.ClientAuth = "secret"
 	}
@@ -701,6 +701,7 @@ func (ex *ExchangeClient) validate(identity string) error {
 		"file":     {"assertion_file"},
 		"keyvault": {"key", "kid", "x5t", "assertion_audience"},
 		"key_file": {"key_file", "kid", "x5t", "assertion_audience"},
+		"vault":    {"key", "kid", "x5t", "assertion_audience"},
 	}[ex.ClientAuth]
 	for name, on := range set {
 		if on && !slices.Contains(allowed, name) {
@@ -733,6 +734,14 @@ func (ex *ExchangeClient) validate(identity string) error {
 		}
 		if identity == "" {
 			return errors.New("exchange.client_auth: keyvault signs with the service's Azure identity: azure.identity is required")
+		}
+	case "vault":
+		if mount, key, ok := strings.Cut(ex.Key, "/"); !ok || !vaultMount.MatchString(mount) || !vaultMount.MatchString(key) ||
+			(ex.KID == "" && ex.X5T == "") {
+			return errors.New("exchange.client_auth: vault signs with key (<mount>/<key>: a Transit key, each one segment), named by kid or x5t")
+		}
+		if !vaultUsed {
+			return errors.New("exchange.client_auth: vault signs in Vault: vault: is required")
 		}
 	case "key_file":
 		if ex.KeyFile == "" {
