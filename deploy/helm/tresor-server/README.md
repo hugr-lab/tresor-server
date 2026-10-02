@@ -32,6 +32,10 @@ Kubernetes 1.30 or later.
   an issuer's `exchange.client_auth: file`, at `/var/run/tresor/idp-token/token` (Keycloak's federated client
   authentication). ZITADEL's key file (`client_auth: key_file`) is mounted from a Secret with
   `extraVolumes`.
+- `vaultToken`: a projected ServiceAccount token for the Vault login (`vault.auth.method` `kubernetes` or `jwt`),
+  bound to the Vault role's audience, at `/var/run/tresor/vault-token/token`; `vault.auth.jwt_file` is set to it.
+  Vault's private CA goes in with `extraVolumes`, named by `vault.ca_file`. See
+  [OpenBao and Vault](https://hugr-lab.github.io/tresor-server/vault/).
 - `rbac.secrets: false`: the Roles on Secrets (`material.k8s.allow`, `state.password_ref`) are yours to make.
 - `networkPolicy`: with `tls.offload` the pod serves plain HTTP - bearer tokens on the pod network. Let only
   the ingress controller reach it (`networkPolicy.from`).

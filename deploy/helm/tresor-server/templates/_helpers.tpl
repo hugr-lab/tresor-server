@@ -56,6 +56,13 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- else if not $cfg.tls -}}
 {{- $_ := set $cfg "tls" (dict "offload" true) -}}
 {{- end -}}
+{{- $vault := $cfg.vault | default dict -}}
+{{- $auth := $vault.auth | default dict -}}
+{{- if and .Values.vaultToken.enabled (has $auth.method (list "kubernetes" "jwt")) (not $auth.jwt_file) -}}
+{{- $_ := set $auth "jwt_file" "/var/run/tresor/vault-token/token" -}}
+{{- $_ := set $vault "auth" $auth -}}
+{{- $_ := set $cfg "vault" $vault -}}
+{{- end -}}
 {{- if and .Values.localKEK.secretName (not $cfg.keys) -}}
 {{- $_ := set $cfg "keys" (dict "kind" "local" "key_file" (printf "/var/run/tresor/kek/%s" .Values.localKEK.key)) -}}
 {{- end -}}
@@ -80,7 +87,21 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 {{- $keys := .Values.config.keys | default dict -}}
 {{- if and (ne $kind "memory") (not $keys) (not .Values.localKEK.secretName) -}}
-{{- fail "a KEK is required: localKEK.secretName, or config.keys (azurekeyvault)" -}}
+{{- fail "a KEK is required: localKEK.secretName, or config.keys (azurekeyvault, vault)" -}}
+{{- end -}}
+{{- $vault := .Values.config.vault | default dict -}}
+{{- $auth := $vault.auth | default dict -}}
+{{- if and (or (eq ($keys.kind | default "") "vault") $auth.method .Values.vaultToken.enabled) (not $vault.address) -}}
+{{- fail "config.vault.address is required (a vault KEK, config.vault.auth, vaultToken)" -}}
+{{- end -}}
+{{- if and .Values.vaultToken.enabled $auth.jwt_file -}}
+{{- fail "vaultToken: config.vault.auth.jwt_file is set - the chart's token would not be read; unset one" -}}
+{{- end -}}
+{{- if and (eq ($auth.method | default "") "jwt") (not $auth.jwt_file) (not .Values.vaultToken.enabled) -}}
+{{- fail "config.vault.auth.method jwt: vaultToken.enabled (or config.vault.auth.jwt_file)" -}}
+{{- end -}}
+{{- if and .Values.vaultToken.enabled (not (has ($auth.method | default "") (list "kubernetes" "jwt"))) -}}
+{{- fail "vaultToken: for config.vault.auth.method kubernetes or jwt" -}}
 {{- end -}}
 {{- if and (hasPrefix "/var/run/tresor/kek/" ($keys.key_file | default "")) (not .Values.localKEK.secretName) -}}
 {{- fail "config.keys.key_file is under the chart's KEK volume: localKEK.secretName names its Secret" -}}
@@ -109,8 +130,11 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 {{- end -}}
 
-{{/* Whether the pod talks to the Kubernetes API: the store, ref+k8s, a password from a Secret. */}}
+{{/* Whether the pod needs its ServiceAccount token: the store, ref+k8s, a password from a Secret (the Kubernetes
+API), or Vault's kubernetes login with no token of its own (vaultToken). */}}
 {{- define "tresor.usesAPI" -}}
 {{- $k8s := ((.Values.config.material | default dict).k8s | default dict).allow -}}
-{{- if or (eq (include "tresor.stateKind" .) "kubernetes") $k8s (include "tresor.passwordSecret" .) -}}true{{- end -}}
+{{- $auth := ((.Values.config.vault | default dict).auth | default dict) -}}
+{{- $vaultPod := and (eq ($auth.method | default "") "kubernetes") (not $auth.jwt_file) (not .Values.vaultToken.enabled) -}}
+{{- if or (eq (include "tresor.stateKind" .) "kubernetes") $k8s (include "tresor.passwordSecret" .) $vaultPod -}}true{{- end -}}
 {{- end -}}

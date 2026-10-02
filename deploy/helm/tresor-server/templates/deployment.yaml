@@ -69,6 +69,9 @@ spec:
             {{- if .Values.exchangeToken.enabled }}
             - {name: idp-token, mountPath: /var/run/tresor/idp-token, readOnly: true}
             {{- end }}
+            {{- if .Values.vaultToken.enabled }}
+            - {name: vault-token, mountPath: /var/run/tresor/vault-token, readOnly: true}
+            {{- end }}
             {{- if eq $kind "sqlite" }}
             - {name: data, mountPath: /var/lib/tresor}
             {{- end }}
@@ -97,6 +100,15 @@ spec:
                   path: token
                   audience: {{ required "exchangeToken.audience: the identity provider's" .Values.exchangeToken.audience | quote }}
                   expirationSeconds: {{ .Values.exchangeToken.expirationSeconds }}
+        {{- end }}
+        {{- if .Values.vaultToken.enabled }}
+        - name: vault-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ required "vaultToken.audience: the Vault role's" .Values.vaultToken.audience | quote }}
+                  expirationSeconds: {{ .Values.vaultToken.expirationSeconds }}
         {{- end }}
         {{- if eq $kind "sqlite" }}
         - name: data
