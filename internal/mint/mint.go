@@ -35,11 +35,43 @@ const (
 
 // Client is the service's own confidential client at one issuer's token endpoint.
 type Client struct {
-	TokenURL     string
-	ClientID     string
-	ClientSecret string
-	HTTP         *http.Client // nil: a client bounded by the timeout
-	Now          func() time.Time
+	TokenURL string
+	Auth     ClientAuth   // how the client logs in: a secret, or an assertion (spec 006)
+	HTTP     *http.Client // nil: a client bounded by the timeout
+	Now      func() time.Time
+}
+
+// ClientAuth puts the client's authentication into a token request's form.
+type ClientAuth interface {
+	Apply(ctx context.Context, form url.Values, tokenURL string) error
+}
+
+// SecretAuth is client_secret_post, as every tresor flow.
+type SecretAuth struct{ ID, Secret string }
+
+func (a SecretAuth) Apply(_ context.Context, form url.Values, _ string) error {
+	form.Set("client_id", a.ID)
+	form.Set("client_secret", a.Secret)
+	return nil
+}
+
+// AssertionAuth is a client assertion (RFC 7523, jwt-bearer): a platform identity's token, or a JWT the
+// service signs (spec 006). Assertion makes one per request; tokenURL is there for an IdP that wants it as the
+// assertion's audience.
+type AssertionAuth struct {
+	ID        string
+	Assertion func(ctx context.Context, tokenURL string) (string, error)
+}
+
+func (a AssertionAuth) Apply(ctx context.Context, form url.Values, tokenURL string) error {
+	assertion, err := a.Assertion(ctx, tokenURL)
+	if err != nil {
+		return err
+	}
+	form.Set("client_id", a.ID)
+	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+	form.Set("client_assertion", assertion)
+	return nil
 }
 
 // Token is a minted access token, and the refresh token that renews it when one was asked for.
@@ -73,10 +105,20 @@ func IsInvalidGrant(err error) bool {
 	return errors.As(err, &e) && e.Code == "invalid_grant"
 }
 
-// IsUnsupported: the IdP does not issue refresh tokens by exchange ("requested_token_type unsupported").
+// IsUnsupported: the IdP does not issue refresh tokens by exchange - Keycloak names requested_token_type,
+// ZITADEL answers TypeNotSupported (spec 006). The service then mints access tokens only.
 func IsUnsupported(err error) bool {
 	var e *Error
-	return errors.As(err, &e) && e.Code == "invalid_request" && strings.Contains(e.Description, "requested_token_type")
+	if !errors.As(err, &e) {
+		return false
+	}
+	switch e.Code {
+	case "unsupported_token_type":
+		return true
+	case "invalid_request":
+		return strings.Contains(e.Description, "requested_token_type") || strings.Contains(e.Description, "TypeNotSupported")
+	}
+	return false
 }
 
 // Exchange trades `subject` (an access token issued for this service) for one meant for `audience`; with
@@ -122,8 +164,14 @@ func (c *Client) post(ctx context.Context, form url.Values, presented string, ke
 		}
 		span.End()
 	}()
-	form.Set("client_id", c.ClientID)
-	form.Set("client_secret", c.ClientSecret) // client_secret_post, as every tresor flow
+	if c.Auth == nil {
+		return nil, &Error{Code: "client_auth", Description: "no client authentication is configured"}
+	}
+	if err := c.Auth.Apply(ctx, form, c.TokenURL); err != nil {
+		// no assertion, no request: never a fallback to no authentication. The cause names a source, never an
+		// assertion or a key (clientauth's errors)
+		return nil, &Error{Code: "client_auth", Description: bounded("the service could not authenticate to the identity provider: "+err.Error(), 300)}
+	}
 	httpClient := c.HTTP
 	if httpClient == nil {
 		httpClient = sharedHTTP

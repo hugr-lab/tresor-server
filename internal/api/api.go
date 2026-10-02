@@ -27,6 +27,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/material"
+	"github.com/hugr-lab/tresor-server/internal/mint"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
@@ -51,6 +52,8 @@ type Server struct {
 	mintLocks mintLocks          // one replica's renewals of a grant's token, per grant and audience
 	material  *material.Resolver // references (ref+...): nil refuses them all
 	audit     *audit.Auditor     // spec 005: nil records nothing
+	// exchangeAuth is how the service logs in at an issuer's token endpoint (spec 006), by IssuerKey
+	exchangeAuth map[string]mint.ClientAuth
 }
 
 // New wires a server; the verifier and the store are the caller's. It reads the store once, to report

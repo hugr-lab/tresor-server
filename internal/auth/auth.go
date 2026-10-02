@@ -288,15 +288,21 @@ func stringsAt(claims map[string]any, dotted string) []string {
 		}
 		node = m[part]
 	}
-	list, ok := node.([]any)
-	if !ok {
-		return nil
-	}
 	var out []string
-	for _, item := range list {
-		if s, ok := item.(string); ok && s != "" {
-			out = append(out, s)
+	switch v := node.(type) {
+	case []any: // a list of names (Keycloak, Entra)
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
 		}
+	case map[string]any: // an object keyed by name (ZITADEL: {"role": {"<org id>": "<domain>"}}), spec 006
+		for k := range v {
+			if k != "" {
+				out = append(out, k)
+			}
+		}
+		slices.Sort(out)
 	}
 	return out
 }

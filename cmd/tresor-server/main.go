@@ -23,6 +23,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/audit"
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/azure"
+	"github.com/hugr-lab/tresor-server/internal/clientauth"
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/health"
 	"github.com/hugr-lab/tresor-server/internal/keys"
@@ -32,6 +33,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/material"
 	azkvsource "github.com/hugr-lab/tresor-server/internal/material/azurekeyvault"
 	k8ssource "github.com/hugr-lab/tresor-server/internal/material/k8s"
+	"github.com/hugr-lab/tresor-server/internal/mint"
 	"github.com/hugr-lab/tresor-server/internal/state"
 	"github.com/hugr-lab/tresor-server/internal/state/kubestore"
 	"github.com/hugr-lab/tresor-server/internal/state/memory"
@@ -363,12 +365,17 @@ func serve(configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	exchange, exchangeChecks, err := exchangeAuth(ctx, cfg)
+	if err != nil {
+		return err
+	}
 	srv, err := api.New(ctx, cfg, verifier, traced.Store(st), log, api.WithMaterial(resolver),
-		api.WithAudit(audit.New(level, os.Stdout)))
+		api.WithAudit(audit.New(level, os.Stdout)), api.WithExchangeAuth(exchange))
 	if err != nil {
 		return err
 	}
 	checks := append([]health.Check{{Name: "state", Run: st.Ping}}, stateChecks...)
+	checks = append(checks, exchangeChecks...)
 	for _, iss := range verifier.Issuers() {
 		checks = append(checks, health.Check{
 			Name: "issuer " + iss,
@@ -416,4 +423,75 @@ func serve(configPath string, log *slog.Logger) error {
 		defer cancel()
 		return server.Shutdown(shutdown)
 	}
+}
+
+// exchangeAuth is how the service logs in at each issuer's token endpoint with no client secret (spec 006),
+// by IssuerKey, and a readiness check per issuer that makes an assertion - degraded, not unready, when it
+// fails: only token_exchange secrets depend on it. An issuer with client_auth: secret is not in it.
+func exchangeAuth(ctx context.Context, cfg *config.Config) (map[string]mint.ClientAuth, []health.Check, error) {
+	out := map[string]mint.ClientAuth{}
+	var checks []health.Check
+	for _, is := range cfg.Issuers {
+		ex := is.Exchange
+		if ex == nil || ex.ClientAuth == "secret" {
+			continue
+		}
+		clientID := ex.ClientID
+		var source clientauth.Source
+		aud := clientauth.Audience{Issuer: is.Issuer, TokenEndpoint: ex.AssertionAudience == "token_endpoint"}
+		switch ex.ClientAuth {
+		case "azure":
+			cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
+			if err != nil {
+				return nil, nil, err
+			}
+			source = clientauth.Azure(cred)
+		case "file":
+			source = clientauth.File(ex.AssertionFile)
+		case "key_file":
+			signer, kid, fileClient, err := clientauth.KeyFile(ex.KeyFile)
+			if err != nil {
+				return nil, nil, err
+			}
+			if ex.KID != "" {
+				if kid != "" && kid != ex.KID {
+					return nil, nil, fmt.Errorf("exchange.kid is not the key file's keyId")
+				}
+				kid = ex.KID
+			}
+			if kid == "" && ex.X5T == "" {
+				return nil, nil, fmt.Errorf("exchange.kid: the key file names no keyId - set kid (or x5t)")
+			}
+			if fileClient != "" {
+				if clientID != "" && clientID != fileClient {
+					return nil, nil, fmt.Errorf("exchange.client_id is not the key file's clientId")
+				}
+				clientID = fileClient
+			}
+			if clientID == "" {
+				return nil, nil, fmt.Errorf("exchange.client_id: the key file names no clientId - set client_id")
+			}
+			source = clientauth.JWT(clientID, clientauth.Header{KID: kid, X5T: ex.X5T}, aud, signer)
+		case "keyvault":
+			cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
+			if err != nil {
+				return nil, nil, err
+			}
+			signer, err := azurekeyvault.NewSigner(ctx, ex.Key, cred)
+			if err != nil {
+				return nil, nil, err
+			}
+			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
+		}
+		out[config.IssuerKey(is.Issuer)] = mint.AssertionAuth{ID: clientID, Assertion: source}
+		checks = append(checks, health.Check{
+			Name: "exchange " + is.Issuer,
+			Run: func(ctx context.Context) error {
+				_, err := source(ctx, "")
+				return err
+			},
+			Soft: func() bool { return true },
+		})
+	}
+	return out, checks, nil
 }

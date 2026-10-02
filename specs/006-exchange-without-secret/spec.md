@@ -48,19 +48,23 @@ issuers:
 | `client_auth` | The client assertion (`client_assertion_type` jwt-bearer) | For |
 | --- | --- | --- |
 | `secret` | none: `client_secret_env`, as today | any IdP |
-| `azure` | a token of the service's Azure identity (`azure.identity`: managed or workload), for the audience `api://AzureADTokenExchange` | Entra: the app registration has a federated credential naming that identity |
+| `azure` | a token of the service's Azure identity (`azure.identity`: managed or workload), for the audience `api://AzureADTokenExchange` | Entra: the app registration has a federated credential of the kind Managed identity, naming that identity (on AKS too) |
 | `file` | `assertion_file`: a file read at each request, such as a projected ServiceAccount token with an `audience` of the IdP's choosing | Keycloak (federated client authentication), any IdP trusting the cluster's issuer |
 | `keyvault` | a JWT the service makes (`iss` = `sub` = the client id, `aud` = the issuer, `jti`, a few minutes) and has signed in Key Vault: `key` (a Key Vault key URL), `kid` (what the IdP knows the key by) | Keycloak, Entra (`kid` the certificate's `x5t`), ZITADEL (its key imported), any IdP with `private_key_jwt`, on Azure |
 | `key_file` | the same JWT, signed with a private key from `key_file`: a ZITADEL key file (JSON: `keyId`, `key`, `clientId`) or a PEM key with `kid`. Read again when it changes | ZITADEL; any IdP with `private_key_jwt`, on a stack with no KMS |
 
 - **One per issuer.** `client_secret_env` is refused with any `client_auth` but `secret`.
-- **Assertions are cached** until shortly before they expire. A file is read again when it changes, since
-  the kubelet rotates a projected token.
+- **An assertion per request**, never cached: an IdP may refuse a `jti` it saw (Keycloak), and a lifetime of
+  one minute is enough. A projected token file is read at each request, since the kubelet rotates it. A
+  `key_file` is read at start: a rotation restarts the pods.
 - **The KEK's rights are not reused.** `keyvault` signs with a key of its own, under its own role: sign
   only, on that one key.
 - **`key_file` is a static key** of the service's own, the one kind left. It is asymmetric, never sent, and
   revocable at the IdP. The chart mounts it from a Secret; the docs say to rotate it in the IdP.
-- **The chart** mounts the projected token for `file`: `exchange.projectedToken.audience`, at a fixed path.
+- **The chart** mounts the projected token for `file`: `exchangeToken.audience`, at
+  `/var/run/tresor/idp-token/token`.
+- **The JWT's header** names the key by `kid`, and by `x5t` when it is set (Entra's certificates, which are
+  RSA). For Entra, `assertion_audience: token_endpoint`.
 - **Readiness**: an issuer with an exchange client checks that it can make its assertion (the file reads,
   the identity gives a token, the key signs). It does not log in at the IdP.
 
@@ -95,13 +99,28 @@ issuers:
 
 - `internal/mint`: the client's authentication becomes an interface: a secret, or an assertion from a
   source.
-- `internal/azure`: a token for `api://AzureADTokenExchange`, from the configured identity.
+- `internal/clientauth`: the sources - a token for `api://AzureADTokenExchange` from the configured identity
+  (the public cloud's audience), a file, a signed JWT.
 - `internal/keys/azurekeyvault`: signing a JWT with a named key (RS256; ES256 for an EC key).
 - A local signer for `key_file`: a ZITADEL key file or a PEM key.
 - `internal/auth`: a roles claim that is an object.
 - `internal/config`: `client_auth`, `assertion_file`, `key`, `kid`, validated per kind.
 - The chart: the projected token.
 - The docs: Entra, Keycloak and ZITADEL set-ups. No protocol change.
+
+## The PRs
+
+1. **(a) client authentication** (landed):
+   - `client_auth` with `azure`, `file`, `keyvault` and `key_file`;
+   - a roles claim that is an object;
+   - the chart's projected token;
+   - the docs (a Token exchange page);
+   - ZITADEL's refusal of a refresh (`TypeNotSupported`) read as unsupported: a grant gets an access
+     token only, and exchanges again (from its documented wording, checked live in b);
+   - `x5t` in the header, for Entra's certificates.
+2. **(b) ZITADEL in CI, and the stack with no Azure on kind**:
+   - ZITADEL in docker, an exchange through `key_file`;
+   - the recipe: ZITADEL, the Kubernetes store, a local KEK.
 
 ## Enforcement & security
 

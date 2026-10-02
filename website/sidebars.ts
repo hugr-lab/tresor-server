@@ -9,6 +9,7 @@ const sidebars: SidebarsConfig = {
     'encryption',
     'references',
     'variables',
+    'token-exchange',
     'azure-container-apps',
     'kubernetes',
     'operations',

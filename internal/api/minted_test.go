@@ -1,8 +1,17 @@
 package api
 
 import (
+	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"github.com/hugr-lab/tresor-server/internal/clientauth"
+	"github.com/hugr-lab/tresor-server/internal/config"
+	"github.com/hugr-lab/tresor-server/internal/mint"
+	"github.com/hugr-lab/tresor-server/internal/testidp"
 	"strings"
 	"testing"
 	"time"
@@ -205,5 +214,63 @@ func TestMintedWithoutExchangeClient(t *testing.T) {
 	f.do("PUT", "/v1/secrets/echo/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
 	if r := f.do("GET", "/v1/secrets/echo", f.alice, ""); r.status != 422 || r.problemType(t) != "invalid_secret" {
 		t.Fatalf("no exchange client: %d %s", r.status, r.body)
+	}
+}
+
+// spec 006: the service logs in at the IdP with a signed assertion, no client secret; with no assertion it
+// does not log in at all (503), never without one
+func TestMintWithAssertion(t *testing.T) {
+	f := newFixture(t, "")
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	f.idp.ClientKeys = map[string]any{"k1": &key.PublicKey}
+	source := clientauth.JWT(testidp.ExchangeClient, clientauth.Header{KID: "k1"}, clientauth.Audience{Issuer: f.idp.Issuer}, rsaKey{key})
+	f.srv.exchangeAuth = map[string]mint.ClientAuth{config.IssuerKey(f.idp.Issuer): mint.AssertionAuth{ID: testidp.ExchangeClient, Assertion: source}}
+	f.do("PUT", "/v1/secrets/echo", f.admin, mintedSecret)
+	f.do("PUT", "/v1/secrets/echo/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	for range 2 { // a fresh assertion each time: the IdP refuses a jti it saw
+		f.srv.direct = directCache{}
+		if r := f.do("GET", "/v1/secrets/echo", f.alice, ""); r.status != 200 {
+			t.Fatalf("minted with an assertion: %d %s", r.status, r.body)
+		}
+	}
+	if f.idp.LastForm.Get("client_secret") != "" || f.idp.LastForm.Get("client_assertion") == "" {
+		t.Fatalf("the token request: %v", f.idp.LastForm)
+	}
+	failing := func(context.Context, string) (string, error) { return "", errors.New("no identity") }
+	f.srv.exchangeAuth = map[string]mint.ClientAuth{config.IssuerKey(f.idp.Issuer): mint.AssertionAuth{ID: testidp.ExchangeClient, Assertion: failing}}
+	f.srv.direct = directCache{}
+	before := f.idp.Exchanges
+	if r := f.do("GET", "/v1/secrets/echo", f.alice, ""); r.status != 503 {
+		t.Fatalf("no assertion: %d %s", r.status, r.body)
+	}
+	if f.idp.Exchanges != before {
+		t.Fatal("a request went to the IdP with no client authentication")
+	}
+}
+
+type rsaKey struct{ key *rsa.PrivateKey }
+
+func (rsaKey) Alg() string { return "RS256" }
+func (k rsaKey) Sign(_ context.Context, digest []byte) ([]byte, error) {
+	return rsa.SignPKCS1v15(rand.Reader, k.key, crypto.SHA256, digest)
+}
+
+// an IdP that issues no refresh token by exchange (ZITADEL): the grant gets an access token, and exchanges
+// again from its subject token - never a lasting refusal
+func TestMintedUnderGrantWithoutRefresh(t *testing.T) {
+	f := newFixture(t, "")
+	f.idp.NoRefreshByExchange = true
+	node := f.idp.Service(t, "duckdb-secrets", "node", "nodes")
+	f.do("PUT", "/v1/secrets/echo", f.admin, mintedSecret)
+	f.do("PUT", "/v1/secrets/echo/grants/n", f.admin, `{"principal":"role:nodes","verbs":["use"]}`)
+	g, r := f.grantFor(node, f.alice)
+	if g == "" {
+		t.Fatalf("exchange: %d %s", r.status, r.body)
+	}
+	if f.idp.LastForm.Get("requested_token_type") != "urn:ietf:params:oauth:token-type:access_token" {
+		t.Fatalf("the second ask is for an access token: %v", f.idp.LastForm)
+	}
+	if _, _, r := f.mintedMaterial(node, "Delegation", g); r.status != 200 {
+		t.Fatalf("the grant's token: %d %s", r.status, r.body)
 	}
 }

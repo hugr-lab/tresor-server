@@ -185,7 +185,22 @@ type ExchangeClient struct {
 	ClientID        string `yaml:"client_id"`
 	ClientSecretEnv string `yaml:"client_secret_env"`
 	ClientSecret    string `yaml:"-"` // read from ClientSecretEnv at load
+	// ClientAuth is how the service logs in (spec 006): secret (the default), azure (its Azure identity's token,
+	// for Entra's federated credential), file (AssertionFile: a projected ServiceAccount token), keyvault
+	// (a JWT signed with Key in Key Vault), key_file (a JWT signed with KeyFile: ZITADEL's, or a PEM key).
+	ClientAuth    string `yaml:"client_auth"`
+	AssertionFile string `yaml:"assertion_file"`
+	Key           string `yaml:"key"`
+	KeyFile       string `yaml:"key_file"`
+	KID           string `yaml:"kid"`
+	// X5T is the certificate's thumbprint in the JWT's header, for an IdP that knows a key by it (Entra).
+	X5T string `yaml:"x5t"`
+	// AssertionAudience is a signed JWT's aud: issuer (the default; ZITADEL, Keycloak) or token_endpoint (Entra).
+	AssertionAudience string `yaml:"assertion_audience"`
 }
+
+// ClientAuthKinds are the ways the service logs in at a token endpoint.
+var ClientAuthKinds = []string{"secret", "azure", "file", "keyvault", "key_file"}
 
 // ServiceRule marks a token as a service's: Claim is present (and equals Equals, when set); the
 // client's name is ClientClaim (default azp).
@@ -368,15 +383,8 @@ func (c *Config) validate() error {
 			}
 		}
 		if ex := is.Exchange; ex != nil {
-			if ex.ClientID == "" || ex.ClientSecretEnv == "" {
-				return fmt.Errorf("issuers[%d]: exchange needs client_id and client_secret_env", i)
-			}
-			if IsSettingVariable(ex.ClientSecretEnv) {
-				return fmt.Errorf("issuers[%d]: exchange.client_secret_env names %s, which is read as configuration - "+
-					"give the secret a variable of its own", i, ex.ClientSecretEnv)
-			}
-			if ex.ClientSecret = os.Getenv(ex.ClientSecretEnv); ex.ClientSecret == "" {
-				return fmt.Errorf("issuers[%d]: exchange: the environment variable %s is empty", i, ex.ClientSecretEnv)
+			if err := ex.validate(c.Azure.Identity); err != nil {
+				return fmt.Errorf("issuers[%d]: %w", i, err)
 			}
 		}
 		if len(is.Algorithms) == 0 {
@@ -557,4 +565,70 @@ func (m Material) admits(ref string) bool {
 		}
 	}
 	return false
+}
+
+// validate checks an exchange client's login: one way, and what that way needs - nothing of another.
+func (ex *ExchangeClient) validate(identity string) error {
+	if ex.ClientAuth == "" {
+		ex.ClientAuth = "secret"
+	}
+	if !slices.Contains(ClientAuthKinds, ex.ClientAuth) {
+		return fmt.Errorf("exchange.client_auth is %s", strings.Join(ClientAuthKinds, " | "))
+	}
+	if ex.ClientID == "" && ex.ClientAuth != "key_file" {
+		return errors.New("exchange needs client_id")
+	}
+	set := map[string]bool{"client_secret_env": ex.ClientSecretEnv != "", "assertion_file": ex.AssertionFile != "",
+		"key": ex.Key != "", "key_file": ex.KeyFile != "", "kid": ex.KID != "", "x5t": ex.X5T != "",
+		"assertion_audience": ex.AssertionAudience != ""}
+	allowed := map[string][]string{
+		"secret":   {"client_secret_env"},
+		"azure":    {},
+		"file":     {"assertion_file"},
+		"keyvault": {"key", "kid", "x5t", "assertion_audience"},
+		"key_file": {"key_file", "kid", "x5t", "assertion_audience"},
+	}[ex.ClientAuth]
+	for name, on := range set {
+		if on && !slices.Contains(allowed, name) {
+			return fmt.Errorf("exchange.%s is not for client_auth: %s", name, ex.ClientAuth)
+		}
+	}
+	switch ex.ClientAuth {
+	case "secret":
+		if ex.ClientSecretEnv == "" {
+			return errors.New("exchange needs client_secret_env, or another client_auth (spec 006)")
+		}
+		if IsSettingVariable(ex.ClientSecretEnv) {
+			return fmt.Errorf("exchange.client_secret_env names %s, which is read as configuration - "+
+				"give the secret a variable of its own", ex.ClientSecretEnv)
+		}
+		if ex.ClientSecret = os.Getenv(ex.ClientSecretEnv); ex.ClientSecret == "" {
+			return fmt.Errorf("exchange: the environment variable %s is empty", ex.ClientSecretEnv)
+		}
+	case "azure":
+		if identity != "managed" && identity != "workload" {
+			return errors.New("exchange.client_auth: azure is the service's managed or workload identity (azure.identity)")
+		}
+	case "file":
+		if ex.AssertionFile == "" {
+			return errors.New("exchange.client_auth: file reads assertion_file (a projected ServiceAccount token)")
+		}
+	case "keyvault":
+		if ex.Key == "" || (ex.KID == "" && ex.X5T == "") {
+			return errors.New("exchange.client_auth: keyvault signs with key (a Key Vault key URL), named by kid or x5t")
+		}
+		if identity == "" {
+			return errors.New("exchange.client_auth: keyvault signs with the service's Azure identity: azure.identity is required")
+		}
+	case "key_file":
+		if ex.KeyFile == "" {
+			return errors.New("exchange.client_auth: key_file signs with key_file (ZITADEL's key file, or a PEM key)")
+		}
+	}
+	switch ex.AssertionAudience {
+	case "", "issuer", "token_endpoint":
+	default:
+		return errors.New("exchange.assertion_audience is issuer or token_endpoint")
+	}
+	return nil
 }

@@ -279,3 +279,36 @@ func TestWorkloadIdentity(t *testing.T) {
 		t.Fatalf("workload with a client id: %v", err)
 	}
 }
+
+func TestExchangeClientAuth(t *testing.T) {
+	issuer := func(exchange string) string {
+		return strings.Replace(good, "audience: duckdb-secrets\n", "audience: duckdb-secrets\n    exchange: "+exchange+"\n", 1)
+	}
+	for name, doc := range map[string]string{
+		"azure (managed)":    issuer("{client_id: app, client_auth: azure}") + "azure: {identity: managed}\n",
+		"file":               issuer("{client_id: app, client_auth: file, assertion_file: /var/run/secrets/tokens/idp}"),
+		"key_file (ZITADEL)": issuer("{client_auth: key_file, key_file: /etc/tresor/zitadel.json}"),
+		"key_file, PEM":      issuer("{client_id: app, client_auth: key_file, key_file: /k.pem, kid: k1, assertion_audience: token_endpoint}"),
+		"keyvault":           issuer("{client_id: app, client_auth: keyvault, key: 'https://kv.vault.azure.net/keys/sign', kid: x5t}") + "azure: {identity: workload}\n",
+	} {
+		if _, err := Parse([]byte(doc)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, doc := range map[string]string{
+		"an unknown kind":              issuer("{client_id: app, client_auth: magic}"),
+		"azure with no identity":       issuer("{client_id: app, client_auth: azure}"),
+		"azure with default":           issuer("{client_id: app, client_auth: azure}") + "azure: {identity: default}\n",
+		"file with no file":            issuer("{client_id: app, client_auth: file}"),
+		"a secret beside an assertion": issuer("{client_id: app, client_auth: file, assertion_file: /t, client_secret_env: X}"),
+		"keyvault with no kid":         issuer("{client_id: app, client_auth: keyvault, key: 'https://kv.vault.azure.net/keys/sign'}") + "azure: {identity: managed}\n",
+		"a key for key_file":           issuer("{client_id: app, client_auth: key_file, key_file: /k, key: 'https://kv/keys/x'}"),
+		"an odd audience":              issuer("{client_id: app, client_auth: key_file, key_file: /k, assertion_audience: everyone}"),
+		"secret with no variable":      issuer("{client_id: app}"),
+		"no client_id for file":        issuer("{client_auth: file, assertion_file: /t}"),
+	} {
+		if _, err := Parse([]byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
