@@ -1,6 +1,6 @@
 # Spec 007: OpenBao and HashiCorp Vault
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-02
 - **Author**: hugr lab
 
