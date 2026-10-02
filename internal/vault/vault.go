@@ -49,10 +49,11 @@ type Client struct {
 	auth Auth
 	http *http.Client
 
-	mu      sync.Mutex
-	token   string
-	renewAt time.Time // a login's token is replaced by a new login from then on (two thirds of its lease)
-	fileMod time.Time // token_file: the file's time when it was read
+	mu        sync.Mutex
+	token     string
+	renewAt   time.Time // a login's token is replaced by a new login from then on (two thirds of its lease)
+	expiresAt time.Time // the token's own end: until then it serves when a new login fails
+	fileMod   time.Time // token_file: the file's time when it was read
 }
 
 // Error is Vault's answer to a call: its status and what it said (Vault's errors name a path or a permission,
@@ -73,7 +74,7 @@ func (e *Error) Error() string {
 func New(cfg Config) (*Client, error) {
 	u, err := url.Parse(strings.TrimRight(cfg.Address, "/"))
 	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && loopback(u.Hostname()))) ||
-		u.User != nil || u.RawQuery != "" {
+		u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, errors.New("vault.address: an https URL (http only to this machine)")
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -110,7 +111,10 @@ func New(cfg Config) (*Client, error) {
 		return nil, errors.New("vault.auth.method is kubernetes, jwt or token_file")
 	}
 	return &Client{base: u, ns: cfg.Namespace, auth: cfg.Auth,
-		http: &http.Client{Transport: transport, Timeout: 15 * time.Second}}, nil
+		http: &http.Client{Transport: transport, Timeout: 15 * time.Second,
+			// never followed: X-Vault-Token and the body (a data key's plaintext) would go wherever a redirect
+			// says, http included (a standby's redirect is answered as an error)
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 func loopback(host string) bool {
@@ -131,9 +135,8 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 		}
 		err = c.call(ctx, method, path, token, body, out)
 		var ve *Error
-		if attempt == 0 && errors.As(err, &ve) && ve.Status == http.StatusForbidden && c.auth.Method != "token_file" {
-			c.forget(token) // a token revoked or expired early: log in again
-			continue
+		if attempt == 0 && errors.As(err, &ve) && ve.Status == http.StatusForbidden && c.forget(ctx, token) {
+			continue // a token revoked or expired early: log in again (or read the file again)
 		}
 		return err
 	}
@@ -171,8 +174,8 @@ func (c *Client) call(ctx context.Context, method, path, token string, body, out
 		}
 		_ = json.Unmarshal(raw, &answer)
 		msg := strings.Join(answer.Errors, "; ")
-		if len(msg) > 200 {
-			msg = msg[:200]
+		if r := []rune(msg); len(r) > 200 {
+			msg = string(r[:200])
 		}
 		return &Error{Status: res.StatusCode, Msg: msg}
 	}
@@ -185,12 +188,24 @@ func (c *Client) call(ctx context.Context, method, path, token string, body, out
 	return nil
 }
 
-func (c *Client) forget(token string) {
+// forget drops a token Vault refused, so the next call logs in again (or reads the token file again): true when
+// it did. Vault answers 403 for a dead token and for a missing right alike: the token is looked up first, and a
+// live one is kept - a missing right costs no login, only the lookup.
+func (c *Client) forget(ctx context.Context, token string) bool {
+	if c.call(ctx, http.MethodGet, "auth/token/lookup-self", token, nil, nil) == nil {
+		return false // the token lives: the refusal is the policy's
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.token == token {
-		c.token, c.renewAt, c.fileMod = "", time.Time{}, time.Time{}
+	if c.token != token {
+		return true // already replaced by another caller
 	}
+	if c.auth.Method == "token_file" {
+		c.fileMod = time.Time{} // read the file again, whatever its time says
+		return true
+	}
+	c.token, c.renewAt, c.expiresAt = "", time.Time{}, time.Time{}
+	return true
 }
 
 // currentToken is the token to call with: from the file (read again when it changes), or a login's (replaced at
@@ -218,6 +233,18 @@ func (c *Client) currentToken(ctx context.Context) (string, error) {
 	if c.token != "" && time.Now().Before(c.renewAt) {
 		return c.token, nil
 	}
+	token, err := c.login(ctx)
+	if err != nil {
+		if c.token != "" && time.Now().Before(c.expiresAt) {
+			return c.token, nil // the old token lives on: a blip of the auth backend is no outage
+		}
+		return "", err
+	}
+	return token, nil
+}
+
+// login logs in with the role and the token file (held: c.mu).
+func (c *Client) login(ctx context.Context) (string, error) {
 	jwt, err := os.ReadFile(c.auth.JWTFile)
 	if err != nil {
 		return "", fmt.Errorf("vault.auth: the token to log in with: %w", err)
@@ -240,6 +267,7 @@ func (c *Client) currentToken(ctx context.Context) (string, error) {
 	if lease <= 0 {
 		lease = time.Hour // a token with no lease (root): logged in again hourly all the same
 	}
-	c.token, c.renewAt = answer.Auth.ClientToken, time.Now().Add(lease*2/3)
+	now := time.Now()
+	c.token, c.renewAt, c.expiresAt = answer.Auth.ClientToken, now.Add(lease*2/3), now.Add(lease)
 	return c.token, nil
 }

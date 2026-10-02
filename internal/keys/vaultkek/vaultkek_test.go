@@ -176,3 +176,77 @@ func writeToken(t *testing.T) string {
 	}
 	return p
 }
+
+// the root is Vault's alone: a token that may encrypt but not HMAC computes none; a tag under another key's HMAC
+// is not this key's; a key that can be exported, or whose min_encryption_version refuses the root, is refused;
+// a replica that read an older version learns of a rotation at its next wrap
+func TestRootIsTheHolders(t *testing.T) {
+	for _, srv := range vaulttest.Servers(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			mount := srv.Mount(t, "transit")
+			for _, k := range []string{"kek", "other"} {
+				srv.Call(t, "POST", mount+"/keys/"+k, map[string]any{"type": "aes256-gcm96"}, nil)
+			}
+			root := func(c *vault.Client, key string) ([]byte, error) {
+				w, _ := New(c, mount, key)
+				return w.Root(ctx, "vault:"+mount+"/"+key+":v1")
+			}
+			rootClient, _ := vault.New(vault.Config{Address: srv.Address, Auth: vault.Auth{Method: "token_file", TokenFile: srv.TokenFile(t)}})
+			r, err := root(rootClient, "kek")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if other, _ := root(rootClient, "other"); string(other) == string(r) {
+				t.Fatal("two keys, one root")
+			}
+			// an encrypt-only token: it wraps, it computes no root - and its refusal is no verdict on a value
+			srv.Call(t, "PUT", "sys/policies/acl/"+mount+"-enc", map[string]any{"policy": `path "` + mount + `/encrypt/kek" { capabilities = ["update"] }`}, nil)
+			var tok struct {
+				Auth struct {
+					ClientToken string `json:"client_token"`
+				} `json:"auth"`
+			}
+			srv.Call(t, "POST", "auth/token/create", map[string]any{"policies": []string{mount + "-enc"}, "no_default_policy": true}, &tok)
+			tf := t.TempDir() + "/enc"
+			_ = os.WriteFile(tf, []byte(tok.Auth.ClientToken), 0o600)
+			enc, _ := vault.New(vault.Config{Address: srv.Address, Auth: vault.Auth{Method: "token_file", TokenFile: tf}})
+			w, _ := New(enc, mount, "kek")
+			if _, _, err := w.Wrap(ctx, make([]byte, 32)); err != nil {
+				t.Fatalf("encrypt-only wraps: %v", err)
+			}
+			if _, err := w.Root(ctx, "vault:"+mount+"/kek:v1"); err == nil || errors.Is(err, keys.ErrSealed) {
+				t.Fatalf("encrypt-only computed a root, or was called sealed: %v", err)
+			}
+			// a version above the latest: no such root, for good
+			if _, err := root(rootClient, "kek"); err != nil {
+				t.Fatal(err)
+			}
+			wk, _ := New(rootClient, mount, "kek")
+			if _, err := wk.Root(ctx, "vault:"+mount+"/kek:v9"); !errors.Is(err, keys.ErrSealed) {
+				t.Fatalf("a version never made: %v", err)
+			}
+			// a stale replica: it read v1, the key rotates, its next wrap is v2 and its current follows
+			if cur, _ := wk.Current(ctx); cur != "vault:"+mount+"/kek:v1" {
+				t.Fatal(cur)
+			}
+			srv.Call(t, "POST", mount+"/keys/kek/rotate", nil, nil)
+			if _, id, _ := wk.Wrap(ctx, make([]byte, 32)); id != "vault:"+mount+"/kek:v2" {
+				t.Fatalf("wrapped under %s", id)
+			}
+			if cur, _ := wk.Current(ctx); cur != "vault:"+mount+"/kek:v2" {
+				t.Fatalf("current after a wrap under v2: %s", cur)
+			}
+			// keys whose root is not Vault's alone, or not computable
+			srv.Call(t, "POST", mount+"/keys/exportable", map[string]any{"type": "aes256-gcm96", "exportable": true}, nil)
+			srv.Call(t, "POST", mount+"/keys/minenc", map[string]any{"type": "aes256-gcm96"}, nil)
+			srv.Call(t, "POST", mount+"/keys/minenc/rotate", nil, nil)
+			srv.Call(t, "POST", mount+"/keys/minenc/config", map[string]any{"min_encryption_version": 2}, nil)
+			for _, k := range []string{"exportable", "minenc"} {
+				w, _ := New(rootClient, mount, k)
+				if _, err := w.Current(ctx); err == nil {
+					t.Errorf("%s: accepted as a KEK", k)
+				}
+			}
+		})
+	}
+}

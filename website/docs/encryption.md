@@ -96,17 +96,22 @@ vault:
   auth: {method: kubernetes, role: tresor-server}     # kubernetes | jwt | token_file
 ```
 
-- **The key**: an `aes256-gcm96` Transit key. The KEK never leaves Vault; the service asks it to encrypt and
-  decrypt data keys.
+- **The key**: an `aes256-gcm96` (or `chacha20-poly1305`) Transit key, not derived. The KEK never leaves
+  Vault; the service asks it to encrypt and decrypt data keys. Mounts are one path segment (`transit`, not
+  `team/transit`).
 - **The KEK id** is `vault:<mount>/<key>:v<N>`, the version the ciphertext names.
 - **The root** is Transit's HMAC of a fixed label at that version. Every Transit key has an HMAC key per
-  version, and it is never exported.
+  version. Whoever holds `hmac` on the key can compute the root, so:
+  - give `hmac` on it to the service alone;
+  - never make it `exportable` or `allow_plaintext_backup` (the service refuses such a key);
+  - never set `min_encryption_version`: it refuses the HMAC at older versions (the service refuses that too).
+    Retire versions with `min_decryption_version`.
 - **The service's policy**, on that one key:
 
   ```hcl
   path "transit/encrypt/tresor-kek"  { capabilities = ["update"] }
   path "transit/decrypt/tresor-kek"  { capabilities = ["update"] }
-  path "transit/hmac/tresor-kek/*"   { capabilities = ["update"] }
+  path "transit/hmac/tresor-kek/sha2-256" { capabilities = ["update"] }
   path "transit/keys/tresor-kek"     { capabilities = ["read"] }
   ```
 
@@ -118,6 +123,10 @@ vault:
   - `kubernetes`: the pod's ServiceAccount token, against Vault's Kubernetes auth method;
   - `jwt`: a projected token (`jwt_file`), against its JWT auth method;
   - `token_file`: a token a Vault Agent writes and renews.
+- **The token**: a login's is replaced at two thirds of its lease; when that login fails, the old token serves
+  until its own end. A 403 with a live token (the policy's refusal) costs no login. A redirect from Vault is
+  never followed: it would carry the token and a data key elsewhere. Give the role short-lived tokens
+  (`token_type=batch` suits).
 
 ## Rotation
 

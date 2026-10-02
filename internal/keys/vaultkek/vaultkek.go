@@ -30,21 +30,24 @@ const (
 	currentGrace = time.Hour   // while Vault does not answer, the last one read serves this long
 )
 
-var segment = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
+var segment = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$`) // not . nor ..
 
 // Wrapper wraps under one Transit key.
 type Wrapper struct {
 	vault      Caller
 	mount, key string
 
+	refresh sync.Mutex // one read of the key at a time
+
 	mu      sync.Mutex
 	current string
+	latest  int // the current version's number
 	readAt  time.Time
 }
 
 // New is a wrapper over mount/key.
 func New(v Caller, mount, key string) (*Wrapper, error) {
-	if !segment.MatchString(mount) || !segment.MatchString(key) {
+	if !segment.MatchString(mount) || !segment.MatchString(key) || mount == ".." || key == ".." {
 		return nil, errors.New("keys: mount and key are Transit names (letters, digits, _ . -)")
 	}
 	return &Wrapper{vault: v, mount: mount, key: key}, nil
@@ -92,6 +95,13 @@ func (w *Wrapper) Wrap(ctx context.Context, dek []byte) ([]byte, string, error) 
 	if !ok {
 		return nil, "", errors.New("Transit's ciphertext names no version")
 	}
+	// Transit wraps under its latest version: a replica that read an older one learns of the rotation here,
+	// rather than making a new data key at every seal until its next read
+	w.mu.Lock()
+	if v > w.latest {
+		w.current, w.latest, w.readAt = w.kekID(v), v, time.Now()
+	}
+	w.mu.Unlock()
 	return []byte(out.Data.Ciphertext), w.kekID(v), nil
 }
 
@@ -118,12 +128,27 @@ func (w *Wrapper) Unwrap(ctx context.Context, wrapped []byte, kekID string) ([]b
 	return dek, nil
 }
 
-// sealed is ErrSealed for what Transit refuses for good - a ciphertext that does not open, or a version below
-// min_decryption_version; anything else (Vault down, permission) is not: no value is known to be bad.
+// sealedAnswers are what Transit answers, for good, about a value or a version: a ciphertext that does not open,
+// a version retired (min_decryption_version) or never made. Anything else - Vault down, a permission, a key
+// not found, min_encryption_version - is no verdict on a value: a configuration to fix, or an outage.
+var sealedAnswers = []string{
+	"message authentication failed", "invalid ciphertext", "unable to decode", "too old", "no such key version",
+	"invalid key version", "requested version for hmac", "key version does not exist",
+}
+
 func sealed(err error) error {
 	var ve *vault.Error
-	if errors.As(err, &ve) && ve.Status == http.StatusBadRequest {
-		return fmt.Errorf("%w: %s", keys.ErrSealed, ve.Msg)
+	if !errors.As(err, &ve) || ve.Status != http.StatusBadRequest {
+		return err
+	}
+	msg := strings.ToLower(ve.Msg)
+	if strings.Contains(msg, "min_encryption_version") || strings.Contains(msg, "cannot generate hmac") {
+		return err // a setting refuses the HMAC (the root) at older versions: not the value's fault
+	}
+	for _, s := range sealedAnswers {
+		if strings.Contains(msg, s) {
+			return fmt.Errorf("%w: %s", keys.ErrSealed, ve.Msg)
+		}
 	}
 	return err
 }
@@ -131,17 +156,28 @@ func sealed(err error) error {
 // Current is the key's latest version, read at most once a currentTTL; while Vault does not answer, the last
 // one read serves for currentGrace.
 func (w *Wrapper) Current(ctx context.Context) (string, error) {
-	w.mu.Lock()
-	current, age := w.current, time.Since(w.readAt)
-	w.mu.Unlock()
-	if current != "" && age < currentTTL {
+	cached := func() (string, time.Duration) {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.current, time.Since(w.readAt)
+	}
+	if current, age := cached(); current != "" && age < currentTTL {
 		return current, nil
+	}
+	w.refresh.Lock()
+	defer w.refresh.Unlock()
+	current, age := cached()
+	if current != "" && age < currentTTL {
+		return current, nil // another caller read it meanwhile
 	}
 	var out struct {
 		Data struct {
-			LatestVersion      int  `json:"latest_version"`
-			SupportsEncryption bool `json:"supports_encryption"`
-			Derived            bool `json:"derived"`
+			Type                 string `json:"type"`
+			LatestVersion        int    `json:"latest_version"`
+			MinEncryptionVersion int    `json:"min_encryption_version"`
+			Derived              bool   `json:"derived"`
+			Exportable           bool   `json:"exportable"`
+			AllowPlaintextBackup bool   `json:"allow_plaintext_backup"`
 		} `json:"data"`
 	}
 	if err := w.vault.Do(ctx, http.MethodGet, w.mount+"/keys/"+w.key, nil, &out); err != nil {
@@ -150,14 +186,36 @@ func (w *Wrapper) Current(ctx context.Context) (string, error) {
 		}
 		return "", err
 	}
-	if !out.Data.SupportsEncryption || out.Data.Derived || out.Data.LatestVersion < 1 {
-		return "", errors.New("the Transit key encrypts with no context: an aes256-gcm96 key, not derived")
+	if err := checkKey(out.Data.Type, out.Data.Derived, out.Data.Exportable, out.Data.AllowPlaintextBackup,
+		out.Data.MinEncryptionVersion, out.Data.LatestVersion); err != nil {
+		return "", err
 	}
-	current = w.kekID(out.Data.LatestVersion)
 	w.mu.Lock()
-	w.current, w.readAt = current, time.Now()
-	w.mu.Unlock()
-	return current, nil
+	defer w.mu.Unlock()
+	if out.Data.LatestVersion >= w.latest {
+		w.current, w.latest = w.kekID(out.Data.LatestVersion), out.Data.LatestVersion
+	}
+	w.readAt = time.Now()
+	return w.current, nil
+}
+
+// checkKey refuses a Transit key whose root would not be the holder's alone, or not computable: one whose keys
+// (the HMAC's with them) can be exported or backed up in plaintext, one derived (no context is given), or one
+// whose min_encryption_version refuses the HMAC at older versions.
+func checkKey(typ string, derived, exportable, plainBackup bool, minEncryption, latest int) error {
+	switch {
+	case typ != "aes256-gcm96" && typ != "chacha20-poly1305":
+		return fmt.Errorf("the Transit key is a %s key: an aes256-gcm96 (or chacha20-poly1305) key wraps data keys", typ)
+	case derived:
+		return errors.New("the Transit key is derived: the service gives no context")
+	case exportable || plainBackup:
+		return errors.New("the Transit key can be exported or backed up in plaintext: its HMAC (the root) would not be Vault's alone")
+	case minEncryption > 0:
+		return errors.New("the Transit key's min_encryption_version refuses the root's HMAC at older versions: leave it 0, retire versions with min_decryption_version")
+	case latest < 1:
+		return errors.New("the Transit key has no version")
+	}
+	return nil
 }
 
 // Root is the KEK version's Transit HMAC of a fixed label (spec 003): deterministic, never exported, computed
