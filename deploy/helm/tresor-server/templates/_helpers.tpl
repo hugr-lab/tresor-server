@@ -63,6 +63,16 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- $_ := set $vault "auth" $auth -}}
 {{- $_ := set $cfg "vault" $vault -}}
 {{- end -}}
+{{- /* named vault sources (spec 008) with a vault: of their own log in with the same token */ -}}
+{{- if .Values.vaultToken.enabled -}}
+{{- range (($cfg.material | default dict).sources | default list) -}}
+{{- $sauth := ((.vault | default dict).auth | default dict) -}}
+{{- if and .vault (has $sauth.method (list "kubernetes" "jwt")) (not $sauth.jwt_file) -}}
+{{- $_ := set $sauth "jwt_file" "/var/run/tresor/vault-token/token" -}}
+{{- $_ := set .vault "auth" $sauth -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if and .Values.localKEK.secretName (not $cfg.keys) -}}
 {{- $_ := set $cfg "keys" (dict "kind" "local" "key_file" (printf "/var/run/tresor/kek/%s" .Values.localKEK.key)) -}}
 {{- end -}}
@@ -91,8 +101,19 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 {{- $vault := .Values.config.vault | default dict -}}
 {{- $auth := $vault.auth | default dict -}}
-{{- if and (or (eq ($keys.kind | default "") "vault") $auth.method .Values.vaultToken.enabled) (not $vault.address) -}}
-{{- fail "config.vault.address is required (a vault KEK, config.vault.auth, vaultToken)" -}}
+{{- if and (or (eq ($keys.kind | default "") "vault") $auth.method) (not $vault.address) -}}
+{{- fail "config.vault.address is required (a vault KEK, config.vault.auth)" -}}
+{{- end -}}
+{{- /* the logins the chart's token serves: the top-level vault's, and named sources' own (spec 008) */ -}}
+{{- $tokenLogin := has ($auth.method | default "") (list "kubernetes" "jwt") -}}
+{{- range (((.Values.config.material | default dict).sources | default list)) -}}
+{{- $sauth := ((.vault | default dict).auth | default dict) -}}
+{{- if has ($sauth.method | default "") (list "kubernetes" "jwt") -}}
+{{- $tokenLogin = true -}}
+{{- end -}}
+{{- if and (eq ($sauth.method | default "") "jwt") (not $sauth.jwt_file) (not $.Values.vaultToken.enabled) -}}
+{{- fail (printf "config.material.sources[%s].vault.auth.method jwt: vaultToken.enabled (or its jwt_file)" .name) -}}
+{{- end -}}
 {{- end -}}
 {{- if and .Values.vaultToken.enabled $auth.jwt_file -}}
 {{- fail "vaultToken: config.vault.auth.jwt_file is set - the chart's token would not be read; unset one" -}}
@@ -100,8 +121,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- if and (eq ($auth.method | default "") "jwt") (not $auth.jwt_file) (not .Values.vaultToken.enabled) -}}
 {{- fail "config.vault.auth.method jwt: vaultToken.enabled (or config.vault.auth.jwt_file)" -}}
 {{- end -}}
-{{- if and .Values.vaultToken.enabled (not (has ($auth.method | default "") (list "kubernetes" "jwt"))) -}}
-{{- fail "vaultToken: for config.vault.auth.method kubernetes or jwt" -}}
+{{- if and .Values.vaultToken.enabled (not $tokenLogin) -}}
+{{- fail "vaultToken: for a Vault login by kubernetes or jwt (config.vault.auth, or a named source's)" -}}
 {{- end -}}
 {{- if and (hasPrefix "/var/run/tresor/kek/" ($keys.key_file | default "")) (not .Values.localKEK.secretName) -}}
 {{- fail "config.keys.key_file is under the chart's KEK volume: localKEK.secretName names its Secret" -}}
@@ -136,5 +157,13 @@ API), or Vault's kubernetes login with no token of its own (vaultToken). */}}
 {{- $k8s := ((.Values.config.material | default dict).k8s | default dict).allow -}}
 {{- $auth := ((.Values.config.vault | default dict).auth | default dict) -}}
 {{- $vaultPod := and (eq ($auth.method | default "") "kubernetes") (not $auth.jwt_file) (not .Values.vaultToken.enabled) -}}
+{{- if not .Values.vaultToken.enabled -}}
+{{- range (((.Values.config.material | default dict).sources | default list)) -}}
+{{- $sauth := ((.vault | default dict).auth | default dict) -}}
+{{- if and (eq ($sauth.method | default "") "kubernetes") (not $sauth.jwt_file) -}}
+{{- $vaultPod = true -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if or (eq (include "tresor.stateKind" .) "kubernetes") $k8s (include "tresor.passwordSecret" .) $vaultPod -}}true{{- end -}}
 {{- end -}}

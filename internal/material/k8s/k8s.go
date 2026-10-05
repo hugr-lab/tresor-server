@@ -53,6 +53,7 @@ func New(allow []Allow, cfg *rest.Config) (*Source, error) {
 func NewWithGetter(allow []Allow, g Getter) *Source { return &Source{allow: allow, getter: g} }
 
 func (s *Source) Scheme() string { return "k8s" }
+func (s *Source) Kind() string   { return "k8s" }
 
 var (
 	keyName = regexp.MustCompile(`^[-._a-zA-Z0-9]{1,253}$`)
@@ -65,7 +66,7 @@ func (s *Source) Parse(text string) (material.Ref, error) {
 	if len(parts) != 3 {
 		return material.Ref{}, errors.New("ref+k8s://<namespace>/<secret>/<key>")
 	}
-	ref := material.Ref{Scheme: "k8s", Vault: parts[0], Name: parts[1], Key: parts[2]}
+	ref := material.Ref{Scheme: "k8s", Kind: "k8s", Vault: parts[0], Name: parts[1], Key: parts[2]}
 	switch {
 	case len(validation.IsDNS1123Label(ref.Vault)) > 0:
 		return material.Ref{}, errors.New("a namespace's name is a DNS label: lower-case letters, digits and dashes")

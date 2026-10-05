@@ -21,6 +21,9 @@ type Identity struct {
 	// ClientID names a user-assigned managed identity (managed; empty: the system-assigned one), or overrides
 	// the webhook's AZURE_CLIENT_ID (workload).
 	ClientID string
+	// TenantID is another tenant's (workload: an app registration there, federated to the same ServiceAccount);
+	// the webhook's AZURE_TENANT_ID otherwise.
+	TenantID string
 }
 
 // Credential returns the service's credential.
@@ -50,7 +53,8 @@ func Credential(id Identity) (azcore.TokenCredential, error) {
 			return nil, errors.New("azure.identity: workload: no client id - annotate the ServiceAccount with " +
 				"azure.workload.identity/client-id, or set azure.client_id")
 		}
-		return azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{ClientID: id.ClientID})
+		return azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{ClientID: id.ClientID,
+			TenantID: id.TenantID})
 	case "default":
 		if id.ClientID != "" {
 			return nil, fmt.Errorf("azure.client_id is for identity: managed or workload; the default credential reads AZURE_CLIENT_ID")

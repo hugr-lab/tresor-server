@@ -32,6 +32,7 @@ type Getter interface {
 
 // Source resolves azkv references.
 type Source struct {
+	name      string // the scheme: "azkv", or a named source's (spec 008)
 	allow     []Allow
 	suffix    string // .vault.azure.net, or a sovereign cloud's
 	cacheTTL  time.Duration
@@ -65,11 +66,26 @@ func NewWithGetter(allow []Allow, newGetter func(vaultURL string) (Getter, error
 	if opts.DNSSuffix == "" {
 		opts.DNSSuffix = ".vault.azure.net"
 	}
-	return &Source{allow: allow, suffix: opts.DNSSuffix, cacheTTL: opts.CacheTTL, newGetter: newGetter,
+	return &Source{name: "azkv", allow: allow, suffix: opts.DNSSuffix, cacheTTL: opts.CacheTTL, newGetter: newGetter,
 		getters: map[string]Getter{}, cache: map[string]cached{}}
 }
 
-func (s *Source) Scheme() string { return "azkv" }
+// Named is the source under another name (spec 008): ref+<name>://.
+func (s *Source) Named(name string) *Source {
+	s.name = name
+	return s
+}
+
+func (s *Source) Scheme() string { return s.name }
+func (s *Source) Kind() string   { return "azkv" }
+
+// allowlist names the setting that lists what this source may read.
+func (s *Source) allowlist() string {
+	if s.name == "azkv" {
+		return "material.azkv.allow"
+	}
+	return "material.sources[" + s.name + "].allow"
+}
 
 var (
 	vaultName   = regexp.MustCompile(`^[0-9A-Za-z-]{3,24}$`)
@@ -82,9 +98,9 @@ var (
 func (s *Source) Parse(text string) (material.Ref, error) {
 	parts := strings.Split(text, "/")
 	if len(parts) < 2 || len(parts) > 3 {
-		return material.Ref{}, errors.New("ref+azkv://<vault>/<secret>[/<version>]")
+		return material.Ref{}, fmt.Errorf("ref+%s://<vault>/<secret>[/<version>]", s.name)
 	}
-	ref := material.Ref{Scheme: "azkv", Vault: strings.ToLower(parts[0]), Name: parts[1]}
+	ref := material.Ref{Scheme: s.name, Kind: "azkv", Vault: strings.ToLower(parts[0]), Name: parts[1]}
 	if len(parts) == 3 {
 		ref.Version = strings.ToLower(parts[2])
 	}
@@ -96,7 +112,7 @@ func (s *Source) Parse(text string) (material.Ref, error) {
 	case len(parts) == 3 && !versionName.MatchString(ref.Version):
 		return material.Ref{}, errors.New("a Key Vault secret's version is 32 hex digits")
 	case !s.allowed(ref):
-		return material.Ref{}, fmt.Errorf("%s is outside the allowlist (material.azkv.allow)", ref)
+		return material.Ref{}, fmt.Errorf("%s is outside the allowlist (%s)", ref, s.allowlist())
 	}
 	return ref, nil
 }

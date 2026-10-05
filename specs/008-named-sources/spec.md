@@ -66,9 +66,20 @@ material:
 
 - The scheme pattern grows from `[a-z0-9]{1,16}` to `[a-z][a-z0-9-]{0,15}`. Every reference written so far
   still parses.
-- `material.Resolver` already keys sources by scheme. A source of a kind is constructed with its name, and
-  `Scheme()` returns that name. `Ref.Scheme` is the name; the kind is the source's.
+- `material.Resolver` already keys sources by scheme. A source of a kind is constructed with its name
+  (`Named`), and `Scheme()` returns that name; `Kind()` its kind. `Ref.Scheme` is the name, `Ref.Kind` the
+  kind (a vault reference is written `#field` under any name).
+- `config.Source(name)` resolves a source's connection: a named source's own blocks, or the top-level ones.
+  The service builds its sources from `config.Sources()`, and the password's from `config.Source`.
 - A reference's text after `://` is parsed by its kind, as today.
+
+### The chart
+
+- `vaultToken` serves named sources too: a named source's `vault:` with `kubernetes` or `jwt` and no
+  `jwt_file` gets the chart's token file.
+- The pod's own ServiceAccount token is mounted for a named source's `kubernetes` login with no token of its
+  own, as for the top-level one.
+- The render refuses a named source's `jwt` with no token, and `vaultToken` with no login to serve.
 
 ### `state.password_ref`
 

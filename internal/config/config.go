@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/hugr-lab/tresor-server/internal/material"
 )
 
 // Config is the whole server configuration.
@@ -166,6 +168,101 @@ type Material struct {
 	AzKV  AzKV       `yaml:"azkv"`
 	K8s   K8s        `yaml:"k8s"`
 	Vault VaultAllow `yaml:"vault"`
+	// Sources are named sources (spec 008): more instances of a kind, ref+<name>://, each with its own
+	// connection and allowlist.
+	Sources []NamedSource `yaml:"sources"`
+}
+
+// NamedSource is one named source (spec 008): its name is the references' scheme.
+type NamedSource struct {
+	Name string `yaml:"name"`
+	Kind string `yaml:"kind"` // vault | azkv
+	// Vault (kind vault) and Azure (kind azkv) are the source's own connection; unset, the top-level one.
+	Vault     *Vault        `yaml:"vault"`
+	Azure     *Azure        `yaml:"azure"`
+	Allow     []SourceAllow `yaml:"allow"`
+	CacheTTL  time.Duration `yaml:"cache_ttl"`
+	DNSSuffix string        `yaml:"dns_suffix"` // azkv
+}
+
+// SourceAllow is one place a named source may read: a KV v2 mount (vault) or a Key Vault (azkv), and the
+// prefixes there.
+type SourceAllow struct {
+	Mount    string   `yaml:"mount"`
+	Vault    string   `yaml:"vault"`
+	Prefixes []string `yaml:"prefixes"`
+}
+
+// NamedSourceKinds are the kinds a named source may be: k8s is not one (another cluster would need a kubeconfig
+// with credentials).
+var NamedSourceKinds = []string{"vault", "azkv"}
+
+// Source is a source with its connection resolved: a built-in section's (its name is its kind) or a named
+// one's, with the top-level vault: or azure: when it has none of its own.
+type Source struct {
+	Name, Kind string
+	Named      bool
+	Vault      Vault      // kind vault: the connection
+	Azure      Azure      // kind azkv: the identity
+	VaultAllow VaultAllow // kind vault: the allowlist, the cache
+	AzKV       AzKV       // kind azkv: the allowlist, the cache, the cloud
+	K8s        K8s        // kind k8s
+}
+
+// Source is the source references of a scheme read from (configured or not: state.password_ref reads outside
+// every allowlist); false for a name no source has.
+func (c *Config) Source(scheme string) (Source, bool) {
+	for _, n := range c.Material.Sources {
+		if n.Name != scheme {
+			continue
+		}
+		s := Source{Name: n.Name, Kind: n.Kind, Named: true, Vault: c.Vault, Azure: c.Azure}
+		if n.Vault != nil {
+			s.Vault = *n.Vault
+		}
+		if n.Azure != nil {
+			s.Azure = *n.Azure
+		}
+		for _, a := range n.Allow {
+			switch n.Kind {
+			case "vault":
+				s.VaultAllow.Allow = append(s.VaultAllow.Allow, VaultMount{Mount: a.Mount, Prefixes: a.Prefixes})
+			case "azkv":
+				s.AzKV.Allow = append(s.AzKV.Allow, AzKVAllow{Vault: a.Vault, Prefixes: a.Prefixes})
+			}
+		}
+		s.VaultAllow.CacheTTL, s.AzKV.CacheTTL, s.AzKV.DNSSuffix = n.CacheTTL, n.CacheTTL, n.DNSSuffix
+		return s, true
+	}
+	switch scheme {
+	case "vault":
+		return Source{Name: scheme, Kind: scheme, Vault: c.Vault, VaultAllow: c.Material.Vault}, true
+	case "azkv":
+		return Source{Name: scheme, Kind: scheme, Azure: c.Azure, AzKV: c.Material.AzKV}, true
+	case "k8s":
+		return Source{Name: scheme, Kind: scheme, K8s: c.Material.K8s}, true
+	}
+	return Source{}, false
+}
+
+// Sources are the sources references may read from: the built-in sections with an allowlist, then the named.
+func (c *Config) Sources() []Source {
+	var out []Source
+	for _, kind := range []string{"azkv", "k8s", "vault"} {
+		if s, _ := c.Source(kind); !s.Named && s.allows() {
+			out = append(out, s)
+		}
+	}
+	for _, n := range c.Material.Sources {
+		s, _ := c.Source(n.Name)
+		out = append(out, s)
+	}
+	return out
+}
+
+// allows: the source has an allowlist.
+func (s Source) allows() bool {
+	return len(s.VaultAllow.Allow) > 0 || len(s.AzKV.Allow) > 0 || len(s.K8s.Allow) > 0
 }
 
 // VaultAllow lets ref+vault://<mount>/<path>#<field> read KV v2 secrets (spec 007): only in the mounts and under
@@ -221,6 +318,22 @@ var (
 type Azure struct {
 	Identity string `yaml:"identity"`
 	ClientID string `yaml:"client_id"`
+	// TenantID is another tenant's (workload, in a named source: spec 008); the webhook's otherwise.
+	TenantID string `yaml:"tenant_id"`
+}
+
+// validate checks an identity; where names it in errors.
+func (a Azure) validate(where string, tenant bool) error {
+	if a.Identity != "managed" && a.Identity != "workload" && a.Identity != "default" {
+		return fmt.Errorf("%s.identity is managed, workload or default", where)
+	}
+	if a.ClientID != "" && a.Identity != "managed" && a.Identity != "workload" {
+		return fmt.Errorf("%s.client_id names a user-assigned managed identity (managed) or the federated one (workload)", where)
+	}
+	if a.TenantID != "" && (!tenant || a.Identity != "workload") {
+		return fmt.Errorf("%s.tenant_id is a named source's, with identity workload", where)
+	}
+	return nil
 }
 
 // Issuer is one identity provider the server accepts tokens from.
@@ -370,20 +483,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if mv := c.Material.Vault; len(mv.Allow) > 0 || mv.CacheTTL != 0 {
-		if len(mv.Allow) == 0 || !c.Vault.used() {
-			return errors.New("material.vault: allow lists the KV mounts references may read, with vault: configured")
+		if err := mv.validate("material.vault", c.Vault.used()); err != nil {
+			return err
 		}
-		for i, a := range mv.Allow {
-			if !vaultMount.MatchString(a.Mount) || slices.Contains([]string{"sys", "auth", "identity", "cubbyhole"}, a.Mount) {
-				return fmt.Errorf("material.vault.allow[%d].mount: a KV v2 mount's name, one segment", i)
-			}
-		}
-		if mv.CacheTTL < 0 || mv.CacheTTL > 5*time.Minute {
-			return errors.New("material.vault.cache_ttl is 0 to 5m: the longest a value may be read stale")
-		}
-	}
-	if strings.HasPrefix(c.State.PasswordRef, "ref+vault://") && !c.Vault.used() {
-		return errors.New("state.password_ref reads Vault: vault: is required")
 	}
 	if c.Keys.Kind == "vault" && !c.Vault.used() {
 		return errors.New("keys: a vault KEK needs vault: (address, auth)")
@@ -391,30 +493,21 @@ func (c *Config) validate() error {
 	if c.Keys.Kind == "azurekeyvault" && c.Azure.Identity == "" {
 		return errors.New("keys: azurekeyvault needs azure.identity: managed | workload | default")
 	}
-	if c.Azure.Identity != "" && c.Azure.Identity != "managed" && c.Azure.Identity != "workload" && c.Azure.Identity != "default" {
-		return errors.New("azure.identity is managed, workload or default")
-	}
-	if c.Azure.ClientID != "" && c.Azure.Identity != "managed" && c.Azure.Identity != "workload" {
-		return errors.New("azure.client_id names a user-assigned managed identity (managed) or the federated one (workload)")
+	if c.Azure != (Azure{}) {
+		if err := c.Azure.validate("azure", false); err != nil {
+			return err
+		}
 	}
 	if kv := c.Material.AzKV; len(kv.Allow) > 0 || kv.CacheTTL != 0 || kv.DNSSuffix != "" {
-		if len(kv.Allow) == 0 {
-			return errors.New("material.azkv: allow lists the vaults references may read - none, no references")
-		}
 		if c.Azure.Identity == "" {
 			return errors.New("material.azkv reads with the service's Azure identity: azure.identity is required")
 		}
-		for i, a := range kv.Allow {
-			if !azkvVault.MatchString(a.Vault) {
-				return fmt.Errorf("material.azkv.allow[%d].vault: a vault's name, 3 to 24 letters, digits or dashes", i)
-			}
+		if err := kv.validate("material.azkv"); err != nil {
+			return err
 		}
-		if kv.CacheTTL < 0 || kv.CacheTTL > 5*time.Minute {
-			return errors.New("material.azkv.cache_ttl is 0 to 5m: the longest a value may be read stale")
-		}
-		if kv.DNSSuffix != "" && !dnsSuffix.MatchString(kv.DNSSuffix) {
-			return errors.New("material.azkv.dns_suffix is a domain's suffix (.vault.azure.net)")
-		}
+	}
+	if err := c.validateSources(); err != nil {
+		return err
 	}
 	for i, a := range c.Material.K8s.Allow {
 		if !dnsLabel.MatchString(a.Namespace) {
@@ -427,10 +520,19 @@ func (c *Config) validate() error {
 			}
 		}
 	}
-	if strings.HasPrefix(c.State.PasswordRef, "ref+azkv://") && c.Azure.Identity == "" {
-		return errors.New("state.password_ref reads Key Vault with the service's Azure identity: azure.identity is required")
+	if ref := c.State.PasswordRef; strings.HasPrefix(ref, "ref+") {
+		scheme, _, _ := strings.Cut(strings.TrimPrefix(ref, "ref+"), "://")
+		s, ok := c.Source(scheme)
+		switch {
+		case !ok:
+			return fmt.Errorf("state.password_ref: no source is named %s (material.sources)", scheme)
+		case s.Kind == "vault" && !s.Vault.used():
+			return errors.New("state.password_ref reads Vault: vault: is required")
+		case s.Kind == "azkv" && s.Azure.Identity == "":
+			return errors.New("state.password_ref reads Key Vault with the service's Azure identity: azure.identity is required")
+		}
 	}
-	if c.State.PasswordRef != "" && c.Material.admits(c.State.PasswordRef) {
+	if c.State.PasswordRef != "" && c.admits(c.State.PasswordRef) {
 		return errors.New("state.password_ref is within material's allowlist: an administrator could read the " +
 			"database's password through a reference - keep it in a namespace, a vault or a name no allowlist admits")
 	}
@@ -544,9 +646,11 @@ func (s *State) validateServer(identity string) error {
 		if n != 1 {
 			return errors.New("state.auth: password comes from password_env, password_file or password_ref - one of them")
 		}
-		if s.PasswordRef != "" && !strings.HasPrefix(s.PasswordRef, "ref+k8s://") && !strings.HasPrefix(s.PasswordRef, "ref+azkv://") &&
-			!strings.HasPrefix(s.PasswordRef, "ref+vault://") {
-			return errors.New("state.password_ref is a ref+k8s://, ref+azkv:// or ref+vault:// reference")
+		if s.PasswordRef != "" {
+			scheme, _, ok := strings.Cut(strings.TrimPrefix(s.PasswordRef, "ref+"), "://")
+			if !ok || !strings.HasPrefix(s.PasswordRef, "ref+") || !material.SchemeName(scheme) {
+				return errors.New("state.password_ref is a reference: ref+k8s://, ref+azkv://, ref+vault:// or a named source's")
+			}
 		}
 		if s.PasswordEnv != "" && IsSettingVariable(s.PasswordEnv) {
 			return fmt.Errorf("state.password_env names %s, which is read as configuration - give the password a "+
@@ -641,35 +745,143 @@ func IsLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// validate checks a vault allowlist; where names it in errors.
+func (mv VaultAllow) validate(where string, vaultUsed bool) error {
+	if len(mv.Allow) == 0 || !vaultUsed {
+		return fmt.Errorf("%s: allow lists the KV mounts references may read, with vault: configured", where)
+	}
+	for i, a := range mv.Allow {
+		if !vaultMount.MatchString(a.Mount) || slices.Contains([]string{"sys", "auth", "identity", "cubbyhole"}, a.Mount) {
+			return fmt.Errorf("%s.allow[%d].mount: a KV v2 mount's name, one segment", where, i)
+		}
+	}
+	if mv.CacheTTL < 0 || mv.CacheTTL > 5*time.Minute {
+		return fmt.Errorf("%s.cache_ttl is 0 to 5m: the longest a value may be read stale", where)
+	}
+	return nil
+}
+
+// validate checks a Key Vault allowlist; where names it in errors.
+func (kv AzKV) validate(where string) error {
+	if len(kv.Allow) == 0 {
+		return fmt.Errorf("%s: allow lists the vaults references may read - none, no references", where)
+	}
+	for i, a := range kv.Allow {
+		if !azkvVault.MatchString(a.Vault) {
+			return fmt.Errorf("%s.allow[%d].vault: a vault's name, 3 to 24 letters, digits or dashes", where, i)
+		}
+	}
+	if kv.CacheTTL < 0 || kv.CacheTTL > 5*time.Minute {
+		return fmt.Errorf("%s.cache_ttl is 0 to 5m: the longest a value may be read stale", where)
+	}
+	if kv.DNSSuffix != "" && !dnsSuffix.MatchString(kv.DNSSuffix) {
+		return fmt.Errorf("%s.dns_suffix is a domain's suffix (.vault.azure.net)", where)
+	}
+	return nil
+}
+
+// validateSources checks the named sources (spec 008): a name of their own, a kind, a connection, an allowlist.
+func (c *Config) validateSources() error {
+	builtin := map[string]bool{
+		"azkv":  len(c.Material.AzKV.Allow) > 0,
+		"k8s":   len(c.Material.K8s.Allow) > 0,
+		"vault": len(c.Material.Vault.Allow) > 0,
+	}
+	seen := map[string]bool{}
+	for i, n := range c.Material.Sources {
+		where := fmt.Sprintf("material.sources[%d]", i)
+		switch {
+		case !material.SchemeName(n.Name):
+			return fmt.Errorf("%s.name: the references' scheme - a lower-case letter, then letters, digits or dashes, 16 at most", where)
+		case seen[n.Name]:
+			return fmt.Errorf("%s.name: %s is named twice", where, n.Name)
+		case builtin[n.Name]:
+			return fmt.Errorf("%s.name: %s is material.%s's - name the source otherwise", where, n.Name, n.Name)
+		case n.Kind == "k8s":
+			return fmt.Errorf("%s.kind: k8s reads this cluster only (material.k8s): another would need a kubeconfig's credentials", where)
+		case !slices.Contains(NamedSourceKinds, n.Kind):
+			return fmt.Errorf("%s.kind is %s", where, strings.Join(NamedSourceKinds, " | "))
+		}
+		seen[n.Name] = true
+		where = "material.sources[" + n.Name + "]"
+		s, _ := c.Source(n.Name)
+		for i, a := range n.Allow {
+			if (n.Kind == "vault") != (a.Mount != "") || (n.Kind == "azkv") != (a.Vault != "") {
+				return fmt.Errorf("%s.allow[%d]: a %s source's entries name a %s", where, i, n.Kind,
+					map[string]string{"vault": "mount", "azkv": "vault"}[n.Kind])
+			}
+		}
+		switch n.Kind {
+		case "vault":
+			if n.Azure != nil || n.DNSSuffix != "" {
+				return fmt.Errorf("%s: azure and dns_suffix are an azkv source's", where)
+			}
+			if n.Vault != nil {
+				if !n.Vault.used() {
+					return fmt.Errorf("%s.vault.address is required", where)
+				}
+				if err := n.Vault.validate(); err != nil {
+					return fmt.Errorf("%s.%w", where, err)
+				}
+			}
+			if err := s.VaultAllow.validate(where, s.Vault.used()); err != nil {
+				return err
+			}
+		case "azkv":
+			if n.Vault != nil {
+				return fmt.Errorf("%s: vault is a vault source's", where)
+			}
+			if n.Azure != nil {
+				if err := n.Azure.validate(where+".azure", true); err != nil {
+					return err
+				}
+			} else if c.Azure.Identity == "" {
+				return fmt.Errorf("%s reads with the service's Azure identity: azure.identity (or its own azure:) is required", where)
+			}
+			if err := s.AzKV.validate(where); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // vaultMount is a Vault mount's name: one segment.
 var vaultMount = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$`)
 
 // admits says whether a reference's place is within an allowlist, as the sources compare: Kubernetes and Vault
 // names exactly, Key Vault names without case. It errs toward admitting: a reference that does not parse may be
 // said admitted, and the service refuses it at start anyway.
-func (m Material) admits(ref string) bool {
-	if rest, ok := strings.CutPrefix(ref, "ref+k8s://"); ok {
+func (c *Config) admits(ref string) bool {
+	scheme, rest, ok := strings.Cut(strings.TrimPrefix(ref, "ref+"), "://")
+	if !ok || !strings.HasPrefix(ref, "ref+") {
+		return false
+	}
+	s, ok := c.Source(scheme)
+	if !ok {
+		return false
+	}
+	switch s.Kind {
+	case "k8s":
 		parts := strings.Split(rest, "/")
-		for _, a := range m.K8s.Allow {
+		for _, a := range s.K8s.Allow {
 			if len(parts) == 3 && a.Namespace == parts[0] && (len(a.Prefixes) == 0 ||
 				slices.ContainsFunc(a.Prefixes, func(p string) bool { return strings.HasPrefix(parts[1], p) })) {
 				return true
 			}
 		}
-	}
-	if rest, ok := strings.CutPrefix(ref, "ref+vault://"); ok {
+	case "vault":
 		where, _, _ := strings.Cut(rest, "#")
 		mount, path, _ := strings.Cut(where, "/")
-		for _, a := range m.Vault.Allow {
+		for _, a := range s.VaultAllow.Allow {
 			if a.Mount == mount && (len(a.Prefixes) == 0 ||
 				slices.ContainsFunc(a.Prefixes, func(p string) bool { return strings.HasPrefix(path, p) })) {
 				return true
 			}
 		}
-	}
-	if rest, ok := strings.CutPrefix(ref, "ref+azkv://"); ok {
+	case "azkv":
 		parts := strings.Split(rest, "/")
-		for _, a := range m.AzKV.Allow {
+		for _, a := range s.AzKV.Allow {
 			if len(parts) >= 2 && strings.EqualFold(a.Vault, parts[0]) && (len(a.Prefixes) == 0 ||
 				slices.ContainsFunc(a.Prefixes, func(p string) bool {
 					return strings.HasPrefix(strings.ToLower(parts[1]), strings.ToLower(p))

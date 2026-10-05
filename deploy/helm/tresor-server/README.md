@@ -33,7 +33,8 @@ Kubernetes 1.30 or later.
   authentication). ZITADEL's key file (`client_auth: key_file`) is mounted from a Secret with
   `extraVolumes`.
 - `vaultToken`: a projected ServiceAccount token for the Vault login (`vault.auth.method` `kubernetes` or `jwt`),
-  bound to the Vault role's audience, at `/var/run/tresor/vault-token/token`; `vault.auth.jwt_file` is set to it.
+  bound to the Vault role's audience, at `/var/run/tresor/vault-token/token`; `vault.auth.jwt_file` is set to it,
+  and so is a named source's (`material.sources[].vault.auth.jwt_file`, spec 008).
   Vault's private CA goes in with `extraVolumes`, named by `vault.ca_file`. See
   [OpenBao and Vault](https://hugr-lab.github.io/tresor-server/vault/).
 - `rbac.secrets: false`: the Roles on Secrets (`material.k8s.allow`, `state.password_ref`) are yours to make.

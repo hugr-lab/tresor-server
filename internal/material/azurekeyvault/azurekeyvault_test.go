@@ -123,3 +123,22 @@ func TestCache(t *testing.T) {
 		t.Fatalf("%d reads with a cache", v.reads.Load())
 	}
 }
+
+// a named source (spec 008): its name is the scheme, its errors name its allowlist
+func TestNamed(t *testing.T) {
+	v := &vault{url: "https://corp-vault.vault.azure.net", secrets: map[string]string{"lake-s3": "hunter2"}, disabled: map[string]bool{}}
+	s := source(t, v, Options{}).Named("partner")
+	if s.Scheme() != "partner" || s.Kind() != "azkv" {
+		t.Fatal(s.Scheme(), s.Kind())
+	}
+	ref, err := s.Parse("corp-vault/lake-s3")
+	if err != nil || ref.String() != "ref+partner://corp-vault/lake-s3" {
+		t.Fatalf("%s %v", ref, err)
+	}
+	if value, _, err := s.Resolve(context.Background(), ref); err != nil || value != "hunter2" {
+		t.Fatalf("%q %v", value, err)
+	}
+	if _, err := s.Parse("evil-vault/lake-s3"); err == nil || !strings.Contains(err.Error(), "material.sources[partner].allow") {
+		t.Fatalf("outside: %v", err)
+	}
+}

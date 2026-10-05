@@ -121,3 +121,43 @@ func TestCache(t *testing.T) {
 		t.Fatalf("a KV v1 mount: %v", err)
 	}
 }
+
+// two named sources at once (spec 008), each its own server, login and allowlist: a reference reads the
+// server its name says, and one source's allowlist admits nothing for the other
+func TestNamed(t *testing.T) {
+	servers := vaulttest.Servers(t)
+	if len(servers) < 2 {
+		t.Skip("two servers are needed")
+	}
+	var sources []material.Source
+	var mounts []string
+	for i, srv := range servers[:2] {
+		mount := srv.Mount(t, "kv-v2")
+		srv.Call(t, "POST", mount+"/data/duckdb/lake", map[string]any{"data": map[string]any{"secret": srv.Name}}, nil)
+		client, _ := vault.New(vault.Config{Address: srv.Address, Auth: vault.Auth{Method: "token_file", TokenFile: srv.TokenFile(t)}})
+		sources = append(sources, New(client, []Allow{{Mount: mount, Prefixes: []string{"duckdb/"}}}, 0).Named([]string{"bao", "hcv"}[i]))
+		mounts = append(mounts, mount)
+	}
+	r := material.New(sources...)
+	for i, name := range []string{"bao", "hcv"} {
+		params := map[string]json.RawMessage{"s": json.RawMessage(`"ref+` + name + `://` + mounts[i] + `/duckdb/lake#secret"`)}
+		out, done, err := r.Resolve(ctx, params)
+		if err != nil || string(out["s"]) != `"`+servers[i].Name+`"` || done[0].Ref.String() != "ref+"+name+"://"+mounts[i]+"/duckdb/lake#secret" {
+			t.Fatalf("%s: %s %+v %v", name, out["s"], done, err)
+		}
+		// the other source's mount, under this name: outside this one's allowlist
+		other := map[string]json.RawMessage{"s": json.RawMessage(`"ref+` + name + `://` + mounts[1-i] + `/duckdb/lake#secret"`)}
+		if _, err := r.CheckWrite("s3", other, nil); !errors.Is(err, material.ErrInvalid) || !strings.Contains(err.Error(), "material.sources["+name+"].allow") {
+			t.Fatalf("%s: another source's mount: %v", name, err)
+		}
+	}
+	// the built-in name is no longer a source: its references are not the named ones'
+	if _, err := r.CheckWrite("s3", map[string]json.RawMessage{"s": json.RawMessage(`"ref+vault://` + mounts[0] + `/duckdb/lake#secret"`)}, nil); !errors.Is(err, material.ErrInvalid) {
+		t.Fatalf("ref+vault with no vault source: %v", err)
+	}
+	// a source removed: its references fail at a fetch, never read by another of the kind
+	only := material.New(sources[1])
+	if _, _, err := only.Resolve(ctx, map[string]json.RawMessage{"s": json.RawMessage(`"ref+bao://` + mounts[0] + `/duckdb/lake#secret"`)}); !errors.Is(err, material.ErrUnresolved) {
+		t.Fatalf("a removed source: %v", err)
+	}
+}
