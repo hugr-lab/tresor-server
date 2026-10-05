@@ -14,7 +14,6 @@
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.1.1",
     "@fontsource/manrope": "^5.1.1",
-    "@tanstack/react-table": "^8.20.6",
     "lucide-react": "^0.474.0",
     "oidc-client-ts": "^3.1.0",
     "react": "^18.3.1",
