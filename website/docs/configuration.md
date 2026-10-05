@@ -165,13 +165,27 @@ OpenBao or HashiCorp Vault (spec 007): the KEK in Transit (`keys.kind: vault`), 
 | `vault.auth.token_file` | `token_file`: the token a Vault Agent writes, read again when it changes. |
 | `keys.kind: vault`, `keys.key`, `keys.mount` | The Transit key, and its mount (default `transit`). |
 
+### `ui`
+
+The management console (spec 010) at `/ui/`, and its API at `/admin/v1`: administrators only.
+
+| Setting | |
+| --- | --- |
+| `ui.enabled` | `true` (default). `false`: no `/ui/`, no `/admin/v1`. |
+| `ui.environment` | A label for the console's badge (`prod`, `staging`); unset, none. |
+| `ui.allowed_origins` | The hosts that mount the console as a microfrontend (`https://platform.example`): CORS on `/v1` and `/admin/v1`, for them only. |
+| `ui.frame_ancestors` | Pages that may frame `/ui/`; none by default. |
+
+People sign in with the issuers that have a `client_id`: register `<public_url>/ui/callback` as a redirect
+URI of that client.
+
 ### `audit`, `telemetry`
 
 See [Observability](observability.md).
 
 | Setting | |
 | --- | --- |
-| `audit.level` | `all` (default), `changes` (no successful read), or `off`. |
+| `audit.level` | `all` (default), `changes` (no successful read or inspection; reveals are kept), or `off`. |
 | `telemetry.traces` | `true` (default): spans under tresor's trace. `false`: the audit's `trace_id` only. |
 
 OpenTelemetry's export uses its standard variables: `OTEL_EXPORTER_OTLP_ENDPOINT` (nothing is exported

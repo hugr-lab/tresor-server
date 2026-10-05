@@ -379,6 +379,9 @@ func newKey(dek []byte) (cached, error) {
 
 // ActiveID names the data key new values are sealed with - made now if there is none: what a value with
 // nothing sealed is authenticated under (MAC).
+// Current names the KEK's current version (the console's service page, spec 010): the wrapper's answer.
+func (e *Envelope) Current(ctx context.Context) (string, error) { return e.wrapper.Current(ctx) }
+
 func (e *Envelope) ActiveID(ctx context.Context) (string, error) {
 	id, _, err := e.active(ctx)
 	return id, err

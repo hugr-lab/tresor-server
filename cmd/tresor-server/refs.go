@@ -11,8 +11,8 @@ import (
 	"syscall"
 
 	"github.com/hugr-lab/tresor-server/internal/config"
-	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/material"
+	"github.com/hugr-lab/tresor-server/internal/refscheck"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
@@ -52,44 +52,13 @@ func refs(configPath string, resolve bool, out io.Writer, log *slog.Logger) erro
 	return nil
 }
 
-// checkRefs checks every secret's and variable's references; the number of findings, of entries read.
+// checkRefs checks every secret's and variable's references, one line per finding on out; the number of
+// findings, of entries read.
 func checkRefs(ctx context.Context, st state.Store, r *material.Resolver, resolve bool, out io.Writer) (int, int, error) {
-	n, checked := 0, 0
-	for _, ns := range []struct {
-		kind  string
-		store state.Store
-	}{{"secret", st}, {"variable", st.Variables()}} {
-		list, err := ns.store.List(ctx)
-		if err != nil {
-			return n, checked, fmt.Errorf("%ss: %w", ns.kind, err)
-		}
-		for _, d := range list {
-			sec, err := ns.store.Get(ctx, d.Name)
-			if errors.Is(err, state.ErrNotFound) {
-				continue // deleted meanwhile
-			}
-			if ctx.Err() != nil {
-				return n, checked, ctx.Err() // stopped: what is left is unread, not a finding
-			}
-			checked++
-			if errors.Is(err, keys.ErrSealed) {
-				// this one's value does not open: a finding, not a stop - the others are still worth reading
-				fmt.Fprintf(out, "%s\t%s\t-\tdoes not open: %v\n", ns.kind, d.Name, err)
-				n++
-				continue
-			}
-			if err != nil {
-				return n, checked, fmt.Errorf("%s %s: %w", ns.kind, d.Name, err) // the store or the KEK: an error
-			}
-			findings := r.Check(ctx, sec.Params, resolve)
-			if ctx.Err() != nil {
-				return n, checked, ctx.Err()
-			}
-			for _, f := range findings {
-				fmt.Fprintf(out, "%s\t%s\t%s\t%v\n", ns.kind, d.Name, f.Param, f.Err)
-				n++
-			}
-		}
-	}
-	return n, checked, nil
+	n := 0
+	checked, err := refscheck.Run(ctx, st, r, resolve, func(f refscheck.Finding) {
+		fmt.Fprintf(out, "%s\t%s\t%s\t%s\n", f.Kind, f.Name, f.Param, f.Reason)
+		n++
+	})
+	return n, checked, err
 }

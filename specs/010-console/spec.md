@@ -70,7 +70,8 @@ ui:
 ### The console's API: `/admin/v1`
 
 tresor-server's own routes, **not** part of `duckdb-secrets/1`; administrators only (`403 no_verb` otherwise);
-never through a delegation grant (`403 actor_not_allowed`). Every request is audited.
+never through a delegation grant (`403 actor_not_allowed`). Every request is audited: `inspect` (the level
+`changes` keeps refusals only), `reveal` (always kept), `write` (the params merge).
 
 - `GET /admin/v1/service`: version, protocol, capabilities, the issuers (public settings), the reference sources
   with their kind, connection summary (address, login method; never a token or a key) and allowlist, the KEK's
@@ -80,10 +81,11 @@ never through a delegation grant (`403 actor_not_allowed`). Every request is aud
   - `reference`: the reference as written (a location, never its value);
   - `value`: only with `values=1`, only for a parameter **not** in `redact_keys` and not a reference. Secret
     parameters and the values behind references are never returned, to anyone. Audited as `reveal`.
-- `PATCH /admin/v1/{secrets|variables}/{name}/params` with `If-Match` →
+- `PATCH /admin/v1/secrets/{name}/params` with `If-Match` →
   `{set: {name: value}, keep: [name], remove: [name], redact_keys, comment?}`: a replace that keeps stored values
   the administrator never saw. Merged inside the store's compare-and-set; a parameter neither kept, set nor
   removed is an error (no silent drop). The same checks as a `PUT` (references, allowlists, `token_exchange`).
+  Secrets only: a variable is one value the administrator always sees (or its reference), so its `PUT` serves.
 - `GET /admin/v1/grants[?principal=]` → the principals that hold grants, with counts; with `principal`, every
   entry it may use (kind, name, grant id, the other principals). Writes go through the protocol's grant routes.
 - `POST /admin/v1/refs-check {resolve}` → `{checked, findings: [{kind, name, param, reason}]}`: spec 009's check

@@ -27,6 +27,8 @@ Container Apps, AKS and Log Analytics collect stdout with no set-up.
 | `grant`, `revoke` | a grant put or deleted; `target` is its principal |
 | `delegation` | a delegation grant exchanged or revoked |
 | `mint` | a token minted or refreshed for a caller (`token_exchange`); `target` is the audience |
+| `inspect` | the console's view of what the service holds: an entry's shape, grants, the service, a references check (spec 010) |
+| `reveal` | the console showed an administrator the parameters not marked secret (spec 010) |
 
 - **`outcome`** is `ok`, `denied`, `invalid`, `precondition`, `refused` (the IdP's) or `error`. A refusal
   or an error also has a `reason`, in the protocol's terms (`no_verb`, `not_found`, `unauthenticated`, …).
