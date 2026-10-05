@@ -1,5 +1,6 @@
 // The console's small parts: chips, states, search, pages, a row menu, toasts, the delete confirmation.
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, CircleAlert, Lock, MoreHorizontal, Search } from 'lucide-react'
 import type { Verb } from '../lib/types'
 import { ApiError } from '../lib/api'
@@ -152,38 +153,65 @@ export function Banner({ tone, children }: { tone: 'warning' | 'danger' | 'succe
   )
 }
 
-/** a row's actions: a small menu that closes on a click elsewhere or Escape */
+/** a row's actions: a small menu, drawn over the page (a table's scrolling box would clip it), below the button
+ * or above it when there is no room; closed on a click elsewhere, Escape, a scroll or a resize */
 export function RowMenu({ label, items }: { label: string; items: { label: string; danger?: boolean; onSelect: () => void }[] }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [at, setAt] = useState<{ top: number; right: number; up: boolean } | null>(null)
+  const button = useRef<HTMLButtonElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
+  const open = at !== null
   useEffect(() => {
     if (!open) return
-    const close = (e: MouseEvent | KeyboardEvent) => {
-      if (e instanceof KeyboardEvent ? e.key === 'Escape' : !ref.current?.contains(e.target as Node)) setOpen(false)
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === 'Escape' : e.type !== 'mousedown' || (!menu.current?.contains(e.target as Node) && !button.current?.contains(e.target as Node))) {
+        setAt(null)
+        if (e instanceof KeyboardEvent) button.current?.focus()
+      }
     }
     document.addEventListener('mousedown', close)
     document.addEventListener('keydown', close)
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('resize', close)
+    menu.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
     return () => {
       document.removeEventListener('mousedown', close)
       document.removeEventListener('keydown', close)
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('resize', close)
     }
   }, [open])
+  const toggle = () => {
+    if (open) return setAt(null)
+    const r = button.current!.getBoundingClientRect()
+    const height = 8 + items.length * 40
+    const up = r.bottom + height > window.innerHeight && r.top > height
+    setAt({ top: up ? r.top - height - 4 : r.bottom + 4, right: window.innerWidth - r.right, up })
+  }
   return (
-    <div className="relative inline-block" ref={ref}>
-      <button type="button" className="icon-btn" aria-label={`Actions for ${label}`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+    <>
+      <button ref={button} type="button" className="icon-btn" aria-label={`Actions for ${label}`} aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
         <MoreHorizontal size={18} />
       </button>
-      {open && (
-        <div role="menu" className="absolute right-0 top-9 z-20 flex min-w-[168px] flex-col rounded-md border border-line bg-surface p-1.5 text-left">
-          {items.map((it) => (
-            <button key={it.label} type="button" role="menuitem" onClick={() => { setOpen(false); it.onSelect() }}
-              className={`rounded-[10px] px-3 py-2 text-left hover:bg-soft ${it.danger ? 'text-danger' : 'text-ink'}`}>
-              {it.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+      {at &&
+        createPortal(
+          <div ref={menu} role="menu" aria-label={label} style={{ position: 'fixed', top: at.top, right: at.right }}
+            className="z-50 flex min-w-[168px] flex-col rounded-md border border-line bg-surface p-1.5 text-left text-ink"
+            onKeyDown={(e) => {
+              const all = [...(menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])]
+              const i = all.indexOf(document.activeElement as HTMLElement)
+              if (e.key === 'ArrowDown') { e.preventDefault(); all[(i + 1) % all.length]?.focus() }
+              if (e.key === 'ArrowUp') { e.preventDefault(); all[(i - 1 + all.length) % all.length]?.focus() }
+            }}>
+            {items.map((it) => (
+              <button key={it.label} type="button" role="menuitem" onClick={() => { setAt(null); it.onSelect() }}
+                className={`rounded-[10px] px-3 py-2 text-left hover:bg-soft focus:bg-soft ${it.danger ? 'text-danger' : 'text-ink'}`}>
+                {it.label}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </>
   )
 }
 
