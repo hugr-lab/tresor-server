@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hugr-lab/tresor-server/internal/audit"
 	"github.com/hugr-lab/tresor-server/internal/auth"
@@ -259,5 +260,46 @@ ui: {allowed_origins: ['https://platform.example']}
 		if w := call(method, "https://evil.example"); w.Header().Get("Access-Control-Allow-Origin") != "" {
 			t.Fatalf("%s from another origin: %v", method, w.Header())
 		}
+	}
+}
+
+// a kept parameter keeps its mark: unmarking a value the administrator never saw would reveal it; a mark goes
+// only with a value set anew
+func TestParamsMergeKeepsMarks(t *testing.T) {
+	f := newFixture(t, "")
+	withConsole(f)
+	stored(t, f.srv.store, "pg", `{"host":"db","password":"hunter2"}`, "password")
+	r := f.do("PATCH", "/admin/v1/secrets/pg/params", f.admin, `{"keep":["host","password"],"redact_keys":[]}`, "If-Match", `"1"`)
+	if r.status != 422 || strings.Contains(string(r.body), "hunter2") {
+		t.Fatalf("unmarking a kept secret: %d %s", r.status, r.body)
+	}
+	if r := f.do("GET", "/admin/v1/secrets/pg/shape?values=1", f.admin, ""); strings.Contains(string(r.body), "hunter2") {
+		t.Fatalf("revealed: %s", r.body)
+	}
+	if r := f.do("PATCH", "/admin/v1/secrets/pg/params", f.admin, `{"keep":["host"],"set":{"password":"not-secret-now"},"redact_keys":[]}`, "If-Match", `"1"`); r.status != 200 {
+		t.Fatalf("a new value, unmarked: %d %s", r.status, r.body)
+	}
+	for _, tag := range []string{"*", `W/"2"`} {
+		if r := f.do("PATCH", "/admin/v1/secrets/pg/params", f.admin, `{"keep":["host","password"]}`, "If-Match", tag); r.status != 412 ||
+			!strings.Contains(string(r.body), "exact version") {
+			t.Fatalf("If-Match %s: %d %s", tag, r.status, r.body)
+		}
+	}
+}
+
+// the recorder reaches the connection: the references check's longer write deadline takes effect
+func TestRecorderUnwraps(t *testing.T) {
+	var got error
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = http.NewResponseController(&statusRecorder{ResponseWriter: w}).SetWriteDeadline(time.Now().Add(time.Minute))
+	}))
+	defer srv.Close()
+	res, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if got != nil {
+		t.Fatalf("SetWriteDeadline through the recorder: %v", got)
 	}
 }

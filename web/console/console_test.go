@@ -48,6 +48,11 @@ func TestHandler(t *testing.T) {
 	if w := get(t, h, "/ui/../../etc/passwd"); w.Code == 200 && !strings.Contains(w.Body.String(), "<base") {
 		t.Fatal("a path out of the build")
 	}
+	odd := Handler(Config{BasePath: `/a"><script>x</script>`, ConnectSrc: []string{"https://oauth2.googleapis.com"}})
+	page := get(t, odd, "/ui/")
+	if strings.Contains(page.Body.String(), "<script>x") || !strings.Contains(page.Header().Get("Content-Security-Policy"), "connect-src 'self' https://oauth2.googleapis.com") {
+		t.Fatalf("escaping, connect_src: %s %s", page.Body.String(), page.Header().Get("Content-Security-Policy"))
+	}
 	framed := Handler(Config{FrameAncestors: []string{"https://platform.example"}})
 	if csp := get(t, framed, "/ui/").Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors https://platform.example") {
 		t.Fatal(csp)

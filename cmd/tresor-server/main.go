@@ -529,7 +529,7 @@ func serve(configPath string, log *slog.Logger) error {
 // consoleHandler serves the console's build (spec 010), told how people sign in: the issuers with a public client.
 func consoleHandler(cfg *config.Config) http.Handler {
 	c := console.Config{API: strings.TrimRight(cfg.PublicURL, "/"), Environment: cfg.UI.Environment,
-		FrameAncestors: cfg.UI.FrameAncestors}
+		FrameAncestors: cfg.UI.FrameAncestors, ConnectSrc: cfg.UI.ConnectSrc}
 	if u, err := url.Parse(cfg.PublicURL); err == nil {
 		c.BasePath = strings.TrimRight(u.Path, "/")
 	}

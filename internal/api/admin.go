@@ -275,8 +275,9 @@ func (s *Server) adminParams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
-	if ifMatch == "" {
-		problem(w, http.StatusPreconditionFailed, "precondition_failed", "If-Match is required: the version the edit started from")
+	if ifMatch == "" || ifMatch == "*" || strings.HasPrefix(ifMatch, "W/") {
+		problem(w, http.StatusPreconditionFailed, "precondition_failed",
+			`If-Match is required: the exact version the edit started from ("N", not * nor weak)`)
 		return
 	}
 	now := s.now()
@@ -294,6 +295,16 @@ func (s *Server) adminParams(w http.ResponseWriter, r *http.Request) {
 				if _, ok := params[k]; ok {
 					redact = append(redact, k)
 				}
+			}
+		}
+		// a kept parameter keeps its mark: unmarking a value the administrator never saw would show it here
+		// (shape, values=1) and in every user's duckdb_secrets(); a mark goes only with a value set anew
+		marked := func(list []string, k string) bool {
+			return slices.ContainsFunc(list, func(rk string) bool { return strings.EqualFold(rk, k) })
+		}
+		for _, k := range body.Keep {
+			if marked(current.RedactKeys, k) && !marked(redact, k) {
+				return nil, fmt.Errorf("%w: parameter %q is kept: it stays secret (set a new value to unmark it)", errInvalid, k)
 			}
 		}
 		if err := validParams(params, redact); err != nil {
@@ -440,7 +451,9 @@ func (s *Server) adminRefsCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	defer refsChecks.Unlock()
 	// with reads it may outlast the server's write timeout
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(refsCheckTime + time.Minute))
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(refsCheckTime + time.Minute)); err != nil {
+		s.log.Warn("the references check keeps the server's write timeout", "error", err.Error())
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), refsCheckTime)
 	defer cancel()
 	findings := []refscheck.Finding{}

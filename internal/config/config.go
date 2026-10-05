@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -89,6 +90,9 @@ type UI struct {
 	AllowedOrigins []string `yaml:"allowed_origins"`
 	// FrameAncestors are the pages that may frame /ui/ (its CSP); none by default.
 	FrameAncestors []string `yaml:"frame_ancestors"`
+	// ConnectSrc are more origins the sign-in calls, beside the issuers' own (its CSP): an IdP whose token or
+	// user-info endpoint is on another host (Google: oauth2.googleapis.com; Entra: graph.microsoft.com).
+	ConnectSrc []string `yaml:"connect_src"`
 }
 
 // On says whether the console is served.
@@ -103,7 +107,7 @@ func (u UI) validate() error {
 	for _, list := range []struct {
 		name    string
 		origins []string
-	}{{"ui.allowed_origins", u.AllowedOrigins}, {"ui.frame_ancestors", u.FrameAncestors}} {
+	}{{"ui.allowed_origins", u.AllowedOrigins}, {"ui.frame_ancestors", u.FrameAncestors}, {"ui.connect_src", u.ConnectSrc}} {
 		for _, o := range list.origins {
 			if !IsOrigin(o) {
 				return fmt.Errorf("%s: %q is not an origin - https://host[:port] (http only to this machine), "+
@@ -114,13 +118,23 @@ func (u UI) validate() error {
 	return nil
 }
 
-// IsOrigin says whether o is a web origin as a browser sends it: scheme, host and port only; https, or http to
-// this machine.
+// originHost is a host as a browser writes it in an Origin: a lower-case DNS name, no wildcard (or an IP address).
+var originHost = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
+// IsOrigin says whether o is a web origin exactly as a browser sends it - scheme://host[:port], the default
+// port left out, nothing else (it lands in a CSP and in CORS: nothing may ride along) - https, or http to this
+// machine.
 func IsOrigin(o string) bool {
 	u, err := url.Parse(o)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
-		(u.Path != "" && u.Path != "/") || strings.HasSuffix(o, "/") || o != strings.ToLower(o) {
+	if err != nil || u.Scheme+"://"+u.Host != o || (!originHost.MatchString(u.Hostname()) && net.ParseIP(u.Hostname()) == nil) {
 		return false
+	}
+	if port := u.Port(); port != "" || strings.HasSuffix(u.Host, ":") {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port ||
+			(u.Scheme == "https" && n == 443) || (u.Scheme == "http" && n == 80) {
+			return false
+		}
 	}
 	return u.Scheme == "https" || (u.Scheme == "http" && IsLoopback(u.Hostname()))
 }

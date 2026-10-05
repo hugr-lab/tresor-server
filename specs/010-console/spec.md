@@ -53,8 +53,9 @@ system. The design brief: `design/ui-prompt.md` (local).
   `<public_url>/ui/callback` must be registered at the IdP. The access token is kept in memory (the PKCE state in
   `sessionStorage`), sent as `Authorization: Bearer`; renewed by the IdP's refresh or a new login, without losing
   an editor's input.
-- **Headers** on `/ui/`: a Content-Security-Policy (`default-src 'self'`; `connect-src 'self'` and the issuers'
-  endpoints; no inline script; `frame-ancestors` from `ui.frame_ancestors`, `'none'` by default),
+- **Headers** on `/ui/`: a Content-Security-Policy (`default-src 'self'`; `connect-src 'self'`, the issuers'
+  origins and `ui.connect_src`; no inline script; no frame: the token is renewed by a refresh, never in a hidden
+  frame; a component that injects `<style>` takes the page's nonce; `frame-ancestors` from `ui.frame_ancestors`, `'none'` by default),
   `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`.
 
 ### Configuration
@@ -65,6 +66,7 @@ ui:
   environment: prod             # optional: the badge in the top bar; unset, none
   allowed_origins: []           # the microfrontend's hosts (CORS on /v1 and /admin/v1)
   frame_ancestors: []           # pages that may frame /ui/ (CSP); none by default
+  connect_src: []               # more origins the sign-in calls (an IdP's endpoints on another host)
 ```
 
 ### The console's API: `/admin/v1`
@@ -81,6 +83,8 @@ never through a delegation grant (`403 actor_not_allowed`). Every request is aud
   - `reference`: the reference as written (a location, never its value);
   - `value`: only with `values=1`, only for a parameter **not** in `redact_keys` and not a reference. Secret
     parameters and the values behind references are never returned, to anyone. Audited as `reveal`.
+  - The params merge never unmarks a kept parameter: a mark goes only with a value set anew, so no value the
+    administrator never saw can become visible.
 - `PATCH /admin/v1/secrets/{name}/params` with `If-Match` →
   `{set: {name: value}, keep: [name], remove: [name], redact_keys, comment?}`: a replace that keeps stored values
   the administrator never saw. Merged inside the store's compare-and-set; a parameter neither kept, set nor
@@ -89,7 +93,8 @@ never through a delegation grant (`403 actor_not_allowed`). Every request is aud
 - `GET /admin/v1/grants[?principal=]` → the principals that hold grants, with counts; with `principal`, every
   entry it may use (kind, name, grant id, the other principals). Writes go through the protocol's grant routes.
 - `POST /admin/v1/refs-check {resolve}` → `{checked, findings: [{kind, name, param, reason}]}`: spec 009's check
-  over HTTP, one at a time per replica, each read bounded as the command's.
+  over HTTP, one at a time per replica, each read bounded as the command's; the write deadline extended for it.
+  `resolve` reads every reference with the service's identity, never returning a value: an `inspect`.
 
 Writes otherwise use the protocol's routes: `PUT` (create, with `If-None-Match: *`), `DELETE`, `PATCH`
 (comment), the grant routes, `DELETE /v1/delegations`.
