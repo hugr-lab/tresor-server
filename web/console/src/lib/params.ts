@@ -15,6 +15,8 @@ export interface Row {
   secret: boolean // redact_keys
   existing?: ShapeParam // what the secret holds (a replace)
   removed?: boolean
+  optional?: boolean // from a template: left empty, it is not sent
+  hint?: string // from a template: what the parameter is
 }
 
 let next = 0
@@ -27,6 +29,15 @@ export const looksSecret = (name: string) => secretNames.test(name)
 export function newRow(name = ''): Row {
   return { key: key(), name, type: 'VARCHAR', mode: 'value', value: '', ref: '', secret: looksSecret(name) }
 }
+
+/** a template's rows: its parameters, typed and marked as the extension marks them; the optional ones skipped
+ * when left empty */
+export function rowsFromTemplate(params: { name: string; type: string; secret: boolean; required: boolean; description: string }[]): Row[] {
+  return params.map((p) => ({ ...newRow(p.name), type: p.type, secret: p.secret || looksSecret(p.name), optional: !p.required, hint: p.description }))
+}
+
+/** whether the person has typed anything into rows: a template then asks before it replaces them */
+export const touched = (rows: Row[]) => rows.some((r) => r.value !== '' || r.ref !== '')
 
 /** the rows of a replace: each current parameter kept as it is */
 export function rowsOf(params: ShapeParam[]): Row[] {
@@ -93,7 +104,10 @@ export function problems(rows: Row[]): Map<string, string> {
     else if (seen.has(name.toLowerCase())) out.set(r.key, `${name} is named twice`)
     seen.add(name.toLowerCase())
     if (r.mode === 'ref' && !r.ref) out.set(r.key, 'complete the reference')
-    if (r.mode === 'value' && r.value === '') out.set(r.key, 'a value is needed (keep, or remove the parameter)')
+    if (r.mode === 'value' && r.value === '' && r.optional) continue // an optional one left empty: not sent
+    // an empty VARCHAR is a value ('' is DuckDB's to judge; a template's "required" is only a hint); an empty secret or
+    // another type is a slip
+    if (r.mode === 'value' && r.value === '' && (r.secret || r.type.toUpperCase() !== 'VARCHAR')) out.set(r.key, r.existing ? 'a value is needed (keep, or remove the parameter)' : 'a value is needed (or remove the parameter)')
     else if (r.mode === 'value') {
       try {
         valueOf(r)
@@ -110,7 +124,7 @@ export function forCreate(rows: Row[]): { params: Record<string, unknown>; redac
   const params: Record<string, unknown> = {}
   const redact: string[] = []
   for (const r of rows) {
-    if (r.removed) continue
+    if (r.removed || (r.optional && r.mode === 'value' && r.value === '')) continue
     params[r.name.trim()] = valueOf(r)
     if (r.secret || r.mode === 'ref') redact.push(r.name.trim())
   }

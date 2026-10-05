@@ -7,13 +7,14 @@ import { ArrowLeft, Lock, Plus, Terminal, Trash2, X } from 'lucide-react'
 import { useApp, useLoad } from '../context'
 import { useLists } from '../lists'
 import { ApiError, nameOf, route, seg } from '../lib/api'
-import { forCreate, forReplace, looksSecret, newRow, problems, rebase, rowsOf, type Mode, type Row } from '../lib/params'
+import { forCreate, forReplace, looksSecret, newRow, problems, rebase, rowsFromTemplate, rowsOf, touched, type Mode, type Row } from '../lib/params'
+import { paramsOf, templateOf } from '../lib/templates'
+import { TypePicker } from '../components/TypePicker'
 import { sqlPreview } from '../lib/sql'
 import type { Shape } from '../lib/types'
 import { RefField } from '../components/RefField'
 import { Banner, ErrorState, Skeleton, useToast } from '../components/ui'
 
-const types = ['s3', 'gcs', 'r2', 'azure', 'postgres', 'mysql', 'mssql', 'http', 'huggingface', 'quack']
 const duckTypes = ['VARCHAR', 'INTEGER', 'BIGINT', 'DOUBLE', 'BOOLEAN', 'MAP(VARCHAR, VARCHAR)', 'STRUCT', 'VARCHAR[]']
 
 export function SecretEditor({ mode }: { mode: 'create' | 'replace' }) {
@@ -47,7 +48,19 @@ function Form({ existing, shape, initial, commentKnown, onReload }: {
   const [scope, setScope] = useState<string[]>(initial?.scope ?? [])
   const [scopeInput, setScopeInput] = useState('')
   const [comment, setComment] = useState(initial?.comment ?? '')
-  const [rows, setRows] = useState<Row[]>(() => (shape ? rowsOf(shape.params) : [newRow('key_id'), newRow('secret')]))
+  const [rows, setRows] = useState<Row[]>(() => (shape ? rowsOf(shape.params) : startRows(initial?.type ?? 's3', 'config')))
+  const [pending, setPending] = useState<{ label: string; rows: Row[] } | null>(null)
+  const template = templateOf(type)
+  const providers = [...new Set([...(template?.providers.map((p) => p.provider) ?? ['config']), ...(mintable(type) ? ['token_exchange'] : []), provider])]
+  // a new secret's type or provider: its template's parameters, asked first when something is typed
+  const choose = (nextType: string, nextProvider: string) => {
+    setType(nextType)
+    setProvider(nextProvider)
+    if (existing) return
+    const next = startRows(nextType, nextProvider)
+    if (!touched(rows)) setRows(next)
+    else setPending({ label: `${nextType} · ${nextProvider}`, rows: next })
+  }
   const [error, setError] = useState<unknown>(null)
   const [conflict, setConflict] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -64,6 +77,8 @@ function Form({ existing, shape, initial, commentKnown, onReload }: {
   }, [shape, base])
 
   const update = (key: string, change: Partial<Row>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...change } : r)))
+  // the parameters this type and provider know, not in the form yet: suggested for a name
+  const known = paramsOf(type, provider).filter((p) => !rows.some((r) => !r.removed && r.name.trim() === p.name))
   const validName = /^\S(.*\S)?$/.test(name) && name.length <= 200
 
   const save = async () => {
@@ -116,6 +131,15 @@ function Form({ existing, shape, initial, commentKnown, onReload }: {
         </Banner>
       )}
       {error != null && <ErrorState error={error} />}
+      {pending && (
+        <Banner tone="info">
+          <span className="flex items-center gap-3">
+            Replace the parameters with the {pending.label} template? What you typed would go.
+            <button type="button" className="btn-secondary ml-auto py-1 text-[13px]" onClick={() => { setRows(pending.rows); setPending(null) }}>Use the template</button>
+            <button type="button" className="btn-ghost py-1 text-[13px]" onClick={() => setPending(null)}>Keep mine</button>
+          </span>
+        </Banner>
+      )}
       <div className="flex items-start gap-6">
         <div className="flex min-w-0 flex-[999_1_640px] flex-col gap-5">
           <section className="grid grid-cols-3 gap-4 rounded-lg bg-soft p-6">
@@ -123,16 +147,18 @@ function Form({ existing, shape, initial, commentKnown, onReload }: {
               <input className="input font-mono" value={name} disabled={!!existing} onChange={(e) => setName(e.target.value)} />
               <span className="font-normal text-muted">{existing ? 'The name stays on replace.' : 'Any text up to 200 characters, no edge spaces.'}</span>
             </label>
-            <label className="flex flex-col gap-1.5 text-[13px] font-semibold">Type
-              <input className="input font-mono" list="secret-types" value={type} disabled={!!existing} onChange={(e) => setType(e.target.value)} />
-              <datalist id="secret-types">{types.map((t) => <option key={t} value={t} />)}</datalist>
-            </label>
+            <div className="flex flex-col gap-1.5 text-[13px] font-semibold">Type
+              <TypePicker value={type} disabled={!!existing} inUse={(secrets.data ?? []).map((s) => s.type)}
+                onChange={(t) => choose(t, defaultProvider(t))} />
+              {template && <span className="font-normal text-muted">{template.extension}: {template.description}{template.docs && <> · <a href={template.docs} target="_blank" rel="noreferrer">docs</a></>}</span>}
+            </div>
             <label className="flex flex-col gap-1.5 text-[13px] font-semibold">Provider
-              <select className="input" value={provider} disabled={!!existing} onChange={(e) => setProvider(e.target.value)}>
-                <option value="config">config</option>
-                <option value="token_exchange">token_exchange — a token for each caller</option>
-                {!['config', 'token_exchange'].includes(provider) && <option value={provider}>{provider}</option>}
+              <select className="input" value={provider} disabled={!!existing} onChange={(e) => choose(type, e.target.value)}>
+                {providers.map((p) => <option key={p} value={p}>{p === 'token_exchange' ? 'token_exchange — a token for each caller' : p}</option>)}
               </select>
+              {template?.providers.find((p) => p.provider === provider)?.description && (
+                <span className="font-normal text-muted">{template.providers.find((p) => p.provider === provider)!.description}</span>
+              )}
             </label>
             <label className="col-span-3 flex flex-col gap-1.5 text-[13px] font-semibold">Comment
               <input className="input" value={comment} onChange={(e) => setComment(e.target.value)} />
@@ -146,7 +172,7 @@ function Form({ existing, shape, initial, commentKnown, onReload }: {
                   </span>
                 ))}
                 {!existing && (
-                  <input aria-label="Add a scope" placeholder="Add a URL prefix, Enter" className="min-w-[200px] flex-1 border-0 bg-transparent font-mono text-[12px] font-normal text-ink outline-none"
+                  <input aria-label="Add a scope" placeholder={template?.scope ? `e.g. ${template.scope}, Enter` : 'Add a URL prefix, Enter'} className="min-w-[200px] flex-1 border-0 bg-transparent font-mono text-[12px] font-normal text-ink outline-none"
                     value={scopeInput} onChange={(e) => setScopeInput(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && scopeInput.trim()) {
@@ -179,7 +205,7 @@ function Form({ existing, shape, initial, commentKnown, onReload }: {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r) => <ParamRow key={r.key} r={r} sources={service.sources} issue={issues.get(r.key)} update={update} />)}
+                  {rows.map((r) => <ParamRow key={r.key} r={r} sources={service.sources} issue={issues.get(r.key)} update={update} known={known} />)}
                 </tbody>
               </table>
             </div>
@@ -198,7 +224,30 @@ function Form({ existing, shape, initial, commentKnown, onReload }: {
   )
 }
 
-function ParamRow({ r, sources, issue, update }: { r: Row; sources: import('../lib/types').Source[]; issue?: string; update: (key: string, c: Partial<Row>) => void }) {
+/** the types a token can be minted for (token_exchange, specs/010): http's bearer_token, quack's token */
+const mintable = (type: string) => /^(http|quack)$/i.test(type)
+
+/** a type's default provider: config when its extension has one */
+function defaultProvider(type: string): string {
+  const t = templateOf(type)
+  return !t || t.providers.some((p) => p.provider === 'config') ? 'config' : t.providers[0].provider
+}
+
+/** a new secret's rows for a type and provider: the template's, a minted one's audience and scope, or two blanks */
+function startRows(type: string, provider: string): Row[] {
+  if (provider === 'token_exchange') {
+    return rowsFromTemplate([
+      { name: 'audience', type: 'VARCHAR', secret: false, required: true, description: "the token's audience (never tresor's own)" },
+      { name: 'scope', type: 'VARCHAR', secret: false, required: false, description: 'the scopes to ask for' },
+    ])
+  }
+  const p = templateOf(type)?.providers.find((x) => x.provider === provider)
+  return p ? rowsFromTemplate(p.params.filter((x) => x.required || x.common)) : [newRow('key_id'), newRow('secret')]
+}
+
+function ParamRow({ r, sources, issue, update, known }: {
+  r: Row; sources: import('../lib/types').Source[]; issue?: string; update: (key: string, c: Partial<Row>) => void; known: import('../lib/templates').TemplateParam[]
+}) {
   if (r.removed) {
     return (
       <tr className="border-t border-line bg-soft">
@@ -214,14 +263,22 @@ function ParamRow({ r, sources, issue, update }: { r: Row; sources: import('../l
     <tr className="border-t border-line align-top">
       <td className="td pl-3.5">
         {r.existing ? <span className="font-mono text-[13px]">{r.name}</span> : (
-          <input aria-label="Parameter name" className="input w-full py-1.5 font-mono text-[13px]" value={r.name}
-            onChange={(e) => update(r.key, { name: e.target.value, secret: r.secret || looksSecret(e.target.value) })} />
+          <>
+            <input aria-label="Parameter name" list={`names-${r.key}`} className="input w-full py-1.5 font-mono text-[13px]" value={r.name} title={r.hint}
+              onChange={(e) => {
+                const t = known.find((p) => p.name === e.target.value)
+                update(r.key, t ? { name: t.name, type: t.type, secret: t.secret || looksSecret(t.name), hint: t.description, optional: !t.required }
+                  : { name: e.target.value, secret: r.secret || looksSecret(e.target.value) })
+              }} />
+            <datalist id={`names-${r.key}`}>{known.map((p) => <option key={p.name} value={p.name}>{p.description}</option>)}</datalist>
+          </>
         )}
+        {r.hint && <span className="mt-1 block text-[11px] leading-4 text-muted">{r.optional ? 'optional · ' : ''}{r.hint}</span>}
         {issue && <span role="alert" className="mt-1 block text-[12px] text-danger">{issue}</span>}
       </td>
       <td className="td">
         {r.existing && r.mode === 'keep' ? <span className="font-mono text-[12px] text-muted">{r.type}</span> : (
-          <input aria-label={`${r.name}: DuckDB type`} list="duck-types" className="input w-full py-1.5 font-mono text-[12px]" value={r.type} onChange={(e) => update(r.key, { type: e.target.value })} />
+          <input aria-label={`${r.name}: DuckDB type`} list="duck-types" title={r.type} className="input w-full py-1.5 font-mono text-[12px]" value={r.type} onChange={(e) => update(r.key, { type: e.target.value })} />
         )}
         <datalist id="duck-types">{duckTypes.map((t) => <option key={t} value={t} />)}</datalist>
       </td>
@@ -240,8 +297,15 @@ function ParamRow({ r, sources, issue, update }: { r: Row; sources: import('../l
               {r.existing?.reference ? <span className="break-all font-mono">{r.existing.reference}</span> : keptSecret ? <><Lock size={14} aria-hidden /> unchanged · secret, not shown</> : <span className="font-mono">{r.value}</span>}
             </span>
           )}
-          {r.mode === 'value' && (
-            <input aria-label={`${r.name}: value`} type={r.secret ? 'password' : 'text'} autoComplete="off" placeholder={r.existing?.redacted ? 'a new value' : ''}
+          {r.mode === 'value' && /^MAP/i.test(r.type) && (
+            <MapField label={r.name} secret={r.secret} value={r.value} onChange={(value) => update(r.key, { value })} />
+          )}
+          {r.mode === 'value' && /^(STRUCT|LIST)|\[\]$/i.test(r.type) && (
+            <textarea aria-label={`${r.name}: value`} rows={3} spellCheck={false} placeholder={/^STRUCT/i.test(r.type) ? '{"field": "value"}' : '["one", "two"]'}
+              className="input min-w-[220px] flex-1 py-1.5 font-mono text-[13px]" value={r.value} onChange={(e) => update(r.key, { value: e.target.value })} />
+          )}
+          {r.mode === 'value' && !/^(MAP|STRUCT|LIST)|\[\]$/i.test(r.type) && (
+            <input aria-label={`${r.name}: value`} type={r.secret ? 'password' : 'text'} autoComplete="off" placeholder={r.existing?.redacted ? 'a new value' : r.optional ? 'optional' : ''}
               className="input min-w-[220px] flex-1 py-1.5 font-mono text-[13px]" value={r.value} onChange={(e) => update(r.key, { value: e.target.value })} />
           )}
           {r.mode === 'ref' && <RefField sources={sources} value={r.ref} label={r.name} onChange={(ref) => update(r.key, { ref })} />}
@@ -259,5 +323,38 @@ function ParamRow({ r, sources, issue, update }: { r: Row; sources: import('../l
         </button>
       </td>
     </tr>
+  )
+}
+
+/** a MAP's value as key → value pairs; the row keeps it as the JSON object the protocol carries ('' when empty) */
+function MapField({ label, secret, value, onChange }: { label: string; secret: boolean; value: string; onChange: (value: string) => void }) {
+  const [pairs, setPairs] = useState<[string, string][]>(() => {
+    try {
+      const o = JSON.parse(value) as Record<string, unknown>
+      const p = Object.entries(o).map(([k, v]): [string, string] => [k, typeof v === 'string' ? v : JSON.stringify(v)])
+      return p.length ? p : [['', '']]
+    } catch {
+      return [['', '']]
+    }
+  })
+  const set = (next: [string, string][]) => {
+    setPairs(next.length ? next : [['', '']])
+    const filled = next.filter(([k]) => k.trim() !== '')
+    onChange(filled.length ? JSON.stringify(Object.fromEntries(filled.map(([k, v]) => [k.trim(), v]))) : '')
+  }
+  return (
+    <div className="flex min-w-[260px] flex-1 flex-col gap-1.5">
+      {pairs.map(([k, v], i) => (
+        <div key={i} className="flex items-center gap-1.5">
+          <input aria-label={`${label}: key ${i + 1}`} placeholder="key" autoComplete="off" className="input w-[40%] py-1.5 font-mono text-[13px]" value={k}
+            onChange={(e) => set(pairs.map((p, j) => (j === i ? [e.target.value, p[1]] : p)))} />
+          <span className="text-muted" aria-hidden>→</span>
+          <input aria-label={`${label}: value ${i + 1}`} placeholder="value" autoComplete="off" type={secret ? 'password' : 'text'} className="input min-w-0 flex-1 py-1.5 font-mono text-[13px]" value={v}
+            onChange={(e) => set(pairs.map((p, j) => (j === i ? [p[0], e.target.value] : p)))} />
+          <button type="button" className="icon-btn" aria-label={`${label}: remove key ${i + 1}`} onClick={() => set(pairs.filter((_, j) => j !== i))}><X size={14} /></button>
+        </div>
+      ))}
+      <button type="button" className="btn-ghost self-start py-0.5 text-[12px]" onClick={() => setPairs([...pairs, ['', '']])}><Plus size={13} /> a key</button>
+    </div>
   )
 }

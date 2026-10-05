@@ -247,7 +247,7 @@ export function Service() {
             <dt className="text-muted">Current version</dt><dd className="m-0 break-all font-mono">{s.kek.current ?? s.kek.error ?? '—'}</dd>
             <dt className="text-muted">State store</dt><dd className="m-0 font-mono">{s.state}</dd>
           </dl>
-          <span className="text-[12px] text-muted">The key never leaves its holder; nothing here is key material.</span>
+          <span className="text-[12px] text-muted">The KEK stays in its store (a file, Key Vault, Transit): shown here is only its kind and the version data keys are wrapped with now.</span>
         </section>
         <section className="card flex flex-col gap-3">
           <span className="eyebrow">Identity providers</span>

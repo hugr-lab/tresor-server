@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encode, forCreate, forReplace, newRow, problems, rowsOf, looksSecret, rebase } from './params'
+import { encode, forCreate, forReplace, newRow, problems, rowsOf, looksSecret, rebase, rowsFromTemplate } from './params'
 import { grantId, idFor } from './grants'
 import { buildRef, parseRef, allowed } from './refs'
 import { ident, sqlPreview } from './sql'
@@ -104,6 +104,23 @@ describe('the review of (010 b)', () => {
   })
 })
 
+describe('templates', () => {
+  it('skips an optional parameter left empty, and sends an empty VARCHAR but not an empty secret', () => {
+    const rows = rowsFromTemplate([
+      { name: 'key_id', type: 'VARCHAR', secret: false, required: true, description: '' },
+      { name: 'secret', type: 'VARCHAR', secret: true, required: true, description: '' },
+      { name: 'region', type: 'VARCHAR', secret: false, required: false, description: '' },
+    ])
+    expect(rows[1].secret).toBe(true)
+    expect([...problems(rows).keys()]).toEqual([rows[1].key])
+    expect(forCreate([rows[0]]).params).toEqual({ key_id: '' })
+    rows[0].value = 'AKIA'
+    rows[1].value = 's'
+    expect(problems(rows).size).toBe(0)
+    expect(forCreate(rows)).toEqual({ params: { key_id: 'AKIA', secret: 's' }, redact_keys: ['secret'] })
+  })
+})
+
 describe('references', () => {
   it('builds and parses each kind', () => {
     const v = { source: 'vault-us', a: 'secret', b: 'duckdb/lake', c: 'key' }
@@ -140,5 +157,15 @@ describe('time', () => {
     expect(ago('2026-10-05T11:59:30Z', now)).toBe('just now')
     expect(ago('2026-10-05T10:00:00Z', now)).toBe('2 h ago')
     expect(ago('2026-10-04T10:00:00Z', now)).toBe('yesterday')
+  })
+})
+
+describe('sqlPreview', () => {
+  it('writes a MAP as a DuckDB literal and skips an empty optional one', () => {
+    const map = { ...newRow('metadata_parameters'), type: 'MAP(VARCHAR, VARCHAR)', secret: false, value: JSON.stringify({ TYPE: 'postgres', user: "o'k" }) }
+    const opt = { ...newRow('data_path'), secret: false, optional: true }
+    const sql = sqlPreview('lake', 'ducklake', 'config', [], [map, opt])
+    expect(sql).toContain("METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'user': 'o''k'}")
+    expect(sql).not.toContain('DATA_PATH')
   })
 })

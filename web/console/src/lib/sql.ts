@@ -10,6 +10,7 @@ export function sqlPreview(name: string, type: string, provider: string, scope: 
   if (provider && provider !== 'config') lines.push(`    PROVIDER ${provider}`)
   for (const r of rows) {
     if (r.removed || !r.name.trim()) continue
+    if (r.mode === 'value' && r.value === '' && r.optional) continue // an optional one left empty is not sent
     const key = ident(r.name.trim()).toUpperCase()
     let v: string
     if (r.mode === 'ref') v = q(r.ref || 'ref+…')
@@ -22,6 +23,26 @@ export function sqlPreview(name: string, type: string, provider: string, scope: 
 }
 
 function shown(r: Row): string {
-  if (r.value === '') return "'••••'"
-  return r.type.toUpperCase() === 'VARCHAR' ? q(r.value) : r.value
+  if (r.value === '') return "''"
+  const t = r.type.toUpperCase()
+  if (t === 'VARCHAR') return q(r.value)
+  if (/^(MAP|STRUCT|LIST)|\[\]$/.test(t)) {
+    try {
+      return literal(JSON.parse(r.value), /^MAP/.test(t))
+    } catch {
+      return q(r.value)
+    }
+  }
+  return r.value
+}
+
+/** a nested value as a DuckDB literal: MAP {'k': 'v'}, a struct {'k': v}, a list [v, ...] */
+function literal(v: unknown, map = false): string {
+  if (Array.isArray(v)) return `[${v.map((x) => literal(x)).join(', ')}]`
+  if (v && typeof v === 'object') {
+    const body = Object.entries(v).map(([k, x]) => `${q(k)}: ${literal(x)}`).join(', ')
+    return map ? `MAP {${body}}` : `{${body}}`
+  }
+  if (typeof v === 'string') return q(v)
+  return v === null ? 'NULL' : String(v)
 }
