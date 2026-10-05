@@ -174,12 +174,17 @@ export function RowMenu({ label, items }: { label: string; items: { label: strin
     document.addEventListener('mousedown', close)
     document.addEventListener('keydown', close)
     window.addEventListener('scroll', close, true)
+    // a scroll inside a shadow root does not reach the window (the microfrontend)
+    const shadow = button.current?.getRootNode()
+    const inner = shadow instanceof ShadowRoot ? shadow : undefined
+    inner?.addEventListener('scroll', close, true)
     window.addEventListener('resize', close)
     menu.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
     return () => {
       document.removeEventListener('mousedown', close)
       document.removeEventListener('keydown', close)
       window.removeEventListener('scroll', close, true)
+      inner?.removeEventListener('scroll', close, true)
       window.removeEventListener('resize', close)
     }
   }, [open])

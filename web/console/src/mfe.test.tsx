@@ -48,7 +48,7 @@ describe('mountTresor', () => {
     let h!: ReturnType<typeof mountTresor>
     await act(async () => {
       h = mountTresor(el, { apiBase: 'https://tresor.example/', getToken, audience: 'duckdb-secrets', basePath: '/platform/tresor/', theme: 'dark',
-        onNavigate: (p) => navigated.push(p), onTitle: (t) => titles.push(t) })
+        onNavigate: (p, how) => navigated.push(how.replace ? `${p} (replace)` : p), onTitle: (t) => titles.push(t) })
     })
     await settle()
     expect(el.shadowRoot).not.toBeNull()
@@ -67,9 +67,42 @@ describe('mountTresor', () => {
     expect(navigated).toEqual([]) // the host's own navigation is not echoed back
     const access = [...el.shadowRoot!.querySelectorAll('a')].find((a) => a.textContent === 'Access')!
     await act(async () => access.click())
+    await settle()
     expect(navigated).toEqual(['/platform/tresor/access'])
+    expect(titles.at(-1)).toBe('Access') // stays: the host's earlier path is not applied again
+    expect(() => mountTresor(el, { apiBase: 'https://tresor.example', getToken })).toThrow(/already/)
     await act(async () => h.unmount())
     expect(el.shadowRoot!.childElementCount).toBe(0)
+    expect(() => h.update({ theme: 'dark' })).not.toThrow() // after unmount: nothing
+    await act(async () => {
+      h = mountTresor(el, { apiBase: 'https://tresor.example', getToken })
+    })
+    await settle()
+    expect(el.shadowRoot!.querySelectorAll('.mfe-root').length).toBe(1) // mounted again
+    await act(async () => h.unmount())
+  })
+
+  it('keeps the browser history itself without onNavigate, and tells the host its path when at basePath alone', async () => {
+    stub()
+    window.history.replaceState(null, '', '/app')
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    const told: string[] = []
+    await act(async () => {
+      mountTresor(el, { apiBase: 'https://tresor.example', getToken: async () => 't', basePath: '/app', onTitle: (t) => told.push(t) })
+    })
+    await settle()
+    expect(window.location.pathname).toBe('/app/secrets') // replaced, not pushed
+    const vars = [...el.shadowRoot!.querySelectorAll('a')].find((a) => a.textContent === 'Variables')!
+    await act(async () => vars.click())
+    await settle()
+    expect(window.location.pathname).toBe('/app/variables')
+    await act(async () => {
+      window.history.replaceState(null, '', '/app/service')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    await settle()
+    expect(told.at(-1)).toBe('Service')
   })
 
   it('refuses a non-administrator, and needs the token function', async () => {
@@ -86,6 +119,26 @@ describe('mountTresor', () => {
 })
 
 describe('<tresor-console>', () => {
+  it('takes properties a host set before the element was defined', async () => {
+    stub()
+    const el = document.createElement('tresor-console-pending') as HTMLElement & Record<string, unknown>
+    el.setAttribute('api-base', 'https://tresor.example')
+    const titles: string[] = []
+    el.getToken = async () => 't'
+    el.onTitle = (t: string) => titles.push(t)
+    document.body.appendChild(el)
+    await act(async () => {
+      customElements.define('tresor-console-pending', class extends TresorConsole {})
+    })
+    await settle()
+    expect(el.shadowRoot!.querySelector('.mfe-root')).not.toBeNull()
+    expect(titles.at(-1)).toBe('Secrets')
+    await act(async () => {
+      el.getToken = undefined // no token function: unmounted
+    })
+    expect(el.shadowRoot!.childElementCount).toBe(0)
+  })
+
   it('mounts once the token function is given as a property, never from an attribute', async () => {
     stub()
     const el = document.createElement('tresor-console') as TresorConsole

@@ -36,7 +36,8 @@ const tresor = mountTresor(element, {
   audience: 'duckdb-secrets',                  // optional: passed to getToken when the host asks per audience
   theme: 'dark',
   basePath: '/platform/tresor',                // the host's path the console lives under
-  onNavigate: (path) => history.pushState(null, '', path), // optional: else the console pushes history itself
+  onNavigate: (path, { replace }) => history[replace ? 'replaceState' : 'pushState'](null, '', path), // optional:
+                                               // else the console keeps the browser's history itself
   onTitle: (title) => setBreadcrumb(title),
 })
 tresor.update({ theme: 'light' })              // the host's theme changed
@@ -49,7 +50,11 @@ Or as an element: `<tresor-console api-base="…" base-path="…" audience="…"
 `onNavigate` and `onTitle` properties; `navigate(path)` for the host's own navigation.
 
 The service sends CORS headers for `ui.allowed_origins` on `/ui/mfe/`, `/v1/` and `/admin/v1/`. The host's CSP
-allows the service's origin in `script-src`, `font-src` and `connect-src`. A token must carry tresor's audience:
+allows the service's origin in `script-src`, `font-src` and `connect-src`. One element holds one console.
+
+- The fonts' faces (`Manrope`, `JetBrains Mono`) are added to the host's document once (a shadow root's are not
+  used); a host using those family names for its own text gets tresor's files.
+- Menus and toasts are `position: fixed`: an ancestor with `transform`, `filter` or `contain` moves them. A token must carry tresor's audience:
 the IdP adds it to the host's tokens (a Keycloak audience mapper, a ZITADEL project) or the host asks for one.
 
 **The test host** (`mfe-host/`, not shipped): another origin with its own sign-in, loading the module from a

@@ -1,8 +1,8 @@
 // The console as a microfrontend (spec 010, c): mountTresor(element, options) and <tresor-console>. The host owns
 // sign-in, navigation and the theme; the console renders in the element's shadow root, its styles its own.
-import { StrictMode, useEffect, useMemo, useState } from 'react'
+import { StrictMode, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
+import { MemoryRouter, useLocation, useNavigate, useNavigationType } from 'react-router-dom'
 import css from './styles.css?inline'
 import { App } from './App'
 import { AppContext, type AppState, type Theme } from './context'
@@ -21,9 +21,9 @@ export interface TresorOptions {
   theme?: Theme
   /** the host's path the console lives under, e.g. /platform/tresor; the console's own paths follow it */
   basePath?: string
-  /** the console moved: the host's full path, for its address bar and history. Without it the console pushes
-   * the browser's history itself */
-  onNavigate?: (path: string) => void
+  /** the console moved: the host's full path and query, for its address bar and history (replace: the entry is
+   * replaced, not added). Without it the console keeps the browser's history itself */
+  onNavigate?: (path: string, how: { replace: boolean }) => void
   /** the section shown, for the host's title or breadcrumbs */
   onTitle?: (title: string) => void
 }
@@ -41,12 +41,17 @@ const titles: [RegExp, string][] = [
 
 const trim = (p: string) => p.replace(/\/+$/, '')
 
-/** the console's own path from the host's: below basePath, else the start */
+/** the console's own path (and query) from the host's: below basePath, else the start */
 function inner(basePath: string, path: string): string {
   const base = trim(basePath)
-  if (base && path !== base && !path.startsWith(base + '/')) return '/secrets'
-  return path.slice(base.length) || '/secrets'
+  const [p, q] = [path.split('?')[0], path.includes('?') ? path.slice(path.indexOf('?')) : '']
+  if (base && p !== base && !p.startsWith(base + '/')) return '/secrets'
+  const own = p.slice(base.length)
+  return own && own !== '/' ? own + q : '/secrets'
 }
+
+/** the elements mounted: one console per element */
+const mounted = new WeakSet<HTMLElement>()
 
 let sheet: CSSStyleSheet | undefined
 let fonts = false
@@ -86,6 +91,9 @@ interface Live {
 
 function Embedded({ options, live, portal }: { options: TresorOptions; live: Live; portal: HTMLElement }) {
   const navigate = useNavigate()
+  const go = useRef(navigate) // useNavigate's function changes with the location: the host's path is applied once
+  go.current = navigate
+  const how = useNavigationType()
   const location = useLocation()
   const [state, setState] = useState<{ me?: Whoami; service?: ServiceInfo; notAdmin?: boolean; error?: string }>({})
   const api = useMemo(() => new Api(options.apiBase, () => options.getToken(options.audience)), [options])
@@ -93,27 +101,28 @@ function Embedded({ options, live, portal }: { options: TresorOptions; live: Liv
 
   // the host navigated (its back button): follow, without telling it again
   useEffect(() => {
-    if (live.path) navigate(inner(base, live.path.to), { replace: true, state: { fromHost: true } })
-  }, [live.path, base, navigate])
+    if (live.path) go.current(inner(base, live.path.to), { replace: true, state: { fromHost: true } })
+  }, [live.path, base])
 
   // the console navigated: the host's address bar and title follow
   useEffect(() => {
-    const full = base + location.pathname
+    const full = base + location.pathname + location.search
     if (!(location.state as { fromHost?: boolean } | null)?.fromHost) {
-      if (options.onNavigate) options.onNavigate(full)
-      else if (window.location.pathname !== full) window.history.pushState(null, '', full)
+      const replace = how !== 'PUSH' // the first entry (POP) and a replace take the host's entry over
+      if (options.onNavigate) options.onNavigate(full, { replace })
+      else if (window.location.pathname + window.location.search !== full) window.history[replace ? 'replaceState' : 'pushState'](null, '', full)
     }
     const t = titles.find(([re]) => re.test(location.pathname))
     if (t) options.onTitle?.(t[1])
-  }, [location, base, options])
+  }, [location, how, base, options])
 
   // the browser's back button when the console keeps the history itself
   useEffect(() => {
     if (options.onNavigate) return
-    const back = () => navigate(inner(base, window.location.pathname), { replace: true, state: { fromHost: true } })
+    const back = () => go.current(inner(base, window.location.pathname + window.location.search), { replace: true, state: { fromHost: true } })
     window.addEventListener('popstate', back)
     return () => window.removeEventListener('popstate', back)
-  }, [options, base, navigate])
+  }, [options, base])
 
   useEffect(() => {
     Promise.all([api.get<Whoami>('/v1/whoami'), api.get<ServiceInfo>('/admin/v1/service')]).then(
@@ -154,6 +163,8 @@ function Embedded({ options, live, portal }: { options: TresorOptions; live: Liv
 /** mounts the console in element's shadow root (made open when it has none) */
 export function mountTresor(element: HTMLElement, options: TresorOptions): TresorHandle {
   if (!options?.apiBase || typeof options.getToken !== 'function') throw new Error('mountTresor: apiBase and getToken are required')
+  if (mounted.has(element)) throw new Error('mountTresor: this element holds a console already (unmount it first)')
+  mounted.add(element)
   const shadow = element.shadowRoot ?? element.attachShadow({ mode: 'open' })
   const unstyle = style(shadow)
   const frame = document.createElement('div')
@@ -164,14 +175,19 @@ export function mountTresor(element: HTMLElement, options: TresorOptions): Treso
   const host = document.createElement('div')
   frame.appendChild(host)
   const root: Root = createRoot(host)
-  const start = inner(options.basePath ?? '', window.location.pathname)
+  const here = window.location.pathname + window.location.search
+  const start = inner(options.basePath ?? '', here)
+  const [pathname, search] = [start.split('?')[0], start.includes('?') ? start.slice(start.indexOf('?')) : '']
+  // the host's own path as it is: nothing to tell it; its basePath alone (or another path) is told where the console is
+  const fromHost = trim(options.basePath ?? '') + start === here
   let live: Live = { theme: options.theme ?? 'light' }
   let n = 0
+  let gone = false
   const render = () => {
     frame.dataset.theme = live.theme
     root.render(
       <StrictMode>
-        <MemoryRouter initialEntries={[{ pathname: start, state: { fromHost: true } }]}>
+        <MemoryRouter initialEntries={[{ pathname, search, state: { fromHost } }]} initialIndex={0}>
           <Embedded options={options} live={live} portal={portal} />
         </MemoryRouter>
       </StrictMode>,
@@ -180,10 +196,14 @@ export function mountTresor(element: HTMLElement, options: TresorOptions): Treso
   render()
   return {
     update({ theme, path }) {
+      if (gone) return
       live = { theme: theme ?? live.theme, path: path === undefined ? live.path : { to: path, n: ++n } }
       render()
     },
     unmount() {
+      if (gone) return
+      gone = true
+      mounted.delete(element)
       root.unmount()
       frame.remove()
       unstyle()
@@ -197,12 +217,25 @@ export class TresorConsole extends HTMLElement {
   static observedAttributes = ['theme']
   private handle?: TresorHandle
   private tokenFn?: TresorOptions['getToken']
-  onNavigate?: (path: string) => void
-  onTitle?: (title: string) => void
+  declare onNavigate?: (path: string, how: { replace: boolean }) => void
+  declare onTitle?: (title: string) => void
+
+  constructor() {
+    super()
+    // properties a host set before this module defined the element: they would hide the class's own
+    for (const key of ['getToken', 'onNavigate', 'onTitle'] as const) {
+      if (Object.prototype.hasOwnProperty.call(this, key)) {
+        const value = (this as Record<string, unknown>)[key]
+        delete (this as Record<string, unknown>)[key]
+        ;(this as Record<string, unknown>)[key] = value
+      }
+    }
+  }
 
   set getToken(fn: TresorOptions['getToken'] | undefined) {
-    this.tokenFn = fn
-    this.mount()
+    this.tokenFn = typeof fn === 'function' ? fn : undefined
+    if (this.tokenFn) this.mount()
+    else this.disconnectedCallback() // no token function: nothing to call the service with
   }
   get getToken() {
     return this.tokenFn
@@ -232,7 +265,7 @@ export class TresorConsole extends HTMLElement {
       audience: this.getAttribute('audience') ?? undefined,
       theme: theme === 'dark' ? 'dark' : 'light',
       getToken: (a) => this.tokenFn!(a),
-      onNavigate: (p) => (this.onNavigate ? this.onNavigate(p) : this.dispatchEvent(new CustomEvent('tresor-navigate', { detail: p }))),
+      onNavigate: (p, how) => (this.onNavigate ? this.onNavigate(p, how) : this.dispatchEvent(new CustomEvent('tresor-navigate', { detail: { path: p, ...how } }))),
       onTitle: (t) => (this.onTitle ? this.onTitle(t) : this.dispatchEvent(new CustomEvent('tresor-title', { detail: t }))),
     })
   }

@@ -38,7 +38,7 @@ system. The design brief: `design/ui-prompt.md` (local).
   library: Radix's scroll lock injects `<style>` tags, which the CSP refuses; dialogs are native `<dialog>`s
   (their own focus trap and Escape), menus are small components. Every dependency MIT, ISC or Apache-2.0; fonts SIL OFL (Manrope, JetBrains Mono), bundled,
   never from a CDN.
-- **Source** in `web/console/`; the build (`dist/`, `dist-mfe/`) is embedded in the binary (`go:embed`), as hub's
+- **Source** in `web/console/`; the build (`dist/`, with `dist/mfe/`) is embedded in the binary (`go:embed`), as hub's
   console is. The image builds it in its own stage; `go build` alone embeds a placeholder page.
 - **Size**: a desktop console, at least 1280 × 800 px; below that the page scrolls. The microfrontend's content
   keeps at least 960 px.
@@ -66,7 +66,7 @@ system. The design brief: `design/ui-prompt.md` (local).
 ui:
   enabled: true                 # default; false: no /ui/, no /admin/v1
   environment: prod             # optional: the badge in the top bar; unset, none
-  allowed_origins: []           # the microfrontend's hosts (CORS on /v1 and /admin/v1)
+  allowed_origins: []           # the microfrontend's hosts (CORS on /ui/mfe/, /v1, /admin/v1)
   frame_ancestors: []           # pages that may frame /ui/ (CSP); none by default
   connect_src: []               # more origins the sign-in calls (an IdP's endpoints on another host)
 ```

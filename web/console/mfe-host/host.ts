@@ -39,7 +39,7 @@ async function show(path: string) {
     getToken: async () => token,
     theme,
     basePath: base,
-    onNavigate: (p: string) => history.pushState(null, '', p),
+    onNavigate: (p: string, how: { replace: boolean }) => history[how.replace ? 'replaceState' : 'pushState'](null, '', p),
     onTitle: (t: string) => ($('title').textContent = `tresor · ${t}`),
   })
 }

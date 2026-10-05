@@ -273,6 +273,17 @@ ui: {allowed_origins: ['https://platform.example']}
 		w.Header().Get("Access-Control-Expose-Headers") != "" {
 		t.Fatalf("the module: %v", w.Header())
 	}
+	// files only: a preflight or a write there is given no method, header or exposure
+	for _, method := range []string{"OPTIONS", "POST"} {
+		req := httptest.NewRequest(method, "/ui/mfe/tresor.js", nil)
+		req.Header.Set("Origin", "https://platform.example")
+		req.Header.Set("Access-Control-Request-Method", "PUT")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Header().Get("Access-Control-Allow-Methods") != "" || w.Header().Get("Access-Control-Allow-Headers") != "" || w.Code < 400 {
+			t.Fatalf("%s on the module: %d %v", method, w.Code, w.Header())
+		}
+	}
 	for path, origin := range map[string]string{"/ui/mfe/tresor.js": "https://evil.example", "/ui/assets/index.js": "https://platform.example"} {
 		if w := file(path, origin); w.Header().Get("Access-Control-Allow-Origin") != "" {
 			t.Fatalf("%s from %s: %v", path, origin, w.Header())
