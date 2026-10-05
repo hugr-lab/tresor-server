@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ type Config struct {
 	// Audit and Telemetry are spec 005's: what the audit records, and whether spans continue tresor's trace.
 	Audit     Audit     `yaml:"audit"`
 	Telemetry Telemetry `yaml:"telemetry"`
+	UI        UI        `yaml:"ui"`
 	// Store is the reference server's encrypted file: kept only to refuse a config that still has it (an
 	// empty `store:` too: see load)
 	Store any `yaml:"store"`
@@ -76,6 +78,65 @@ type State struct {
 // Audit is what the audit records (spec 005): all (the default), changes (no successful read) or off.
 type Audit struct {
 	Level string `yaml:"level"`
+}
+
+// UI is the management console (spec 010): /ui/ and its API, /admin/v1.
+type UI struct {
+	// Enabled: the console and /admin/v1 (default true).
+	Enabled *bool `yaml:"enabled"`
+	// Environment labels the console's badge (prod, staging); unset, none.
+	Environment string `yaml:"environment"`
+	// AllowedOrigins are the hosts that mount the console as a microfrontend: CORS on /v1 and /admin/v1.
+	AllowedOrigins []string `yaml:"allowed_origins"`
+	// FrameAncestors are the pages that may frame /ui/ (its CSP); none by default.
+	FrameAncestors []string `yaml:"frame_ancestors"`
+	// ConnectSrc are more origins the sign-in calls, beside the issuers' own (its CSP): an IdP whose token or
+	// user-info endpoint is on another host (Google: oauth2.googleapis.com; Entra: graph.microsoft.com).
+	ConnectSrc []string `yaml:"connect_src"`
+}
+
+// On says whether the console is served.
+func (u UI) On() bool { return u.Enabled == nil || *u.Enabled }
+
+var uiEnvironment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$`)
+
+func (u UI) validate() error {
+	if u.Environment != "" && !uiEnvironment.MatchString(u.Environment) {
+		return errors.New("ui.environment: a short label - letters, digits, space . _ -, 32 at most")
+	}
+	for _, list := range []struct {
+		name    string
+		origins []string
+	}{{"ui.allowed_origins", u.AllowedOrigins}, {"ui.frame_ancestors", u.FrameAncestors}, {"ui.connect_src", u.ConnectSrc}} {
+		for _, o := range list.origins {
+			if !IsOrigin(o) {
+				return fmt.Errorf("%s: %q is not an origin - https://host[:port] (http only to this machine), "+
+					"no path", list.name, o)
+			}
+		}
+	}
+	return nil
+}
+
+// originHost is a host as a browser writes it in an Origin: a lower-case DNS name, no wildcard (or an IP address).
+var originHost = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
+// IsOrigin says whether o is a web origin exactly as a browser sends it - scheme://host[:port], the default
+// port left out, nothing else (it lands in a CSP and in CORS: nothing may ride along) - https, or http to this
+// machine.
+func IsOrigin(o string) bool {
+	u, err := url.Parse(o)
+	if err != nil || u.Scheme+"://"+u.Host != o || (!originHost.MatchString(u.Hostname()) && net.ParseIP(u.Hostname()) == nil) {
+		return false
+	}
+	if port := u.Port(); port != "" || strings.HasSuffix(u.Host, ":") {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port ||
+			(u.Scheme == "https" && n == 443) || (u.Scheme == "http" && n == 80) {
+			return false
+		}
+	}
+	return u.Scheme == "https" || (u.Scheme == "http" && IsLoopback(u.Hostname()))
 }
 
 // Telemetry: OpenTelemetry takes its standard environment (OTEL_*); only what the service decides is here.
@@ -541,6 +602,9 @@ func (c *Config) validate() error {
 	if c.State.PasswordRef != "" && c.admits(c.State.PasswordRef) {
 		return errors.New("state.password_ref is within material's allowlist: an administrator could read the " +
 			"database's password through a reference - keep it in a namespace, a vault or a name no allowlist admits")
+	}
+	if err := c.UI.validate(); err != nil {
+		return err
 	}
 	switch c.Audit.Level {
 	case "", "all", "changes", "off":

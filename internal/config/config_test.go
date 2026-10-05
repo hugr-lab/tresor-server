@@ -498,3 +498,40 @@ func TestPasswordOutsideEverySource(t *testing.T) {
 		}
 	}
 }
+
+// the console (spec 010): on by default, origins as a browser sends them
+func TestUI(t *testing.T) {
+	cfg, err := Parse([]byte(good))
+	if err != nil || !cfg.UI.On() || cfg.UI.Environment != "" {
+		t.Fatalf("defaults: %+v %v", cfg.UI, err)
+	}
+	ok := good + "ui: {environment: prod, allowed_origins: ['https://platform.corp.example', 'http://localhost:5173', 'http://[::1]:8080'], frame_ancestors: ['https://platform.corp.example:8443'], connect_src: ['https://oauth2.googleapis.com']}\n"
+	if cfg, err := Parse([]byte(ok)); err != nil || cfg.UI.Environment != "prod" {
+		t.Fatalf("%v", err)
+	}
+	if cfg, _ := Parse([]byte(good + "ui: {enabled: false}\n")); cfg.UI.On() {
+		t.Fatal("enabled: false")
+	}
+	for _, d := range []string{
+		"ui: {allowed_origins: ['https://platform.corp.example/']}",
+		"ui: {allowed_origins: ['https://platform.corp.example/ui']}",
+		"ui: {allowed_origins: ['http://platform.corp.example']}",
+		"ui: {allowed_origins: ['*']}",
+		"ui: {allowed_origins: ['https://Platform.corp.example']}",
+		"ui: {frame_ancestors: ['https://a.example?x=1']}",
+		"ui: {environment: '<b>prod</b>'}",
+		"ui: {frame_ancestors: ['https://a.example;script-src']}",
+		"ui: {frame_ancestors: ['https://a.example,b.example']}",
+		"ui: {allowed_origins: ['https://*.example']}",
+		"ui: {allowed_origins: ['https://a.example:443']}",
+		"ui: {allowed_origins: ['https://a.example:']}",
+		"ui: {allowed_origins: ['https://a.example:99999']}",
+		"ui: {allowed_origins: ['https://a.example?']}",
+		"ui: {connect_src: ['https://oauth2.googleapis.com/token']}",
+		"ui: {environment: 'a very long environment label, more than 32'}",
+	} {
+		if _, err := Parse([]byte(good + d + "\n")); err == nil {
+			t.Errorf("%s: accepted", d)
+		}
+	}
+}

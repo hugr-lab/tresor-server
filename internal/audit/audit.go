@@ -27,7 +27,7 @@ type Level int
 
 const (
 	All     Level = iota // everything, reads included
-	Changes              // writes, deletes, annotations, grants, delegation, every refusal; no successful read
+	Changes              // writes, deletes, annotations, grants, delegation, reveals, every refusal; no successful read or inspection
 	Off                  // nothing (the events are still counted)
 )
 
@@ -54,6 +54,10 @@ const (
 	KindRevoke     = "revoke"
 	KindDelegation = "delegation"
 	KindMint       = "mint"
+	// KindInspect: an administrator looked at what the service holds, never a value (spec 010's console)
+	KindInspect = "inspect"
+	// KindReveal: an administrator asked for the values of parameters not marked secret (spec 010)
+	KindReveal = "reveal"
 )
 
 // Ref is a reference resolved for a read: where, and the version read - never the value.
@@ -109,7 +113,7 @@ func (a *Auditor) Emit(ctx context.Context, e Event) {
 	switch {
 	case a.level == Off:
 		return
-	case a.level == Changes && e.Kind == KindRead && e.Outcome == "ok":
+	case a.level == Changes && (e.Kind == KindRead || e.Kind == KindInspect) && e.Outcome == "ok":
 		return
 	}
 	e.Time, e.Audit = a.now().UTC(), Format

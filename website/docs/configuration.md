@@ -165,13 +165,30 @@ OpenBao or HashiCorp Vault (spec 007): the KEK in Transit (`keys.kind: vault`), 
 | `vault.auth.token_file` | `token_file`: the token a Vault Agent writes, read again when it changes. |
 | `keys.kind: vault`, `keys.key`, `keys.mount` | The Transit key, and its mount (default `transit`). |
 
+### `ui`
+
+The management console (spec 010) at `/ui/`, and its API at `/admin/v1`: administrators only.
+
+| Setting | |
+| --- | --- |
+| `ui.enabled` | `true` (default: an upgrade serves the console with no change of configuration). `false`: no `/ui/`, no `/admin/v1`. |
+| `ui.environment` | A label for the console's badge (`prod`, `staging`); unset, none. |
+| `ui.allowed_origins` | The hosts that mount the console as a microfrontend (`https://platform.example`): CORS on `/v1` and `/admin/v1`, for them only. |
+| `ui.frame_ancestors` | Pages that may frame `/ui/`; none by default. |
+| `ui.connect_src` | More origins the sign-in calls, for an IdP whose token or user-info endpoint is on another host than its issuer (Google: `https://oauth2.googleapis.com`; Entra: `https://graph.microsoft.com`). |
+
+Origins are written as a browser sends them: `https://host[:port]`, no path, no default port, no wildcard.
+
+People sign in with the issuers that have a `client_id`: register `<public_url>/ui/callback` as a redirect
+URI of that client.
+
 ### `audit`, `telemetry`
 
 See [Observability](observability.md).
 
 | Setting | |
 | --- | --- |
-| `audit.level` | `all` (default), `changes` (no successful read), or `off`. |
+| `audit.level` | `all` (default), `changes` (no successful read or inspection; a reveal is kept), or `off` (nothing). |
 | `telemetry.traces` | `true` (default): spans under tresor's trace. `false`: the audit's `trace_id` only. |
 
 OpenTelemetry's export uses its standard variables: `OTEL_EXPORTER_OTLP_ENDPOINT` (nothing is exported

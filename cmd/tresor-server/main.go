@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -46,6 +47,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/telemetry"
 	"github.com/hugr-lab/tresor-server/internal/traced"
 	"github.com/hugr-lab/tresor-server/internal/vault"
+	"github.com/hugr-lab/tresor-server/web/console"
 )
 
 // version is the build's (-ldflags -X main.version=...): the image's tag.
@@ -458,8 +460,18 @@ func serve(configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	srv, err := api.New(ctx, cfg, verifier, traced.Store(st), log, api.WithMaterial(resolver),
-		api.WithAudit(audit.New(level, os.Stdout)), api.WithExchangeAuth(exchange))
+	opts := []api.Option{api.WithMaterial(resolver), api.WithAudit(audit.New(level, os.Stdout)),
+		api.WithExchangeAuth(exchange)}
+	var checker *health.Checker // made below: the console asks it at each request
+	if cfg.UI.On() {
+		c := api.Console{UI: consoleHandler(cfg), Version: version,
+			Ready: func() (bool, map[string]string) { return checker.Ready() }}
+		if sealed, ok := st.(interface{ Envelope() *keys.Envelope }); ok {
+			c.KEK = sealed.Envelope().Current
+		}
+		opts = append(opts, api.WithConsole(c))
+	}
+	srv, err := api.New(ctx, cfg, verifier, traced.Store(st), log, opts...)
 	if err != nil {
 		return err
 	}
@@ -472,7 +484,7 @@ func serve(configPath string, log *slog.Logger) error {
 			Soft: func() bool { return verifier.Answered(iss) },
 		})
 	}
-	checker := health.New(log, readyInterval, checks...)
+	checker = health.New(log, readyInterval, checks...)
 	checker.Start(ctx)
 	go purgeGrants(ctx, st, log)
 
@@ -512,6 +524,22 @@ func serve(configPath string, log *slog.Logger) error {
 		defer cancel()
 		return server.Shutdown(shutdown)
 	}
+}
+
+// consoleHandler serves the console's build (spec 010), told how people sign in: the issuers with a public client.
+func consoleHandler(cfg *config.Config) http.Handler {
+	c := console.Config{API: strings.TrimRight(cfg.PublicURL, "/"), Environment: cfg.UI.Environment,
+		FrameAncestors: cfg.UI.FrameAncestors, ConnectSrc: cfg.UI.ConnectSrc}
+	if u, err := url.Parse(cfg.PublicURL); err == nil {
+		c.BasePath = strings.TrimRight(u.Path, "/")
+	}
+	for _, is := range cfg.Issuers {
+		if is.ClientID != "" {
+			c.Issuers = append(c.Issuers, console.Issuer{Issuer: is.Issuer, ClientID: is.ClientID, Scopes: is.Scopes,
+				Audience: is.Audience, AudienceParameter: is.AudienceParameter})
+		}
+	}
+	return console.Handler(c)
 }
 
 // exchangeAuth is how the service logs in at each issuer's token endpoint with no client secret (spec 006),

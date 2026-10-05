@@ -40,6 +40,7 @@ type observation struct {
 	problem  string       // the problem document's type, if one was answered
 	answered bool         // something was written: a handler that returned without an answer gave up
 	event    audit.Event  // what the handlers say: the entry, its name, a target, a version, references
+	kind     string       // a handler's own kind for its decision, over the route's (a reveal)
 	// the trace an event belongs to: the caller's (a well-formed traceparent), the service's own span when one
 	// is recorded under it, else the caller's span; none without a traceparent
 	trace trace.SpanContext
@@ -75,6 +76,13 @@ var auditKinds = map[string]string{
 	"POST /v1/delegations":                    audit.KindDelegation,
 	"DELETE /v1/delegations/{id}":             audit.KindDelegation,
 	"DELETE /v1/delegations":                  audit.KindDelegation,
+	// the console's (spec 010)
+	"GET /admin/v1/service":                 audit.KindInspect,
+	"GET /admin/v1/secrets/{name}/shape":    audit.KindInspect,
+	"GET /admin/v1/variables/{name}/shape":  audit.KindInspect,
+	"PATCH /admin/v1/secrets/{name}/params": audit.KindWrite,
+	"GET /admin/v1/grants":                  audit.KindInspect,
+	"POST /admin/v1/refs-check":             audit.KindInspect,
 }
 
 // outcome reads an answer's status as the audit says it.
@@ -156,6 +164,9 @@ func (s *Server) finish(r *http.Request, o *observation, span trace.Span, status
 	telemetry.Requests.Add(ctx, 1, metricAttrs(attribute.String("route", route), attribute.String("status_class", class)))
 	telemetry.Duration.Record(ctx, took.Seconds(), metricAttrs(attribute.String("route", route)))
 	kind := auditKinds[o.pattern]
+	if o.kind != "" {
+		kind = o.kind
+	}
 	result := outcome(status)
 	if !o.answered {
 		result, o.problem = "error", "abandoned" // the request ended (or the handler panicked) with no answer

@@ -54,6 +54,7 @@ type Server struct {
 	audit     *audit.Auditor     // spec 005: nil records nothing
 	// exchangeAuth is how the service logs in at an issuer's token endpoint (spec 006), by IssuerKey
 	exchangeAuth map[string]mint.ClientAuth
+	console      *Console // spec 010: /ui/ and /admin/v1; nil serves neither
 }
 
 // New wires a server; the verifier and the store are the caller's. It reads the store once, to report
@@ -112,13 +113,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/delegations", s.authed(s.exchange))
 	mux.HandleFunc("DELETE /v1/delegations/{id}", s.authed(s.revokeGrant))
 	mux.HandleFunc("DELETE /v1/delegations", s.authed(s.revokeGrants))
+	if s.console != nil {
+		s.consoleRoutes(mux)
+	}
 	// anything else - an unknown path, a known path with another method - is a problem document too
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusNotFound, "not_found", "no such resource: "+r.Method+" "+r.URL.Path)
 	})
 	var h http.Handler = mux
+	if s.console != nil && len(s.cfg.UI.AllowedOrigins) > 0 {
+		h = cors(s.cfg.UI.AllowedOrigins, h) // the console as a microfrontend, on its hosts (spec 010)
+	}
 	if u, err := url.Parse(s.cfg.PublicURL); err == nil && strings.TrimRight(u.Path, "/") != "" {
-		h = http.StripPrefix(strings.TrimRight(u.Path, "/"), mux)
+		h = http.StripPrefix(strings.TrimRight(u.Path, "/"), h)
 	}
 	return s.logged(h)
 }
@@ -136,6 +143,9 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	r.wrote = true
 	return r.ResponseWriter.Write(b)
 }
+
+// Unwrap lets http.ResponseController reach the connection (a longer write deadline, spec 010's check).
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status, r.wrote = code, true
@@ -386,7 +396,7 @@ func (s *Server) visible(w http.ResponseWriter, r *http.Request, c *auth.Caller,
 // of answers the namespace a request addresses (spec 004), and what to call one of its entries - from the route
 // it matched, never from its path: a secret's name may hold "/v1/variables" (percent-encoded on the wire).
 func (s *Server) of(r *http.Request) (state.Store, string) {
-	if strings.Contains(r.Pattern, " /v1/variables") {
+	if strings.Contains(r.Pattern, " /v1/variables") || strings.Contains(r.Pattern, " /admin/v1/variables") {
 		return s.store.Variables(), "variable"
 	}
 	return s.store, "secret"
@@ -861,6 +871,8 @@ func (s *Server) mutate(w http.ResponseWriter, r *http.Request, verb string,
 		problem(w, http.StatusForbidden, "no_verb", strings.TrimPrefix(err.Error(), errNotHeld.Error()+": "))
 	case errors.Is(err, errInvalid):
 		problem(w, http.StatusUnprocessableEntity, "invalid_secret", strings.TrimPrefix(err.Error(), errInvalid.Error()+": "))
+	case errors.Is(err, errPrecondition):
+		problem(w, http.StatusPreconditionFailed, "precondition_failed", "the entry changed: If-Match not met")
 	case errors.Is(err, state.ErrNotFound):
 		problem(w, http.StatusNotFound, "not_found", "no such grant")
 	case errors.Is(err, keys.ErrSealed) && !s.isAdmin(c) && !errors.Is(err, errInvalid):

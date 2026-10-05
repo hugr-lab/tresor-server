@@ -8,6 +8,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
+# the console (spec 010): its Go package and its build, embedded
+COPY web/console/console.go ./web/console/
+COPY web/console/dist ./web/console/dist
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/tresor-server ./cmd/tresor-server
 
