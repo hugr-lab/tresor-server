@@ -103,3 +103,20 @@ func TestSQLServerRequiresVerifiedTLS(t *testing.T) {
 		t.Fatal("a password in the DSN")
 	}
 }
+
+// read-only (spec 009): a database no service migrated is refused, not migrated; a migrated one reads
+func TestSQLServerReadOnly(t *testing.T) {
+	dsn := sqlserverDB(t)
+	if _, err := OpenSQLServer(ctx, dsn, PasswordLogin{Env: "TRESOR_TEST_SQLSERVER_PASSWORD"}, 2, kek(t, 1), Options{ReadOnly: true}); err == nil {
+		t.Fatal("an unmigrated database opened")
+	}
+	openSQLServer(t, dsn)
+	ro, err := OpenSQLServer(ctx, dsn, PasswordLogin{Env: "TRESOR_TEST_SQLSERVER_PASSWORD"}, 2, kek(t, 1), Options{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if _, err := ro.List(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

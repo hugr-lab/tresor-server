@@ -47,6 +47,9 @@ type Store struct {
 type Options struct {
 	Keys keys.Options
 	Log  *slog.Logger
+	// ReadOnly opens for reading only (tresor-server refs, spec 009): no migration - a schema that is not this
+	// binary's is refused - and no lease, beside a replica that serves; SQLite's connection is query_only.
+	ReadOnly bool
 }
 
 // open wires a store over db: the envelope, the lease where the dialect needs one, the migrations. On a
@@ -59,6 +62,13 @@ func open(ctx context.Context, db *sql.DB, d Dialect, wrapper keys.KeyWrapper, o
 	s := &Store{db: db, d: d, log: opts.Log, migrated: &atomic.Bool{}, closed: &atomic.Bool{}, ns: secretsNS}
 	s.envelope = keys.NewEnvelope(wrapper, dataKeys{s}, opts.Keys)
 	defer s.linkVariables() // after the lease: the variables' store shares it
+	if opts.ReadOnly {
+		if err := schemaCurrent(ctx, db, d); err != nil {
+			return nil, err
+		}
+		s.migrated.Store(true)
+		return s, nil
+	}
 	if !d.SingleWriter {
 		if err := migrate(ctx, db, d); err != nil {
 			return nil, err

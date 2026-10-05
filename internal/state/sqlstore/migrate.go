@@ -71,6 +71,24 @@ func migrate(ctx context.Context, db *sql.DB, d Dialect) error {
 	return nil
 }
 
+// schemaCurrent says whether the database is at this binary's migration, without changing it: a reader of
+// another version would read a schema it does not know.
+func schemaCurrent(ctx context.Context, db *sql.DB, d Dialect) error {
+	all, err := dialectMigrations(d)
+	if err != nil {
+		return err
+	}
+	var newest sql.NullInt64
+	if err := db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&newest); err != nil {
+		return fmt.Errorf("migrations: the database has none (a service has not started on it): %w", err)
+	}
+	if known := all[len(all)-1].version; !newest.Valid || int(newest.Int64) != known {
+		return fmt.Errorf("the database is at migration %d, this binary's is %d: read it with the service's own "+
+			"version", newest.Int64, known)
+	}
+	return nil
+}
+
 // bootstrap makes the migrations' table, under the migrations' lock: replicas starting at once on an empty
 // database would race even on CREATE TABLE IF NOT EXISTS (PostgreSQL: a duplicate type in its catalog).
 func bootstrap(ctx context.Context, db *sql.DB, d Dialect) error {

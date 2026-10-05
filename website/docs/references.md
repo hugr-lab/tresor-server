@@ -142,7 +142,8 @@ material:
   for `azkv`, `dns_suffix` are the source's too.
 - **Renaming or removing a source strands its references.** They are refused at a write, and fail at a fetch
   as a reference outside the allowlist does. They are never read by another source of the kind. Rename a
-  source only with its references rewritten.
+  source only with its references rewritten: `tresor-server refs` lists them (see
+  [Operations](operations.md#checking-references)).
 - The audit and the logs name a reference as written (`ref+vault-us://…`). Spans add the kind
   (`tresor.source.kind`).
 

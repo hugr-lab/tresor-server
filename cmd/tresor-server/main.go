@@ -56,33 +56,59 @@ const readyInterval = 30 * time.Second
 
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	command, args := "serve", os.Args[1:]
-	if len(args) > 0 && args[0] == "rewrap" {
-		command, args = "rewrap", args[1:]
-	}
-	flags := flag.NewFlagSet("tresor-server "+command, flag.ExitOnError)
-	configPath := flags.String("config", "", "the configuration file (optional: TRESOR_CONFIG and TRESOR_<SETTING> "+
-		"variables are read over it)")
-	tagUntagged := false
-	if command == "rewrap" {
-		flags.BoolVar(&tagUntagged, "tag-untagged", false, "rewrap: tag the data keys that have no tag (made before "+
-			"spec 003) - once, at the upgrade: you vouch for the store as it is")
-	}
-	_ = flags.Parse(args)
-	if flags.NArg() > 0 {
-		// `tresor-server -config x rewrap` must not start the service: the command comes first
-		log.Error("tresor-server: unexpected arguments (usage: tresor-server [rewrap] -config <file>)",
-			"arguments", flags.Args())
+	inv, err := parseArgs(os.Args[1:])
+	if err != nil {
+		log.Error("tresor-server: " + err.Error())
 		os.Exit(2)
 	}
 	run := serve
-	if command == "rewrap" {
-		run = func(configPath string, log *slog.Logger) error { return rewrap(configPath, tagUntagged, log) }
+	switch inv.command {
+	case "rewrap":
+		run = func(configPath string, log *slog.Logger) error { return rewrap(configPath, inv.tagUntagged, log) }
+	case "refs":
+		run = func(configPath string, log *slog.Logger) error { return refs(configPath, inv.resolve, os.Stdout, log) }
 	}
-	if err := run(*configPath, log); err != nil {
-		log.Error("tresor-server "+command+" stopped", "error", err.Error())
+	if err := run(inv.configPath, log); err != nil {
+		if errors.Is(err, errFindings) {
+			log.Warn("tresor-server refs: " + err.Error())
+			os.Exit(3)
+		}
+		log.Error("tresor-server "+inv.command+" stopped", "error", err.Error())
 		os.Exit(1)
 	}
+}
+
+// invocation is a command line, parsed.
+type invocation struct {
+	command, configPath  string
+	tagUntagged, resolve bool
+}
+
+// parseArgs reads [rewrap | refs] and the flags; an error is a usage error (exit 2).
+func parseArgs(args []string) (invocation, error) {
+	inv := invocation{command: "serve"}
+	if len(args) > 0 && (args[0] == "rewrap" || args[0] == "refs") {
+		inv.command, args = args[0], args[1:]
+	}
+	flags := flag.NewFlagSet("tresor-server "+inv.command, flag.ContinueOnError)
+	flags.StringVar(&inv.configPath, "config", "", "the configuration file (optional: TRESOR_CONFIG and "+
+		"TRESOR_<SETTING> variables are read over it)")
+	switch inv.command {
+	case "rewrap":
+		flags.BoolVar(&inv.tagUntagged, "tag-untagged", false, "rewrap: tag the data keys that have no tag (made "+
+			"before spec 003) - once, at the upgrade: you vouch for the store as it is")
+	case "refs":
+		flags.BoolVar(&inv.resolve, "resolve", false, "refs: read each admitted reference too, and list those that "+
+			"do not resolve (the value is never printed)")
+	}
+	if err := flags.Parse(args); err != nil {
+		return inv, err
+	}
+	if flags.NArg() > 0 {
+		// `tresor-server -config x rewrap` must not start the service: the command comes first
+		return inv, fmt.Errorf("unexpected arguments %q (usage: tresor-server [rewrap | refs] -config <file>)", flags.Args())
+	}
+	return inv, nil
 }
 
 // rewrap wraps every data key under the KEK's current version (spec 002): after a rotation of the KEK, its
@@ -101,7 +127,7 @@ func rewrap(configPath string, tagUntagged bool, log *slog.Logger) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	st, _, err := openState(ctx, cfg, log)
+	st, _, err := openState(ctx, cfg, log, false)
 	if err != nil {
 		return err
 	}
@@ -120,8 +146,9 @@ func rewrap(configPath string, tagUntagged bool, log *slog.Logger) error {
 	return nil
 }
 
-// openState opens the configured store, and the readiness checks it brings (the KEK's).
-func openState(ctx context.Context, cfg *config.Config, log *slog.Logger) (state.Store, []health.Check, error) {
+// openState opens the configured store, and the readiness checks it brings (the KEK's). readOnly (refs, spec
+// 009): a SQL store neither migrated nor leased; the Kubernetes store writes nothing at its open anyway.
+func openState(ctx context.Context, cfg *config.Config, log *slog.Logger, readOnly bool) (state.Store, []health.Check, error) {
 	switch cfg.State.Kind {
 	case "memory":
 		return memory.New(), nil, nil
@@ -131,7 +158,7 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger) (state
 			return nil, nil, err
 		}
 		st, err := sqlstore.OpenSQLite(ctx, cfg.State.Path, wrapper, sqlstore.Options{Log: log,
-			Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}})
+			Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}, ReadOnly: readOnly})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -150,7 +177,7 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger) (state
 			return nil, nil, err
 		}
 		st, err := open(ctx, cfg.State.DSN, login, cfg.State.MaxOpenConns, wrapper, sqlstore.Options{
-			Log: log, Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}})
+			Log: log, Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}, ReadOnly: readOnly})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -401,7 +428,7 @@ func serve(configPath string, log *slog.Logger) error {
 		}
 	}()
 
-	st, stateChecks, err := openState(ctx, cfg, log)
+	st, stateChecks, err := openState(ctx, cfg, log, false)
 	if err != nil {
 		return err
 	}

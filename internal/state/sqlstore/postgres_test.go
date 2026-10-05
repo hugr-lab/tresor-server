@@ -132,3 +132,20 @@ func TestPostgresReplicasStartTogether(t *testing.T) {
 		}
 	}
 }
+
+// read-only (spec 009): a database no service migrated is refused, not migrated; a migrated one reads
+func TestPostgresReadOnly(t *testing.T) {
+	dsn := postgresDB(t)
+	if _, err := OpenPostgres(ctx, dsn, PasswordLogin{Env: "TRESOR_TEST_POSTGRES_PASSWORD"}, 2, kek(t, 1), Options{ReadOnly: true}); err == nil {
+		t.Fatal("an unmigrated database opened")
+	}
+	openPostgres(t, dsn, nil)
+	ro, err := OpenPostgres(ctx, dsn, PasswordLogin{Env: "TRESOR_TEST_POSTGRES_PASSWORD"}, 2, kek(t, 1), Options{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if _, err := ro.List(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

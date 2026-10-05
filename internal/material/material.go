@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Prefix marks a parameter's value as a reference.
@@ -168,6 +169,47 @@ func (r *Resolver) CheckWrite(provider string, params map[string]json.RawMessage
 		}
 	}
 	return out, nil
+}
+
+// Finding is a stored reference the configuration would not resolve (spec 009): its parameter, and why - the
+// source's error, which names a reference only once it parsed.
+type Finding struct {
+	Param string
+	Err   error
+}
+
+// checkTimeout bounds one reference's read in Check.
+const checkTimeout = 30 * time.Second
+
+// Check lists params' references the sources do not admit (the parse, the allowlist), as at a fetch; with
+// resolve, it reads each admitted one too, and lists those that do not resolve. No value is kept.
+func (r *Resolver) Check(ctx context.Context, params map[string]json.RawMessage, resolve bool) []Finding {
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	var out []Finding
+	for _, key := range keys {
+		p := readParam(params[key])
+		if !p.isStr || !strings.HasPrefix(p.text, Prefix) {
+			continue
+		}
+		src, ref, err := r.parse(p.text)
+		if err != nil {
+			out = append(out, Finding{Param: key, Err: err})
+			continue
+		}
+		if resolve {
+			rctx, cancel := context.WithTimeout(ctx, checkTimeout) // a source that hangs stalls one reference
+			_, _, err := src.Resolve(rctx, ref)
+			cancel()
+			if err != nil {
+				out = append(out, Finding{Param: key, Err: fmt.Errorf("%s: %v", ref, err)})
+			}
+		}
+	}
+	return out
 }
 
 // Resolution is one reference read at a fetch, as logged: where and which version, never the value.
