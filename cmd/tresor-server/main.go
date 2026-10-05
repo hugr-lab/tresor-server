@@ -57,8 +57,8 @@ const readyInterval = 30 * time.Second
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	command, args := "serve", os.Args[1:]
-	if len(args) > 0 && args[0] == "rewrap" {
-		command, args = "rewrap", args[1:]
+	if len(args) > 0 && (args[0] == "rewrap" || args[0] == "refs") {
+		command, args = args[0], args[1:]
 	}
 	flags := flag.NewFlagSet("tresor-server "+command, flag.ExitOnError)
 	configPath := flags.String("config", "", "the configuration file (optional: TRESOR_CONFIG and TRESOR_<SETTING> "+
@@ -68,10 +68,15 @@ func main() {
 		flags.BoolVar(&tagUntagged, "tag-untagged", false, "rewrap: tag the data keys that have no tag (made before "+
 			"spec 003) - once, at the upgrade: you vouch for the store as it is")
 	}
+	resolve := false
+	if command == "refs" {
+		flags.BoolVar(&resolve, "resolve", false, "refs: read each admitted reference too, and list those that do not "+
+			"resolve (the value is never printed)")
+	}
 	_ = flags.Parse(args)
 	if flags.NArg() > 0 {
 		// `tresor-server -config x rewrap` must not start the service: the command comes first
-		log.Error("tresor-server: unexpected arguments (usage: tresor-server [rewrap] -config <file>)",
+		log.Error("tresor-server: unexpected arguments (usage: tresor-server [rewrap | refs] -config <file>)",
 			"arguments", flags.Args())
 		os.Exit(2)
 	}
@@ -79,7 +84,14 @@ func main() {
 	if command == "rewrap" {
 		run = func(configPath string, log *slog.Logger) error { return rewrap(configPath, tagUntagged, log) }
 	}
+	if command == "refs" {
+		run = func(configPath string, log *slog.Logger) error { return refs(configPath, resolve, os.Stdout, log) }
+	}
 	if err := run(*configPath, log); err != nil {
+		if errors.Is(err, errFindings) {
+			log.Warn("tresor-server refs: " + err.Error())
+			os.Exit(3)
+		}
 		log.Error("tresor-server "+command+" stopped", "error", err.Error())
 		os.Exit(1)
 	}

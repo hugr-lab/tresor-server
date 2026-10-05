@@ -48,6 +48,38 @@ Never logged: material, tokens, data keys, a grant's id, a configuration value.
   KEK's `sign`, and `tresor-server rewrap -tag-untagged` once - see [Encryption](encryption.md#the-root).
 - An older binary refuses a database migrated by a newer one: roll forward, or restore the database.
 
+## Checking references
+
+`tresor-server refs` lists the stored references (in secrets and variables) that the configuration would not
+resolve (spec 009):
+
+```sh
+tresor-server refs -config server.yaml            # the parse and the allowlists, as at a fetch
+tresor-server refs -config server.yaml -resolve   # and a read of each one
+```
+
+- **Before a configuration change**: run it with the new configuration against the live store. A source
+  renamed or removed, or an allowlist narrowed, strands references silently otherwise: they fail at their
+  next fetch.
+- **The output**, one line per finding, tab-separated: `secret` or `variable`, the name, the parameter, the
+  reason. A secret that does not open is a finding too.
+
+  ```
+  secret    lake      secret   invalid reference: no source for vault-us references is configured (material:)
+  variable  region    value    invalid reference: ref+vault://secret/x#f is outside the allowlist (material.vault.allow)
+  ```
+
+- **No value** is printed. A reference that does not parse is named by its scheme only: its text may be a value
+  written by mistake.
+- **Exit**: `0` nothing to report, `3` findings, `1` an error.
+- **It runs as the service**: the store, the KEK, and (with `-resolve`) the sources' rights. On Kubernetes:
+
+  ```sh
+  kubectl -n tresor exec deploy/tresor-tresor-server -- /tresor-server refs -config /etc/tresor/server.yaml
+  ```
+
+- It writes nothing. Opening a SQL store runs its migrations, as at a start.
+
 ## Backups
 
 The database holds everything but the KEK. Back it up as any database. Without the KEK its material does not
