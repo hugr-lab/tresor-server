@@ -130,7 +130,8 @@ One schema, and one set of queries written for the portable subset:
 
 - A `TresorSecret` CRD per secret, in the service's namespace. Compare-and-set through
   `resourceVersion`, so several replicas need no database.
-- Grants and delegations live in its status or in sibling resources. To be settled in its own spec.
+- Grants and delegations live in its status or in sibling resources. To be settled in its own spec (settled:
+  spec 003).
 - Material is never in the CRD: it is inline ciphertext, or a reference.
 
 ### Material: inline, or a reference
@@ -240,4 +241,5 @@ Each phase gets its own spec here.
 
 ## Open questions
 
-- **Grants and delegations in the CRD store**: status, or sibling resources (phase 3's spec).
+- ~~**Grants and delegations in the CRD store**: status, or sibling resources (phase 3's spec).~~ Settled in
+  spec 003: the grants in the `TresorSecret`, a delegation grant a `TresorGrant` of its own.

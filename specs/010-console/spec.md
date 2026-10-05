@@ -160,5 +160,5 @@ Writes otherwise use the protocol's routes: `PUT` (create, with `If-None-Match: 
 ## Follow-ups
 
 - The decision on values noted in tresor's spec 009 (tresor-server's console may show unredacted parameters to
-  administrators).
+  administrators). Done: tresor's spec 009, its addendum (hugr-lab/tresor#31).
 - An audit view in the console (the audit stream is stdout and OTLP today).
