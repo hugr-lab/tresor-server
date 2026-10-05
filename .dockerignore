@@ -8,3 +8,5 @@ scripts
 testdata
 *.db
 *.db-*
+web/console/node_modules
+web/console/dist

@@ -1,0 +1,55 @@
+/* The Hugr Lab design system's tokens (claude.ai artifact "Hugr Lab"), light and dark; the status colours are
+   the console's own, 4.5:1 or more on surface and surface-soft in both themes. Fonts are bundled (SIL OFL):
+   no CDN. */
+@import '@fontsource/manrope/400.css';
+@import '@fontsource/manrope/500.css';
+@import '@fontsource/manrope/600.css';
+@import '@fontsource/manrope/700.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --surface: #ffffff; --surface-soft: #f2f7f7; --ink: #0b1f2a; --ink-muted: #4a5b64; --border: #d3e1e2;
+  --brand: #338a86; --brand-strong: #2a7470; --on-brand: #ffffff; --navy: #0a3146; --focus: #2a7470;
+  --success: #1e7a4c; --success-soft: #e3f3ea; --warning: #8a5a00; --warning-soft: #fbf0d9;
+  --danger: #b3261e; --danger-soft: #fbe6e4; --row: #f7fafa;
+  color-scheme: light;
+}
+[data-theme='dark'] {
+  --surface: #061c28; --surface-soft: #0a3146; --ink: #e8f1f2; --ink-muted: #9cb1ba; --border: #1e4a60;
+  --brand: #5cbdb6; --brand-strong: #5cbdb6; --on-brand: #061c28; --focus: #5cbdb6;
+  --success: #5fcb91; --success-soft: #0e3a2c; --warning: #e8b45c; --warning-soft: #3a2e10;
+  --danger: #f08a80; --danger-soft: #401c1c; --row: #0b2737;
+  color-scheme: dark;
+}
+
+html, body { margin: 0; background: var(--surface); color: var(--ink); }
+body { font-family: Manrope, system-ui, sans-serif; font-size: 14px; line-height: 22px; }
+/* a desktop console: below its minimum size the page scrolls, it never squeezes */
+.app { min-width: 1280px; min-height: max(800px, 100vh); }
+.mfe { min-width: 960px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+a { color: var(--brand-strong); }
+a:hover { color: var(--ink); }
+dialog::backdrop { background: rgba(6, 28, 40, 0.45); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+@layer components {
+  .btn { @apply inline-flex items-center gap-2 rounded-full px-4 py-2 font-semibold text-[14px] leading-5 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed; }
+  .btn-primary { @apply btn bg-strong text-on-brand; }
+  .btn-secondary { @apply btn border border-strong text-strong bg-transparent; }
+  .btn-danger { @apply btn border border-danger text-danger bg-transparent; }
+  .btn-danger-fill { @apply btn bg-danger text-white; }
+  .btn-ghost { @apply btn text-ink bg-transparent hover:bg-soft; }
+  .icon-btn { @apply inline-flex h-8 w-8 items-center justify-center rounded-full text-muted hover:bg-soft cursor-pointer; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full px-2 text-[12px] leading-5 font-semibold whitespace-nowrap; }
+  .input { @apply rounded-sm border border-line bg-surface px-3 py-2 text-ink outline-none; }
+  .eyebrow { @apply text-[12px] font-semibold uppercase tracking-[0.08em] text-muted; }
+  .card { @apply rounded-lg border border-line p-6; }
+  .th { @apply px-3 py-2.5 text-left text-[12px] font-semibold uppercase tracking-[0.04em] text-muted; }
+  .td { @apply px-3 py-3 align-top; }
+}

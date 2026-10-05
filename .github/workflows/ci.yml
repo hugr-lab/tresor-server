@@ -74,6 +74,26 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+  # the console (spec 010): types, tests, every shipped package's licence permissive, the build
+  console:
+    name: Console
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web/console
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/console/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run licenses
+      - run: npm run build
+
   # ZITADEL in docker (spec 006): the service as its issuer's client with key_file, a token minted by exchange
   zitadel:
     name: ZITADEL (token exchange, key_file)
