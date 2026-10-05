@@ -4,8 +4,9 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { Check, CheckCircle2, CircleAlert, Search, Users } from 'lucide-react'
 import { useApp, useLoad } from '../context'
 import { useLists } from '../lists'
-import { seg } from '../lib/api'
-import type { Finding } from '../lib/types'
+import { route, seg } from '../lib/api'
+import type { Finding, Grant } from '../lib/types'
+import { idFor } from '../lib/grants'
 import { Empty, ErrorState, PageTitle, Skeleton, useToast } from '../components/ui'
 
 interface GrantsAnswer {
@@ -13,7 +14,19 @@ interface GrantsAnswer {
   entries?: { kind: 'secret' | 'variable'; name: string; grant_id: string; others: string[] }[]
 }
 
-const grantID = (principal: string) => principal.replace(/[^A-Za-z0-9_.-]/g, '-')
+/** grants principal use of an entry: its existing grant's id, else tresor's - one grant, as from SQL */
+async function grant(api: import('../lib/api').Api, kind: string, name: string, principal: string) {
+  const existing = (await api.get<Grant[]>(`/v1/${kind}s/${seg(name)}/grants`)).data
+  await api.call('PUT', `/v1/${kind}s/${seg(name)}/grants/${seg(idFor(existing, principal))}`, { principal, verbs: ['use'] })
+}
+
+/** every grant of principal on an entry: one made from SQL and one from elsewhere may both be there */
+async function revoke(api: import('../lib/api').Api, kind: string, name: string, principal: string) {
+  const existing = (await api.get<Grant[]>(`/v1/${kind}s/${seg(name)}/grants`)).data
+  for (const g of existing.filter((x) => x.principal === principal)) {
+    await api.call('DELETE', `/v1/${kind}s/${seg(name)}/grants/${seg(g.id)}`)
+  }
+}
 
 export function Access() {
   const { api } = useApp()
@@ -101,7 +114,7 @@ export function Access() {
                 const [kind, ...rest] = entry.split(':')
                 const name = rest.join(':')
                 if (!choices.includes(entry)) return
-                change(() => api.call('PUT', `/v1/${kind}s/${seg(name)}/grants/${seg(grantID(principal))}`, { principal, verbs: ['use'] }), `${principal} may use ${name}`)
+                change(() => grant(api, kind, name, principal), `${principal} may use ${name}`)
                   .then(() => setEntry(''))
               }}>
                 <label className="flex flex-1 items-center rounded-sm border border-line bg-surface px-3 py-1.5">
@@ -119,13 +132,13 @@ export function Access() {
                   <thead><tr><th className="th pl-4">Entry</th><th className="th">Kind</th><th className="th">Also granted to</th><th className="th"><span className="sr-only">Revoke</span></th></tr></thead>
                   <tbody>
                     {(one.data?.entries ?? []).map((e) => (
-                      <tr key={`${e.kind}/${e.name}`} className="border-t border-line">
-                        <td className="td pl-4"><Link to={`/${e.kind}s/${seg(e.name)}`} className="font-mono text-[13px]">{e.name}</Link></td>
+                      <tr key={`${e.kind}/${e.name}/${e.grant_id}`} className="border-t border-line">
+                        <td className="td pl-4"><Link to={`/${e.kind}s/${route(e.name)}`} className="font-mono text-[13px]">{e.name}</Link></td>
                         <td className="td text-[13px] text-muted">{e.kind}</td>
                         <td className="td font-mono text-[12px] text-muted">{e.others.join(', ') || '—'}</td>
                         <td className="td text-right">
                           <button type="button" className="btn-ghost border border-line py-1 text-[13px]"
-                            onClick={() => change(() => api.call('DELETE', `/v1/${e.kind}s/${seg(e.name)}/grants/${seg(e.grant_id)}`), `${principal} may no longer use ${e.name}`)}>
+                            onClick={() => change(() => revoke(api, e.kind, e.name, principal), `${principal} may no longer use ${e.name}`)}>
                             Revoke
                           </button>
                         </td>
@@ -191,7 +204,7 @@ export function RefsCheck() {
                 <tbody>
                   {state.findings.map((f, i) => (
                     <tr key={i} className="border-t border-line">
-                      <td className="td pl-4"><span className="chip mr-2 border border-line font-normal text-muted">{f.kind}</span><Link to={`/${f.kind}s/${seg(f.name)}`} className="font-mono text-[13px]">{f.name}</Link></td>
+                      <td className="td pl-4"><span className="chip mr-2 border border-line font-normal text-muted">{f.kind}</span><Link to={`/${f.kind}s/${route(f.name)}`} className="font-mono text-[13px]">{f.name}</Link></td>
                       <td className="td font-mono text-[13px]">{f.param}</td>
                       <td className="td"><span className="flex gap-2"><CircleAlert size={16} className="mt-[3px] flex-none text-danger" aria-hidden /><span className="break-all font-mono text-[13px]">{f.reason}</span></span></td>
                     </tr>

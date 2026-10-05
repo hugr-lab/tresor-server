@@ -1,4 +1,5 @@
 // Before the console: signing in, the redirect's return, and a refusal for whoever is not an administrator.
+import { useState } from 'react'
 import { CircleAlert, LogIn } from 'lucide-react'
 import type { ConsoleConfig } from '../lib/config'
 import type { Session } from '../lib/auth'
@@ -16,8 +17,10 @@ function Card({ children, theme }: { children: React.ReactNode; theme: string })
   )
 }
 
-export function SignIn({ config, session, theme, error }: { config: ConsoleConfig; session: Session; theme: string; error?: string }) {
+export function SignIn({ config, session, theme, error: given }: { config: ConsoleConfig; session: Session; theme: string; error?: string }) {
   const host = new URL(config.api).host
+  const [failed, setFailed] = useState<string>()
+  const error = failed ?? given
   return (
     <Card theme={theme}>
       <div className="flex flex-col gap-1.5">
@@ -32,7 +35,8 @@ export function SignIn({ config, session, theme, error }: { config: ConsoleConfi
         <div className="flex flex-col gap-2.5">
           {config.issuers.map((is, i) => (
             <button key={is.issuer} type="button" className={i === 0 ? 'btn-primary justify-center py-3' : 'btn-secondary justify-center py-3'}
-              onClick={() => session.signIn(is, window.location.pathname.replace(new URL(document.baseURI).pathname.replace(/\/$/, ''), '') || '/secrets')}>
+              onClick={() => session.signIn(is, window.location.pathname.replace(new URL(document.baseURI).pathname.replace(/\/$/, ''), '') || '/secrets')
+                .catch((e) => setFailed(`The identity provider did not answer: ${(e as Error).message}`))}>
               <LogIn size={18} aria-hidden /> Sign in with {new URL(is.issuer).host}
             </button>
           ))}

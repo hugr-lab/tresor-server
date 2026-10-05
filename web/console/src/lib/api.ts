@@ -61,5 +61,12 @@ export class Api {
   }
 }
 
-/** a name in a path: the protocol's names are any UTF-8 text */
+/** a name in an API path: the protocol's names are any UTF-8 text */
 export const seg = (name: string) => encodeURIComponent(name)
+
+/** a name in the console's own routes: encoded twice, since the router decodes a parameter once (%2F stays a
+ * name's character, never a path separator) */
+export const route = (name: string) => encodeURIComponent(encodeURIComponent(name))
+
+/** a route parameter back to the name */
+export const nameOf = (param: string | undefined) => (param === undefined ? '' : decodeURIComponent(param))

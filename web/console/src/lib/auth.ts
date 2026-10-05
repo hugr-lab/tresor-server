@@ -6,11 +6,13 @@ import { InMemoryWebStorage, UserManager, WebStorageStateStore, type User } from
 import type { IssuerConfig } from './config'
 
 const lastIssuer = 'tresor.issuer' // which issuer this tab signed in with: a URL, no secret
+const popupName = 'tresor-signin' // the window a sign-in again opens in
 
 export class Session {
   private managers = new Map<string, UserManager>()
   private user: User | null = null
   private listeners = new Set<() => void>()
+  private completing?: Promise<string | undefined> // a callback runs once, however often it is asked
 
   constructor(private issuers: IssuerConfig[]) {}
 
@@ -27,6 +29,8 @@ export class Session {
         userStore: new WebStorageStateStore({ store: new InMemoryWebStorage() }),
         stateStore: new WebStorageStateStore({ store: window.sessionStorage }),
         popup_redirect_uri: new URL('callback', document.baseURI).href,
+        popupWindowTarget: popupName,
+        post_logout_redirect_uri: new URL('./', document.baseURI).href,
         automaticSilentRenew: true, // with a refresh token; without one the session ends and the page asks again
         monitorSession: false,
         loadUserInfo: false,
@@ -79,14 +83,36 @@ export class Session {
   }
 
   /** completes a sign-in: a redirect's (the path to go back to), or a popup's (undefined: the window closes) */
-  async callback(): Promise<string | undefined> {
-    const issuer = this.remembered() ?? (window.opener ? this.issuers[0] : undefined)
+  callback(): Promise<string | undefined> {
+    this.completing ??= this.complete()
+    return this.completing
+  }
+
+  private async complete(): Promise<string | undefined> {
+    if (window.opener && window.name === popupName) {
+      // a popup: hand the answer to the opener, which holds the state (this window has an older copy)
+      const issuer = this.remembered() ?? this.issuers[0]
+      await this.manager(issuer).signinPopupCallback()
+      return undefined
+    }
+    const issuer = this.issuerOfState() ?? this.remembered()
     if (!issuer) throw new Error('no sign-in is in progress in this tab')
-    const user = await this.manager(issuer).signinCallback()
-    if (!user) return undefined // a popup: its opener has the user now
+    const user = await this.manager(issuer).signinRedirectCallback()
     this.set(user)
     const state = user.state as { returnTo?: string } | undefined
     return state?.returnTo && state.returnTo.startsWith('/') ? state.returnTo : '/secrets'
+  }
+
+  /** the issuer the returning sign-in began with: its stored state names it */
+  private issuerOfState(): IssuerConfig | undefined {
+    const state = new URLSearchParams(window.location.search).get('state')
+    if (!state) return undefined
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(`oidc.${state}`) ?? '{}') as { authority?: string }
+      return this.issuers.find((i) => i.issuer === stored.authority)
+    } catch {
+      return undefined
+    }
   }
 
   /** signs in again in a popup: the page and an editor's input stay as they are */
@@ -97,15 +123,29 @@ export class Session {
   }
 
   async token(): Promise<string> {
-    if (!this.user || this.user.expired) throw new SessionEnded()
+    if (!this.user || this.user.expired) {
+      this.notify() // the banner shows now, not at the next render
+      throw new SessionEnded()
+    }
     return this.user.access_token
   }
 
+  /** ends the session here and at the IdP (a shared machine signs in anew); the refresh token revoked first */
   async signOut(): Promise<void> {
     const issuer = this.remembered()
     sessionStorage.removeItem(lastIssuer)
-    this.set(null)
-    if (issuer) await this.manager(issuer).removeUser()
+    if (!issuer) {
+      this.set(null)
+      return
+    }
+    const m = this.manager(issuer)
+    await m.revokeTokens(['refresh_token']).catch(() => undefined)
+    try {
+      await m.signoutRedirect({ id_token_hint: this.user?.id_token })
+    } catch {
+      this.set(null) // no end-session endpoint: this tab forgets the user
+      await m.removeUser()
+    }
   }
 }
 

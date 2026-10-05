@@ -4,10 +4,9 @@ import { useState } from 'react'
 import { Users, X } from 'lucide-react'
 import { useApp, useLoad } from '../context'
 import { seg } from '../lib/api'
+import { idFor } from '../lib/grants'
 import type { Grant } from '../lib/types'
 import { ErrorState } from './ui'
-
-const grantID = (principal: string) => principal.replace(/[^A-Za-z0-9_.-]/g, '-')
 
 export function Grants({ kind, name, onChange }: { kind: 'secrets' | 'variables'; name: string; onChange?: () => void }) {
   const { api } = useApp()
@@ -50,7 +49,7 @@ export function Grants({ kind, name, onChange }: { kind: 'secrets' | 'variables'
         e.preventDefault()
         if (!valid) return
         const p = principal.trim()
-        change(() => api.call('PUT', `/v1/${kind}/${seg(name)}/grants/${seg(grantID(p))}`, { principal: p, verbs: ['use'] })).then(() => setPrincipal(''))
+        change(() => api.call('PUT', `/v1/${kind}/${seg(name)}/grants/${seg(idFor(grants.data ?? [], p))}`, { principal: p, verbs: ['use'] })).then(() => setPrincipal(''))
       }}>
         <label className="flex flex-1 items-center rounded-sm border border-line px-3 py-1.5">
           <span className="sr-only">Principal</span>

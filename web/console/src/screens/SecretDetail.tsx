@@ -5,7 +5,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ChevronRight, Copy, Eye, EyeOff, Link2, Pencil, Trash2, Zap } from 'lucide-react'
 import { useApp, useLoad } from '../context'
 import { useLists } from '../lists'
-import { seg } from '../lib/api'
+import { nameOf, route, seg } from '../lib/api'
 import { rowsOf } from '../lib/params'
 import { sqlPreview } from '../lib/sql'
 import type { Shape } from '../lib/types'
@@ -13,7 +13,11 @@ import { Grants } from '../components/Grants'
 import { ConfirmDelete, ErrorState, Masked, Skeleton, VerbChips, useToast } from '../components/ui'
 
 export function SecretDetail() {
-  const name = useParams().name!
+  const name = nameOf(useParams().name)
+  return <Detail key={name} name={name} /> // a new secret is a new page: nothing shown carries over
+}
+
+function Detail({ name }: { name: string }) {
   const { api, service } = useApp()
   const { secrets } = useLists()
   const navigate = useNavigate()
@@ -22,20 +26,36 @@ export function SecretDetail() {
   const [tab, setTab] = useState<'params' | 'sql'>('params')
   const [deleting, setDeleting] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
+  const [failure, setFailure] = useState<unknown>(null)
   const shape = useLoad(() => api.get<Shape>(`/admin/v1/secrets/${seg(name)}/shape${shown ? '?values=1' : ''}`).then((r) => r.data), [api, name, shown])
   const d = secrets.data?.find((s) => s.name === name)
   const rows = useMemo(() => rowsOf(shape.data?.params ?? []), [shape.data])
   if (shape.error) return <ErrorState error={shape.error} onRetry={shape.reload} />
-  if (!shape.data || !d) return <Skeleton />
+  if (secrets.error) return <ErrorState error={secrets.error} onRetry={secrets.reload} />
+  if (!shape.data || !secrets.data) return <Skeleton />
+  if (!d) {
+    // created elsewhere since the list was read
+    return (
+      <div className="flex flex-col items-start gap-3">
+        <span className="text-muted">The list does not have {name} yet.</span>
+        <button type="button" className="btn-secondary" onClick={secrets.reload}>Reload the list</button>
+      </div>
+    )
+  }
   const minted = d.provider === 'token_exchange'
   const saveComment = async () => {
-    await api.call('PATCH', `/v1/secrets/${seg(name)}`, { comment: editing })
-    setEditing(null)
-    secrets.reload()
-    toast('Comment saved')
+    try {
+      await api.call('PATCH', `/v1/secrets/${seg(name)}`, { comment: editing })
+      setEditing(null)
+      secrets.reload()
+      toast('Comment saved')
+    } catch (e) {
+      setFailure(e)
+    }
   }
   return (
     <>
+      {failure != null && <ErrorState error={failure} />}
       <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-[13px] text-muted">
         <Link to="/secrets">Secrets</Link>
         <ChevronRight size={14} aria-hidden />
@@ -83,7 +103,7 @@ export function SecretDetail() {
           <div><dt className="text-muted">Updated</dt><dd className="m-0">{new Date(d.updated_at).toLocaleString()}</dd></div>
         </dl>
         <div className="flex gap-2">
-          {d.permissions.includes('update') && <Link to={`/secrets/${seg(name)}/edit`} className="btn-primary no-underline">Replace</Link>}
+          {d.permissions.includes('update') && <Link to={`/secrets/${route(name)}/edit`} className="btn-primary no-underline">Replace</Link>}
           {d.permissions.includes('delete') && (
             <button type="button" className="btn-danger" onClick={() => setDeleting(name)}><Trash2 size={16} aria-hidden /> Delete</button>
           )}

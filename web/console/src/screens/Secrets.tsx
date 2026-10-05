@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Database, Globe, KeyRound, Link2, Plus, Zap } from 'lucide-react'
 import { useApp } from '../context'
 import { useLists } from '../lists'
-import { seg } from '../lib/api'
+import { route, seg } from '../lib/api'
 import { ago } from '../lib/time'
 import type { Descriptor } from '../lib/types'
 import { Banner, ConfirmDelete, Empty, ErrorState, FilterChip, PageTitle, Pager, RowMenu, SearchBox, Skeleton, VerbChips, usePaging, useToast } from '../components/ui'
@@ -40,7 +40,7 @@ export function Secrets() {
       <PageTitle title="Secrets">
         <span className="pb-1 text-muted">{all.length} secrets · DuckDB fetches material at query time; you manage, roles use.</span>
         {mayCreate && (
-          <Link to="/secrets/new" className="btn-primary ml-auto no-underline">
+          <Link to="/create/secret" className="btn-primary ml-auto no-underline">
             <Plus size={16} aria-hidden /> New secret
           </Link>
         )}
@@ -80,7 +80,7 @@ export function Secrets() {
                     <tr key={s.name} className="border-t border-line hover:bg-row">
                       <td className="td pl-4">
                         <div className="flex flex-col gap-1">
-                          <Link to={`/secrets/${seg(s.name)}`} className="font-mono font-medium no-underline">{s.name}</Link>
+                          <Link to={`/secrets/${route(s.name)}`} className="font-mono font-medium no-underline">{s.name}</Link>
                           {s.dynamic && (
                             <span className="chip w-fit bg-soft text-muted"><Zap size={12} aria-hidden /> dynamic · token per caller</span>
                           )}
@@ -102,8 +102,8 @@ export function Secrets() {
                       <td className="td"><VerbChips verbs={s.permissions} /></td>
                       <td className="td text-right">
                         <RowMenu label={s.name} items={[
-                          { label: 'Open', onSelect: () => navigate(`/secrets/${seg(s.name)}`) },
-                          ...(s.permissions.includes('update') ? [{ label: 'Replace', onSelect: () => navigate(`/secrets/${seg(s.name)}/edit`) }] : []),
+                          { label: 'Open', onSelect: () => navigate(`/secrets/${route(s.name)}`) },
+                          ...(s.permissions.includes('update') ? [{ label: 'Replace', onSelect: () => navigate(`/secrets/${route(s.name)}/edit`) }] : []),
                           ...(s.permissions.includes('delete') ? [{ label: 'Delete…', danger: true, onSelect: () => setDeleting(s.name) }] : []),
                         ]} />
                       </td>

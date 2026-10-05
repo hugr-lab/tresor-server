@@ -5,7 +5,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Eye, Link2, Plus, Variable } from 'lucide-react'
 import { useApp, useLoad } from '../context'
 import { useLists } from '../lists'
-import { ApiError, seg } from '../lib/api'
+import { ApiError, nameOf, route, seg } from '../lib/api'
 import { ago } from '../lib/time'
 import type { Shape } from '../lib/types'
 import { Grants } from '../components/Grants'
@@ -17,7 +17,8 @@ export function Variables() {
   const { variables } = useLists()
   const navigate = useNavigate()
   const toast = useToast()
-  const selected = useParams().name
+  const param = useParams().name
+  const selected = param === undefined ? undefined : nameOf(param)
   const [query, setQuery] = useState('')
   const [deleting, setDeleting] = useState<string | null>(null)
   const all = variables.data ?? []
@@ -30,7 +31,7 @@ export function Variables() {
     <>
       <PageTitle title="Variables">
         <span className="pb-1 text-muted">Named strings DuckDB reads by name: buckets, endpoints, settings.</span>
-        <Link to="/variables/new" className="btn-primary ml-auto no-underline"><Plus size={16} aria-hidden /> New variable</Link>
+        <Link to="/create/variable" className="btn-primary ml-auto no-underline"><Plus size={16} aria-hidden /> New variable</Link>
       </PageTitle>
       <div role="search" className="flex items-center gap-2">
         <SearchBox value={query} onChange={(v) => { setQuery(v); reset() }} placeholder="Name or comment" label="Filter variables" />
@@ -57,7 +58,7 @@ export function Variables() {
                 <tbody>
                   {rows.map((v) => (
                     <tr key={v.name} className={`border-t border-line hover:bg-row ${v.name === selected ? 'bg-row' : ''}`}>
-                      <td className="td pl-4"><Link to={`/variables/${seg(v.name)}`} className="font-mono font-medium no-underline">{v.name}</Link></td>
+                      <td className="td pl-4"><Link to={`/variables/${route(v.name)}`} className="font-mono font-medium no-underline">{v.name}</Link></td>
                       <td className="td text-muted">{v.comment}</td>
                       <td className="td whitespace-nowrap">{ago(v.updated_at)}</td>
                       <td className="td">
@@ -67,8 +68,8 @@ export function Variables() {
                       </td>
                       <td className="td text-right">
                         <RowMenu label={v.name} items={[
-                          { label: 'Open', onSelect: () => navigate(`/variables/${seg(v.name)}`) },
-                          { label: 'Replace', onSelect: () => navigate(`/variables/${seg(v.name)}/edit`) },
+                          { label: 'Open', onSelect: () => navigate(`/variables/${route(v.name)}`) },
+                          { label: 'Replace', onSelect: () => navigate(`/variables/${route(v.name)}/edit`) },
                           { label: 'Delete…', danger: true, onSelect: () => setDeleting(v.name) },
                         ]} />
                       </td>
@@ -127,7 +128,7 @@ function VariableDetail({ name, onDelete }: { name: string; onDelete: () => void
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Link to={`/variables/${seg(name)}/edit`} className="btn-secondary py-1 text-[13px] no-underline">Replace</Link>
+        <Link to={`/variables/${route(name)}/edit`} className="btn-secondary py-1 text-[13px] no-underline">Replace</Link>
         <button type="button" className="btn-danger py-1 text-[13px]" onClick={onDelete}>Delete…</button>
       </div>
       <Grants kind="variables" name={name} onChange={variables.reload} />
@@ -140,7 +141,8 @@ function VariableDetail({ name, onDelete }: { name: string; onDelete: () => void
 }
 
 export function VariableEditor({ mode }: { mode: 'create' | 'replace' }) {
-  const existing = useParams().name
+  const param = useParams().name
+  const existing = param === undefined ? undefined : nameOf(param)
   const { api, service } = useApp()
   const { variables } = useLists()
   const navigate = useNavigate()
@@ -150,6 +152,7 @@ export function VariableEditor({ mode }: { mode: 'create' | 'replace' }) {
     [api, existing, mode],
   )
   const current = variables.data?.find((v) => v.name === existing)
+  if (shape.error) return <ErrorState error={shape.error} onRetry={shape.reload} />
   if (mode === 'replace' && (shape.loading || !variables.data)) return <Skeleton />
   const p = shape.data?.params.find((x) => x.name === 'value')
   return (
@@ -159,7 +162,7 @@ export function VariableEditor({ mode }: { mode: 'create' | 'replace' }) {
         await api.call('PUT', `/v1/variables/${seg(name)}`, { value, comment }, version ? { 'If-Match': `"${version}"` } : { 'If-None-Match': '*' })
         toast(`${name} saved`)
         variables.reload()
-        navigate(`/variables/${seg(name)}`)
+        navigate(`/variables/${route(name)}`)
       }} />
   )
 }
@@ -180,13 +183,13 @@ function VariableForm({ existing, version, initialComment, initialValue, isRef, 
   return (
     <div className="flex flex-col gap-5">
       <header className="flex items-center gap-3">
-        <Link to={existing ? `/variables/${seg(existing)}` : '/variables'} aria-label="Back" className="icon-btn h-9 w-9 border border-line text-ink"><ArrowLeft size={18} /></Link>
+        <Link to={existing ? `/variables/${route(existing)}` : '/variables'} aria-label="Back" className="icon-btn h-9 w-9 border border-line text-ink"><ArrowLeft size={18} /></Link>
         <div className="flex flex-col leading-[18px]">
           <span className="eyebrow">{existing ? 'Replace variable' : 'New variable'}</span>
           <h1 className="m-0 font-mono text-[20px] font-medium leading-7">{existing ?? (name || 'untitled')}</h1>
         </div>
         <div className="ml-auto flex gap-2">
-          <Link to={existing ? `/variables/${seg(existing)}` : '/variables'} className="btn-secondary no-underline">Cancel</Link>
+          <Link to={existing ? `/variables/${route(existing)}` : '/variables'} className="btn-secondary no-underline">Cancel</Link>
           <button type="button" className="btn-primary" disabled={busy || !name.trim() || (mode === 'ref' && !ref) || tooLong}
             onClick={async () => {
               setBusy(true)

@@ -35,7 +35,7 @@ export function parseRef(text: string, sources: Source[]): RefParts | undefined 
   if (src.kind === 'vault') {
     const [where, field = ''] = rest.split('#')
     const i = where.indexOf('/')
-    return { source: src.name, a: where.slice(0, i), b: where.slice(i + 1), c: field }
+    return i < 0 ? { source: src.name, a: where, b: '', c: field } : { source: src.name, a: where.slice(0, i), b: where.slice(i + 1), c: field }
   }
   const parts = rest.split('/')
   return { source: src.name, a: parts[0] ?? '', b: parts[1] ?? '', c: parts[2] ?? '' }

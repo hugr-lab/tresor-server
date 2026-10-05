@@ -135,8 +135,12 @@ function UserMenu() {
           </div>
           <span className="text-[12px] text-muted">The session ends {new Date(me.expires_at).toLocaleTimeString()}.</span>
           <button type="button" role="menuitem" className="btn-ghost justify-start px-2" onClick={async () => {
-            const r = await api.call<{ revoked: number }>('DELETE', '/v1/delegations')
-            toast(`${r.data.revoked} session(s) on servers revoked`)
+            try {
+              const r = await api.call<{ revoked: number }>('DELETE', '/v1/delegations')
+              toast(`${r.data.revoked} session(s) on servers revoked`)
+            } catch (e) {
+              toast(`Not revoked: ${(e as Error).message}`)
+            }
             setOpen(false)
           }}>
             Revoke my sessions on servers

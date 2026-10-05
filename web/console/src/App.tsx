@@ -14,11 +14,11 @@ function Framed() {
     <Shell counts={{ secrets: secrets.data?.length, variables: variables.data?.length }}>
       <Routes>
         <Route path="/secrets" element={<Secrets />} />
-        <Route path="/secrets/new" element={<SecretEditor mode="create" />} />
+        <Route path="/create/secret" element={<SecretEditor mode="create" />} />
         <Route path="/secrets/:name" element={<SecretDetail />} />
         <Route path="/secrets/:name/edit" element={<SecretEditor mode="replace" />} />
         <Route path="/variables" element={<Variables />} />
-        <Route path="/variables/new" element={<VariableEditor mode="create" />} />
+        <Route path="/create/variable" element={<VariableEditor mode="create" />} />
         <Route path="/variables/:name" element={<Variables />} />
         <Route path="/variables/:name/edit" element={<VariableEditor mode="replace" />} />
         <Route path="/access" element={<Access />} />

@@ -13,6 +13,7 @@ export default defineConfig({
     assetsDir: 'assets',
     sourcemap: false,
     modulePreload: { polyfill: false }, // the polyfill is an inline script
+    assetsInlineLimit: 0, // a font inlined as data: is refused by font-src 'self': every asset a file
   },
   server: {
     proxy: { '/v1': 'http://127.0.0.1:8080', '/admin': 'http://127.0.0.1:8080', '/ui/config.json': 'http://127.0.0.1:8080' },

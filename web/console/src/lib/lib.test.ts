@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { encode, forCreate, forReplace, newRow, problems, rowsOf, looksSecret } from './params'
+import { encode, forCreate, forReplace, newRow, problems, rowsOf, looksSecret, rebase } from './params'
+import { grantId, idFor } from './grants'
 import { buildRef, parseRef, allowed } from './refs'
-import { sqlPreview } from './sql'
+import { ident, sqlPreview } from './sql'
 import { ago } from './time'
 import type { Source } from './types'
 
@@ -59,6 +60,47 @@ describe('params', () => {
     expect(p.get(c.key)).toMatch(/name/)
     expect(p.get(d.key)).toMatch(/whole number/)
     expect(p.has(a.key)).toBe(false)
+  })
+})
+
+describe('the review of (010 b)', () => {
+  it('marks a kept parameter secret when the toggle says so', () => {
+    const rows = rowsOf([{ name: 'token', type: 'VARCHAR', redacted: false, value: 'x' }])
+    rows[0] = { ...rows[0], secret: true }
+    expect(forReplace(rows).redact_keys).toEqual(['token'])
+  })
+  it('unwraps typed values, and refuses empty ones and big integers', () => {
+    const rows = rowsOf([
+      { name: 'port', type: 'INTEGER', redacted: false, value: { type: 'INTEGER', value: 5432 } },
+      { name: 'h', type: 'MAP(VARCHAR, VARCHAR)', redacted: false, value: { type: 'MAP(VARCHAR, VARCHAR)', value: { a: 'b' } } },
+    ])
+    expect(rows[0].value).toBe('5432')
+    expect(rows[1].value).toBe('{"a":"b"}')
+    const pw = { ...rowsOf([{ name: 'password', type: 'VARCHAR', redacted: true }])[0], mode: 'value' as const, value: '' }
+    expect(problems([pw]).get(pw.key)).toMatch(/value is needed/)
+    expect(() => encode('BIGINT', '9007199254740993')).toThrow(/2\^53/)
+  })
+  it('sets a removed name again instead of removing it', () => {
+    const rows = rowsOf([{ name: 'host', type: 'VARCHAR', redacted: false, value: 'a' }])
+    rows[0] = { ...rows[0], removed: true }
+    const again = { ...newRow('host'), value: 'b' }
+    expect(forReplace([...rows, again])).toMatchObject({ remove: [], set: { host: 'b' } })
+  })
+  it('carries an edit over onto a newer version', () => {
+    const mine = rowsOf([{ name: 'host', type: 'VARCHAR', redacted: false, value: 'a' }, { name: 'pw', type: 'VARCHAR', redacted: true }])
+    mine[0] = { ...mine[0], mode: 'value', value: 'mine' }
+    const added = { ...newRow('port'), type: 'INTEGER', value: '1' }
+    const rebased = rebase([{ name: 'host', type: 'VARCHAR', redacted: false, value: 'theirs' }, { name: 'pw', type: 'VARCHAR', redacted: true }, { name: 'db', type: 'VARCHAR', redacted: false }], [...mine, added])
+    expect(rebased.map((r) => [r.name, r.mode, r.value])).toEqual([['host', 'value', 'mine'], ['pw', 'keep', ''], ['db', 'keep', ''], ['port', 'value', '1']])
+  })
+  it('computes tresor\'s grant ids', () => {
+    expect(grantId('role:analysts')).toMatch(/^g-[0-9a-f]{16}$/)
+    expect(grantId('role:a/b')).not.toBe(grantId('role:a:b'))
+    expect(idFor([{ id: 'mine', principal: 'role:x', verbs: ['use'] }], 'role:x')).toBe('mine')
+  })
+  it('quotes odd names in SQL', () => {
+    expect(ident('lake_s3')).toBe('lake_s3')
+    expect(ident('my secret')).toBe('"my secret"')
   })
 })
 

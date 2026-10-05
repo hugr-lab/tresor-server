@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
@@ -61,5 +62,16 @@ func TestHandler(t *testing.T) {
 	h.ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/ui/config.json", nil))
 	if post.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST: %d", post.Code)
+	}
+}
+
+// a page whose files are not in the build (a local build's index.html committed alone) is replaced by a note
+func TestMissingAssets(t *testing.T) {
+	page := []byte(`<script type="module" src="./assets/index-x.js"></script><link href="./assets/index-y.css">`)
+	if got := missingAssets(fstest.MapFS{"assets/index-y.css": {}}, page); got != "assets/index-x.js" {
+		t.Fatalf("%q", got)
+	}
+	if got := missingAssets(fstest.MapFS{"assets/index-x.js": {}, "assets/index-y.css": {}}, page); got != "" {
+		t.Fatalf("%q", got)
 	}
 }

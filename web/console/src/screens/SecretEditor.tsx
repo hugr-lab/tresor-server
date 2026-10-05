@@ -6,8 +6,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Lock, Plus, Terminal, Trash2, X } from 'lucide-react'
 import { useApp, useLoad } from '../context'
 import { useLists } from '../lists'
-import { ApiError, seg } from '../lib/api'
-import { forCreate, forReplace, looksSecret, newRow, problems, rowsOf, type Mode, type Row } from '../lib/params'
+import { ApiError, nameOf, route, seg } from '../lib/api'
+import { forCreate, forReplace, looksSecret, newRow, problems, rebase, rowsOf, type Mode, type Row } from '../lib/params'
 import { sqlPreview } from '../lib/sql'
 import type { Shape } from '../lib/types'
 import { RefField } from '../components/RefField'
@@ -17,21 +17,26 @@ const types = ['s3', 'gcs', 'r2', 'azure', 'postgres', 'mysql', 'mssql', 'http',
 const duckTypes = ['VARCHAR', 'INTEGER', 'BIGINT', 'DOUBLE', 'BOOLEAN', 'MAP(VARCHAR, VARCHAR)', 'STRUCT', 'VARCHAR[]']
 
 export function SecretEditor({ mode }: { mode: 'create' | 'replace' }) {
-  const params = useParams()
+  const param = useParams().name
   const { api } = useApp()
   const { secrets } = useLists()
-  const existing = mode === 'replace' ? params.name! : undefined
+  const existing = mode === 'replace' ? nameOf(param) : undefined
   const shape = useLoad<Shape | undefined>(
     () => (existing ? api.get<Shape>(`/admin/v1/secrets/${seg(existing)}/shape?values=1`).then((r) => r.data) : Promise.resolve(undefined)),
     [api, existing],
   )
   const d = secrets.data?.find((s) => s.name === existing)
-  if (existing && (shape.loading || !secrets.data)) return <Skeleton />
   if (shape.error) return <ErrorState error={shape.error} onRetry={shape.reload} />
-  return <Form key={existing ?? 'new'} existing={existing} shape={shape.data} initial={d ? { type: d.type, provider: d.provider, scope: d.scope, comment: d.comment } : undefined} />
+  if (existing && secrets.error) return <ErrorState error={secrets.error} onRetry={secrets.reload} />
+  if (existing && (!shape.data || !secrets.data)) return <Skeleton />
+  return <Form key={existing ?? 'new'} existing={existing} shape={shape.data} onReload={shape.reload}
+    initial={d ? { type: d.type, provider: d.provider, scope: d.scope, comment: d.comment } : existing ? { type: shape.data!.type ?? '', provider: shape.data!.provider ?? '', scope: [], comment: '' } : undefined}
+    commentKnown={!!d} />
 }
 
-function Form({ existing, shape, initial }: { existing?: string; shape?: Shape; initial?: { type: string; provider: string; scope: string[]; comment: string } }) {
+function Form({ existing, shape, initial, commentKnown, onReload }: {
+  existing?: string; shape?: Shape; initial?: { type: string; provider: string; scope: string[]; comment: string }; commentKnown?: boolean; onReload: () => void
+}) {
   const { api, service } = useApp()
   const { secrets } = useLists()
   const navigate = useNavigate()
@@ -48,7 +53,15 @@ function Form({ existing, shape, initial }: { existing?: string; shape?: Shape; 
   const [busy, setBusy] = useState(false)
   const minted = provider === 'token_exchange'
   const issues = useMemo(() => problems(rows), [rows])
-  useEffect(() => setConflict(false), [rows])
+  // a newer version loaded after a conflict: the edit carried over onto it
+  const [base, setBase] = useState(shape?.version)
+  useEffect(() => {
+    if (shape && base !== undefined && shape.version !== base) {
+      setRows((rs) => rebase(shape.params, rs))
+      setBase(shape.version)
+      setConflict(false)
+    }
+  }, [shape, base])
 
   const update = (key: string, change: Partial<Row>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...change } : r)))
   const validName = /^\S(.*\S)?$/.test(name) && name.length <= 200
@@ -63,13 +76,16 @@ function Form({ existing, shape, initial }: { existing?: string; shape?: Shape; 
         toast(`${name} created`)
       } else {
         // the merge keeps what was never seen, on the version read (the type, provider and scope stay)
-        await api.call('PATCH', `/admin/v1/secrets/${seg(existing)}/params`, { ...forReplace(rows), comment }, { 'If-Match': `"${shape!.version}"` })
+        // the comment only when it changed (an entry the list has not read yet would lose its own)
+        const changed = commentKnown && comment !== initial?.comment ? { comment } : {}
+        await api.call('PATCH', `/admin/v1/secrets/${seg(existing)}/params`, { ...forReplace(rows), ...changed }, { 'If-Match': `"${shape!.version}"` })
         toast(`${existing} saved`)
       }
       secrets.reload()
-      navigate(`/secrets/${seg(existing ?? name)}`)
+      navigate(`/secrets/${route(existing ?? name)}`)
     } catch (e) {
-      if (e instanceof ApiError && e.status === 412) setConflict(true)
+      if (e instanceof ApiError && e.status === 412 && existing) setConflict(true)
+      else if (e instanceof ApiError && e.status === 412) setError(new ApiError({ ...e.problem, detail: `a secret named ${name} already exists` }))
       else setError(e)
     } finally {
       setBusy(false)
@@ -79,13 +95,13 @@ function Form({ existing, shape, initial }: { existing?: string; shape?: Shape; 
   return (
     <div className="flex flex-col gap-5">
       <header className="flex items-center gap-3">
-        <Link to={existing ? `/secrets/${seg(existing)}` : '/secrets'} aria-label="Back" className="icon-btn h-9 w-9 border border-line text-ink"><ArrowLeft size={18} /></Link>
+        <Link to={existing ? `/secrets/${route(existing)}` : '/secrets'} aria-label="Back" className="icon-btn h-9 w-9 border border-line text-ink"><ArrowLeft size={18} /></Link>
         <div className="flex flex-col leading-[18px]">
           <span className="eyebrow">{existing ? 'Replace secret' : 'New secret'}</span>
           <h1 className="m-0 font-mono text-[20px] font-medium leading-7">{existing ?? (name || 'untitled')}{shape && <span className="text-[13px] text-muted"> from v{shape.version}</span>}</h1>
         </div>
         <div className="ml-auto flex gap-2">
-          <Link to={existing ? `/secrets/${seg(existing)}` : '/secrets'} className="btn-secondary no-underline">Cancel</Link>
+          <Link to={existing ? `/secrets/${route(existing)}` : '/secrets'} className="btn-secondary no-underline">Cancel</Link>
           <button type="button" className="btn-primary" disabled={busy || issues.size > 0 || (!existing && !validName)} onClick={save}>
             {existing ? `Save as v${Number(shape!.version) + 1}` : 'Create'}
           </button>
@@ -94,8 +110,8 @@ function Form({ existing, shape, initial }: { existing?: string; shape?: Shape; 
       {conflict && (
         <Banner tone="warning">
           <span className="flex items-center gap-3">
-            {existing} changed meanwhile. Your edit is kept: reload to see the new version, then apply yours again.
-            <button type="button" className="btn ml-auto border border-current bg-transparent py-1 text-current" onClick={() => window.location.reload()}>Reload</button>
+            {existing} changed meanwhile. Load the new version: your edit is carried over onto it, then save again.
+            <button type="button" className="btn ml-auto border border-current bg-transparent py-1 text-current" onClick={onReload}>Load the new version</button>
           </span>
         </Banner>
       )}

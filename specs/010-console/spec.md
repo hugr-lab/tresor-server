@@ -85,6 +85,9 @@ never through a delegation grant (`403 actor_not_allowed`). Every request is aud
   - `reference`: the reference as written (a location, never its value);
   - `value`: only with `values=1`, only for a parameter **not** in `redact_keys` and not a reference. Secret
     parameters and the values behind references are never returned, to anyone. Audited as `reveal`.
+  - The editor loads the values it may show (`values=1`) to fill a replace: opening a replace is a `reveal`.
+  - Grant ids are tresor's (`g-` and FNV-1a 64 of the principal), or the principal's existing grant's: a grant
+    made in the console and one made from SQL are one grant.
   - The params merge never unmarks a kept parameter: a mark goes only with a value set anew, so no value the
     administrator never saw can become visible.
 - `PATCH /admin/v1/secrets/{name}/params` with `If-Match` →

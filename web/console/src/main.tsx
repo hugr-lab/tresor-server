@@ -1,5 +1,5 @@
 // The standalone console (spec 010): /ui/config.json, sign-in, then the console for administrators.
-import { StrictMode, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { StrictMode, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, useNavigate } from 'react-router-dom'
 import './styles.css'
@@ -26,11 +26,13 @@ function initialTheme(): Theme {
 
 function Console({ config, session }: { config: ConsoleConfig; session: Session }) {
   const navigate = useNavigate()
-  const signedIn = useSyncExternalStore((l) => session.subscribe(l), () => session.signedIn)
+  const subscribe = useCallback((l: () => void) => session.subscribe(l), [session])
+  const signedIn = useSyncExternalStore(subscribe, () => session.signedIn)
   const [theme, setTheme] = useState<Theme>(initialTheme)
   const [state, setState] = useState<{ me?: Whoami; service?: ServiceInfo; notAdmin?: boolean; error?: string }>({})
   const [phase, setPhase] = useState<'start' | 'callback' | 'ready'>(window.location.pathname === `${basename}/callback` ? 'callback' : 'start')
-  const api = useMemo(() => new Api(config.api, () => session.token()), [config, session])
+  // the service this page came from: its own origin and path (public_url may name another host, a proxy's)
+  const api = useMemo(() => new Api(document.baseURI.replace(/\/ui\/.*$/, ''), () => session.token()), [session])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme

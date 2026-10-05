@@ -20,9 +20,10 @@ export function Masked({ label = 'write-only' }: { label?: string }) {
   return (
     <span className="inline-flex items-center gap-2 text-muted">
       <Lock size={15} aria-hidden />
-      <span className="font-mono" aria-label={label}>
+      <span className="font-mono" aria-hidden>
         ••••••••
       </span>
+      <span className="sr-only">{label}</span>
     </span>
   )
 }

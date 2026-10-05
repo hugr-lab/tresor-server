@@ -35,11 +35,19 @@ export function rowsOf(params: ShapeParam[]): Row[] {
     name: p.name,
     type: p.type,
     mode: 'keep',
-    value: p.value === undefined ? '' : typeof p.value === 'string' ? p.value : JSON.stringify(p.value),
+    value: text(p.value),
     ref: p.reference ?? '',
     secret: p.redacted,
     existing: p,
   }))
+}
+
+/** a stored value as the editor shows it: a bare string, or a typed value's inner value (JSON for nested types) */
+export function text(v: unknown): string {
+  if (v === undefined || v === null) return ''
+  if (typeof v === 'string') return v
+  const inner = typeof v === 'object' && 'value' in (v as object) ? (v as { value: unknown }).value : v
+  return typeof inner === 'string' ? inner : JSON.stringify(inner)
 }
 
 /** a value as the protocol carries it: a bare string for VARCHAR, else {type, value} with the JSON it means */
@@ -48,10 +56,12 @@ export function encode(type: string, text: string): unknown {
   if (t === 'VARCHAR') return text
   if (/^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT)$/.test(t)) {
     if (!/^-?\d+$/.test(text.trim())) throw new Error(`a ${t} is a whole number`)
+    if (!Number.isSafeInteger(Number(text))) throw new Error('beyond 2^53: set it from DuckDB, where no precision is lost')
     return { type: t, value: Number(text) }
   }
   if (/^(FLOAT|DOUBLE|DECIMAL.*)$/.test(t)) {
     if (text.trim() === '' || Number.isNaN(Number(text))) throw new Error(`a ${t} is a number`)
+    if (/^DECIMAL/.test(t) && text.replace(/[^0-9]/g, '').length > 15) throw new Error('more digits than the console keeps: set it from DuckDB')
     return { type: t, value: Number(text) }
   }
   if (t === 'BOOLEAN') {
@@ -83,7 +93,8 @@ export function problems(rows: Row[]): Map<string, string> {
     else if (seen.has(name.toLowerCase())) out.set(r.key, `${name} is named twice`)
     seen.add(name.toLowerCase())
     if (r.mode === 'ref' && !r.ref) out.set(r.key, 'complete the reference')
-    if (r.mode === 'value') {
+    if (r.mode === 'value' && r.value === '') out.set(r.key, 'a value is needed (keep, or remove the parameter)')
+    else if (r.mode === 'value') {
       try {
         valueOf(r)
       } catch (e) {
@@ -119,12 +130,32 @@ export function forReplace(rows: Row[]): { keep: string[]; set: Record<string, u
     }
     if (r.existing && r.mode === 'keep') {
       keep.push(r.existing.name)
-      if (r.existing.redacted) redact.push(r.existing.name) // never unmarked: the service refuses it too
+      // never unmarked (the service refuses it too); marked now when the toggle says so
+      if (r.existing.redacted || r.secret) redact.push(r.existing.name)
       continue
     }
     if (r.existing && r.existing.name !== r.name.trim()) remove.push(r.existing.name) // renamed
     set[r.name.trim()] = valueOf(r)
     if (r.secret || r.mode === 'ref') redact.push(r.name.trim())
   }
-  return { keep, set, remove, redact_keys: redact }
+  // a name removed and set again (a parameter re-added) is set: the service refuses both
+  return { keep, set, remove: remove.filter((k) => !(k in set)), redact_keys: redact }
+}
+
+/** an edit carried over onto a newer version of the secret (after a 412): what the person changed stays */
+export function rebase(params: ShapeParam[], rows: Row[]): Row[] {
+  const fresh = rowsOf(params)
+  const byName = new Map(fresh.map((r) => [r.name, r]))
+  const added: Row[] = []
+  for (const r of rows) {
+    const name = r.existing?.name ?? r.name.trim()
+    const target = byName.get(name)
+    if (!r.existing) {
+      if (target) Object.assign(target, { mode: r.mode, value: r.value, ref: r.ref, secret: r.secret || target.secret, type: r.type })
+      else added.push(r)
+    } else if (target && (r.removed || r.mode !== 'keep' || r.secret !== r.existing.redacted)) {
+      Object.assign(target, { mode: r.mode, value: r.mode === 'keep' ? target.value : r.value, ref: r.ref, removed: r.removed, secret: r.secret || target.secret })
+    }
+  }
+  return [...fresh, ...added]
 }
