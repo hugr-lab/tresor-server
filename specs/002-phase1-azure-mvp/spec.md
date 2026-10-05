@@ -595,7 +595,8 @@ fails it).
 
 - `internal/policy` out of `internal/api`.
 - OpenTelemetry traces and the audit (spec 001). Done: spec 005.
-- A database password as a `ref+azkv://` reference. Done: `state.password_ref` (specs 007, 008).
+- A database password as a `ref+azkv://` reference. Done: `state.password_ref` (spec 003; `ref+vault` in
+  007, named sources in 008).
 - The token-exchange client as a federated credential of the managed identity: no client secret. Done:
   spec 006.
 - The Kubernetes phase (spec 001's phase 3), then AWS and GCP. Kubernetes done: spec 003.

@@ -119,8 +119,9 @@ Writes otherwise use the protocol's routes: `PUT` (create, with `If-None-Match: 
 
 - **Administrators only**, checked by the service on every `/admin/v1` call, never by the console alone.
 - **Values** (a decision of the owner, 2026-10-05): administrators may see the parameters **not** in
-  `redact_keys`, on request and audited. This loosens tresor spec 009's "administrators never see material"
-  for tresor-server's own console; the protocol is unchanged, and DuckDB's routes behave as before.
+  `redact_keys`, on request and audited. This loosens tresor spec 009 ("admins manage, roles use": an
+  administrator holds no `use`) for tresor-server's own console, recorded in its addendum; the protocol is
+  unchanged, and DuckDB's routes behave as before.
   - `redact_keys` is each secret's own: DuckDB sets it from the secret type when written from SQL; the console's
     "secret" toggle sets it (on by default for known names: `password`, `secret`, `token`, `client_secret`,
     `account_key`, …); the service adds every reference's parameter.
