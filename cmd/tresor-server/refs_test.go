@@ -147,22 +147,81 @@ policy: {admins: [role:secrets_admin]}
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	st, _, err := openState(ctx, cfg, log)
+	// the service, serving: it holds the SQLite lease all along - refs reads beside it, leased by none
+	st, _, err := openState(ctx, cfg, log, false)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer st.Close()
 	put(t, st, "lake", `{"secret":"ref+vault://secret/x#f"}`)
-	st.Close()
 	var out bytes.Buffer
 	if err := refs(path, false, &out, log); !errors.Is(err, errFindings) || !strings.Contains(out.String(), "secret\tlake\tsecret\t") {
 		t.Fatalf("%v:\n%s", err, out.String())
 	}
-	st, _, _ = openState(ctx, cfg, log)
 	if _, err := st.Update(ctx, "lake", func(*state.Secret) (*state.Secret, error) { return nil, nil }); err != nil {
-		t.Fatal(err)
+		t.Fatalf("the service, after refs: %v", err)
 	}
-	st.Close()
 	if err := refs(path, false, io.Discard, log); err != nil {
 		t.Fatalf("nothing to report: %v", err)
+	}
+	// a database no service has migrated: refused, not migrated
+	empty := filepath.Join(dir, "empty.db")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(doc, db, empty, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := refs(path, false, io.Discard, log); err == nil || !strings.Contains(err.Error(), "migrations") {
+		t.Fatalf("an empty database: %v", err)
+	}
+	if info, _ := os.Stat(empty); info.Size() != 0 {
+		t.Fatal("refs wrote to the database")
+	}
+}
+
+// failing is a store whose reads fail as an outage, or stop
+type failing struct {
+	state.Store
+	err error
+}
+
+func (f failing) Get(context.Context, string) (*state.Secret, error) { return nil, f.err }
+
+// an outage is an error, not findings; a stop is the context's error
+func TestCheckRefsErrors(t *testing.T) {
+	st := memory.New()
+	put(t, st, "a", `{"secret":"ref+kv://duckdb/a"}`)
+	put(t, st, "b", `{"secret":"ref+kv://duckdb/b"}`)
+	r := material.New(kv{allow: "duckdb/"})
+	var out bytes.Buffer
+	n, _, err := checkRefs(context.Background(), failing{st, errors.New("unwrapping under the KEK: 403")}, r, false, &out)
+	if err == nil || n != 0 || out.Len() != 0 {
+		t.Fatalf("an outage: %d %v\n%s", n, err, out.String())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := checkRefs(ctx, failing{st, ctx.Err()}, r, false, &out); !errors.Is(err, context.Canceled) || out.Len() != 0 {
+		t.Fatalf("a stop: %v\n%s", err, out.String())
+	}
+}
+
+// the command line: the command first, its own flags only, nothing after
+func TestParseArgs(t *testing.T) {
+	for line, want := range map[string]invocation{
+		"-config x":                      {command: "serve", configPath: "x"},
+		"refs -config x":                 {command: "refs", configPath: "x"},
+		"refs -config x -resolve":        {command: "refs", configPath: "x", resolve: true},
+		"rewrap -tag-untagged -config x": {command: "rewrap", configPath: "x", tagUntagged: true},
+	} {
+		if got, err := parseArgs(strings.Fields(line)); err != nil || got != want {
+			t.Errorf("%s: %+v %v", line, got, err)
+		}
+	}
+	for _, line := range []string{"-config x refs", "-config x rewrap", "refs -config x extra", "-resolve -config x",
+		"rewrap -resolve", "refs -tag-untagged"} {
+		if _, err := parseArgs(strings.Fields(line)); err == nil {
+			t.Errorf("%s: accepted", line)
+		}
 	}
 }

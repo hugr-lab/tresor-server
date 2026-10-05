@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/hugr-lab/tresor-server/internal/config"
+	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/material"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
@@ -28,19 +29,14 @@ func refs(configPath string, resolve bool, out io.Writer, log *slog.Logger) erro
 	if cfg.State.Kind == "memory" {
 		return fmt.Errorf("state.kind memory keeps nothing: no reference to check")
 	}
-	if cfg.State.Kind == "sqlite" {
-		// a wrong path must not create an empty database
-		if _, err := os.Stat(cfg.State.Path); err != nil {
-			return fmt.Errorf("state.path: %w", err)
-		}
-	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	resolver, err := materialResolver(cfg)
 	if err != nil {
 		return err
 	}
-	st, _, err := openState(ctx, cfg, log)
+	// read-only: no migration, no lease beside the replica that serves (a SQLite store's), nothing created
+	st, _, err := openState(ctx, cfg, log, true)
 	if err != nil {
 		return err
 	}
@@ -72,14 +68,24 @@ func checkRefs(ctx context.Context, st state.Store, r *material.Resolver, resolv
 			if errors.Is(err, state.ErrNotFound) {
 				continue // deleted meanwhile
 			}
+			if ctx.Err() != nil {
+				return n, checked, ctx.Err() // stopped: what is left is unread, not a finding
+			}
 			checked++
-			if err != nil {
-				// sealed, or the KEK's answer: a finding, not a stop - the others are still worth reading
+			if errors.Is(err, keys.ErrSealed) {
+				// this one's value does not open: a finding, not a stop - the others are still worth reading
 				fmt.Fprintf(out, "%s\t%s\t-\tdoes not open: %v\n", ns.kind, d.Name, err)
 				n++
 				continue
 			}
-			for _, f := range r.Check(ctx, sec.Params, resolve) {
+			if err != nil {
+				return n, checked, fmt.Errorf("%s %s: %w", ns.kind, d.Name, err) // the store or the KEK: an error
+			}
+			findings := r.Check(ctx, sec.Params, resolve)
+			if ctx.Err() != nil {
+				return n, checked, ctx.Err()
+			}
+			for _, f := range findings {
 				fmt.Fprintf(out, "%s\t%s\t%s\t%v\n", ns.kind, d.Name, f.Param, f.Err)
 				n++
 			}

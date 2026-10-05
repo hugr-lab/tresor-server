@@ -62,7 +62,8 @@ tresor-server refs -config server.yaml -resolve   # and a read of each one
   renamed or removed, or an allowlist narrowed, strands references silently otherwise: they fail at their
   next fetch.
 - **The output**, one line per finding, tab-separated: `secret` or `variable`, the name, the parameter, the
-  reason. A secret that does not open is a finding too.
+  reason. A secret that does not open (sealed) is a finding too; the store or the KEK unreachable stops the
+  run.
 
   ```
   secret    lake      secret   invalid reference: no source for vault-us references is configured (material:)
@@ -71,14 +72,18 @@ tresor-server refs -config server.yaml -resolve   # and a read of each one
 
 - **No value** is printed. A reference that does not parse is named by its scheme only: its text may be a value
   written by mistake.
-- **Exit**: `0` nothing to report, `3` findings, `1` an error.
-- **It runs as the service**: the store, the KEK, and (with `-resolve`) the sources' rights. On Kubernetes:
+- **Exit**: `0` nothing to report, `3` findings, `1` an error, `2` a usage error.
+- **It runs as the service**: the store, the KEK, and (with `-resolve`) the sources' rights. On Kubernetes
+  (`<release>` is the Helm release):
 
   ```sh
-  kubectl -n tresor exec deploy/tresor-tresor-server -- /tresor-server refs -config /etc/tresor/server.yaml
+  kubectl -n tresor exec deploy/<release>-tresor-server -- /tresor-server refs -config /etc/tresor/server.yaml
   ```
 
-- It writes nothing. Opening a SQL store runs its migrations, as at a start.
+- **It writes nothing**, beside a serving replica:
+  - a SQL store is not migrated: run the service's own version, or the schema is refused;
+  - SQLite: no lease taken, a read-only connection;
+  - `-resolve` bounds each read to 30 seconds.
 
 ## Backups
 

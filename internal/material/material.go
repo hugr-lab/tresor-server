@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Prefix marks a parameter's value as a reference.
@@ -177,6 +178,9 @@ type Finding struct {
 	Err   error
 }
 
+// checkTimeout bounds one reference's read in Check.
+const checkTimeout = 30 * time.Second
+
 // Check lists params' references the sources do not admit (the parse, the allowlist), as at a fetch; with
 // resolve, it reads each admitted one too, and lists those that do not resolve. No value is kept.
 func (r *Resolver) Check(ctx context.Context, params map[string]json.RawMessage, resolve bool) []Finding {
@@ -197,7 +201,10 @@ func (r *Resolver) Check(ctx context.Context, params map[string]json.RawMessage,
 			continue
 		}
 		if resolve {
-			if _, _, err := src.Resolve(ctx, ref); err != nil {
+			rctx, cancel := context.WithTimeout(ctx, checkTimeout) // a source that hangs stalls one reference
+			_, _, err := src.Resolve(rctx, ref)
+			cancel()
+			if err != nil {
 				out = append(out, Finding{Param: key, Err: fmt.Errorf("%s: %v", ref, err)})
 			}
 		}

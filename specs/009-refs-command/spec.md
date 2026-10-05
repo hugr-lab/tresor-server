@@ -27,7 +27,8 @@ tresor-server refs -config server.yaml [-resolve]
   configuration's sources (`material:`), built as the service builds them.
 - **What it checks**: every string parameter that starts with `ref+` (a typed `{type, value}` too), against
   the sources: the parse and the allowlist, as at a fetch. `-resolve` reads it too, with the service's
-  identity; the value is never printed nor kept.
+  identity, each read bounded (30 s); the value is never printed (a source's cache holds it in memory for
+  its `cache_ttl`, as at a fetch, and the process ends).
 - **What it prints**, one line per finding, tab-separated, on stdout:
 
   ```
@@ -39,12 +40,19 @@ tresor-server refs -config server.yaml [-resolve]
   - the kind (`secret`, `variable`), the name, the parameter, the reason;
   - the reason is the source's error, as at a fetch: it names a reference only once it parsed, never a
     text that does not (spec 002: a text that is not a reference may be a value written by mistake);
-  - a secret that does not open (sealed) is a finding, not a stop.
+  - a secret that does not open (sealed: `keys.ErrSealed`) is a finding, not a stop. Any other error of the
+    store or the KEK stops the run: an outage is no finding.
 - **Exit**: `0` when there is nothing to report, `3` when there is a finding, `1` on an error (the store or
-  the KEK unreachable).
+  the KEK unreachable, a stop), `2` on a usage error.
 - **A configuration to come**: run it with the new configuration against the live store before deploying it
-  (the store's and the KEK's settings the same).
-- **Read-only**: it writes nothing; opening a SQL store runs its migrations, as `rewrap` does.
+  (the store's and the KEK's settings the same), with the **service's own version**.
+- **Read-only**:
+  - a SQL store is opened without its migrations: a schema that is not this binary's is refused, never
+    migrated;
+  - SQLite: no lease (it reads beside the replica that serves, which keeps it), a `query_only` connection,
+    no journal mode set, no file created;
+  - the Kubernetes store writes nothing at its open. A resource whose MAC fails is left out of its lists
+    (and logged), so it is not a finding here.
 - `memory` keeps nothing: nothing to check.
 
 ## Enforcement & security
@@ -57,7 +65,10 @@ tresor-server refs -config server.yaml [-resolve]
 ## Testing
 
 - Go: secrets and variables with references admitted, to a missing source, outside an allowlist, a typed
-  value, a sealed secret; `-resolve` against a fake source; the exit codes.
+  value, a sealed secret; `-resolve` against a fake source; an outage and a stop are errors, not findings;
+  the command line (exit 2 cases).
+- The command on SQLite beside a serving store (which keeps its lease and writes after it), an unmigrated
+  database refused and left as it was; read-only opens on PostgreSQL and SQL Server.
 
 ## Alternatives considered
 
