@@ -21,4 +21,4 @@ Research lives in the local, gitignored `design/` folder.
 | [005](005-observability/spec.md) | observability: the audit (stdout, OTLP), spans under tresor's trace, metrics | implemented |
 | [006](006-exchange-without-secret/spec.md) | token exchange without a client secret; ZITADEL, for a stack with no Azure | implemented |
 | [007](007-vault/spec.md) | OpenBao and HashiCorp Vault: the KEK in Transit, ref+vault, signing, no static secret | implemented |
-| [008](008-named-sources/spec.md) | named material sources: ref+<name>://, more instances of a kind, each its own connection | accepted |
+| [008](008-named-sources/spec.md) | named material sources: ref+<name>://, more instances of a kind, each its own connection | implemented |

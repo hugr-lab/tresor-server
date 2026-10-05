@@ -1,6 +1,6 @@
 # Spec 008: named material sources
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-05
 - **Author**: hugr lab
 
