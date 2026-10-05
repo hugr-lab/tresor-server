@@ -10,3 +10,4 @@ testdata
 *.db-*
 web/console/node_modules
 web/console/dist
+web/console/.env.local

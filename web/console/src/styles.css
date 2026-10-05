@@ -12,7 +12,8 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
+/* :host - the microfrontend's shadow root (spec 010, c); its theme is the wrapper's data-theme */
+:root, :host {
   --surface: #ffffff; --surface-soft: #f2f7f7; --ink: #0b1f2a; --ink-muted: #4a5b64; --border: #d3e1e2;
   --brand: #338a86; --brand-strong: #2a7470; --on-brand: #ffffff; --navy: #0a3146; --focus: #2a7470;
   --success: #1e7a4c; --success-soft: #e3f3ea; --warning: #8a5a00; --warning-soft: #fbf0d9;
@@ -28,10 +29,11 @@
 }
 
 html, body { margin: 0; background: var(--surface); color: var(--ink); }
-body { font-family: Manrope, system-ui, sans-serif; font-size: 14px; line-height: 22px; }
+body, .mfe-root { font-family: Manrope, system-ui, sans-serif; font-size: 14px; line-height: 22px; }
 /* a desktop console: below its minimum size the page scrolls, it never squeezes */
 .app { min-width: 1280px; min-height: max(800px, 100vh); }
 .mfe { min-width: 960px; }
+.mfe-root { background: var(--surface); color: var(--ink); }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 a { color: var(--brand-strong); }
 a:hover { color: var(--ink); }

@@ -261,6 +261,23 @@ ui: {allowed_origins: ['https://platform.example']}
 			t.Fatalf("%s from another origin: %v", method, w.Header())
 		}
 	}
+	// the microfrontend's module and fonts, read cross-origin by its host; the standalone page's files are not
+	file := func(path, origin string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("Origin", origin)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	if w := file("/ui/mfe/tresor.js", "https://platform.example"); w.Header().Get("Access-Control-Allow-Origin") != "https://platform.example" ||
+		w.Header().Get("Access-Control-Expose-Headers") != "" {
+		t.Fatalf("the module: %v", w.Header())
+	}
+	for path, origin := range map[string]string{"/ui/mfe/tresor.js": "https://evil.example", "/ui/assets/index.js": "https://platform.example"} {
+		if w := file(path, origin); w.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("%s from %s: %v", path, origin, w.Header())
+		}
+	}
 }
 
 // a kept parameter keeps its mark: unmarking a value the administrator never saw would reveal it; a mark goes

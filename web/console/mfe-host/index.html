@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>A test host</title>
+    <style>
+      body { margin: 0; font-family: system-ui, sans-serif; background: #f4f4f5; color: #18181b; }
+      body.dark { background: #18181b; color: #f4f4f5; }
+      header { display: flex; gap: 16px; align-items: center; padding: 10px 20px; background: #3f3f46; color: #fff; }
+      header nav { display: flex; gap: 12px; flex: 1; }
+      header a { color: #e4e4e7; }
+      main { padding: 20px; }
+      #status { font-size: 13px; opacity: 0.8; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>platform</strong>
+      <nav><a href="/platform/home" data-host>Home</a><a href="/platform/tresor/secrets" data-host>Secrets (tresor)</a></nav>
+      <span id="status"></span>
+      <button id="theme" type="button">Theme</button>
+      <button id="signin" type="button">Sign in</button>
+    </header>
+    <main><h1 id="title"></h1><div id="slot"></div></main>
+    <script type="module" src="./host.ts"></script>
+  </body>
+</html>

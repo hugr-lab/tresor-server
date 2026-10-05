@@ -81,7 +81,7 @@ func Handler(cfg Config) http.Handler {
 		case rest != "" && !strings.HasSuffix(rest, "/") && rest != "index.html":
 			name := path.Clean(rest)
 			if info, err := fs.Stat(files, name); err == nil && !info.IsDir() {
-				if strings.HasPrefix(name, "assets/") {
+				if strings.HasPrefix(name, "assets/") || strings.HasPrefix(name, "mfe/assets/") {
 					h.Set("Cache-Control", "public, max-age=31536000, immutable") // hashed names
 				}
 				http.ServeFileFS(w, r, files, name)

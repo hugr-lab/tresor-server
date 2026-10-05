@@ -6,13 +6,14 @@ import (
 	"strings"
 )
 
-// cors lets the console, mounted as a microfrontend on a configured host (ui.allowed_origins, spec 010), call
-// /v1 and /admin/v1 with its bearer token. No cookie is ever sent or honoured; any other origin gets no CORS
+// cors lets the console, mounted as a microfrontend on a configured host (ui.allowed_origins, spec 010), load its
+// module and fonts (/ui/mfe/, GET only) and call /v1 and /admin/v1 with its bearer token. No cookie is ever sent or honoured; any other origin gets no CORS
 // header, so a browser keeps its pages from reading an answer.
 func cors(origins []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		api := strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/admin/v1/")
+		mfe := strings.HasPrefix(r.URL.Path, "/ui/mfe/")
+		api := strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/admin/v1/") || mfe
 		if api {
 			w.Header().Add("Vary", "Origin") // an answer depends on it, whether or not this request sent one
 		}
@@ -30,6 +31,10 @@ func cors(origins []string, next http.Handler) http.Handler {
 		}
 		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", origin)
+		if mfe {
+			next.ServeHTTP(w, r) // files: a module and fonts, read with GET; nothing to expose, no preflight
+			return
+		}
 		h.Set("Access-Control-Expose-Headers", "ETag, X-Request-Id")
 		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 			h.Set("Access-Control-Allow-Methods", "GET, PUT, PATCH, POST, DELETE")

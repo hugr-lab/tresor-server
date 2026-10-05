@@ -106,13 +106,16 @@ Writes otherwise use the protocol's routes: `PUT` (create, with `If-None-Match: 
 
 ### The microfrontend
 
-- A second build, `dist-mfe/`: one ES module and its stylesheet, served at `/ui/mfe/`.
-- `mountTresor(element, {apiBase, getToken(audience), theme, basePath, onNavigate, onTitle})` →
-  `{update, unmount}`; and `<tresor-console>` (Shadow DOM; the token through a property, never an attribute).
+- A second build, `dist/mfe/`: one ES module, `tresor.js`, with its styles inside it (constructed style sheets in the
+  shadow root; the fonts' faces in the document, where a shadow root's are not used) and its fonts beside it;
+  served at `/ui/mfe/`, with CORS for `ui.allowed_origins`.
+- `mountTresor(element, {apiBase, getToken(audience), audience, theme, basePath, onNavigate, onTitle})` →
+  `{update({theme, path}), unmount}`, in the element's shadow root; and `<tresor-console>` (the token function
+  through a property, never an attribute; `tresor-navigate` and `tresor-title` events).
 - The host owns sign-in, navigation and the theme; the console renders its content with its own section tabs.
 - **Its token** carries tresor's audience: the IdP adds it to the host's tokens (a Keycloak audience mapper, a
   ZITADEL project) or the host gets one for tresor; `getToken(audience)` covers both.
-- **CORS** on `/v1/*` and `/admin/v1/*` for `ui.allowed_origins` only (bearer tokens, no cookies); or the host
+- **CORS** on `/ui/mfe/*`, `/v1/*` and `/admin/v1/*` for `ui.allowed_origins` only (bearer tokens, no cookies); or the host
   proxies tresor under its own origin and needs none.
 
 ## Enforcement & security
