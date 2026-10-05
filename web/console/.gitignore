@@ -1,0 +1,5 @@
+node_modules/
+# the build: only the placeholder page is kept (go build alone embeds it); the image builds the rest
+dist/*
+!dist/index.html
+*.tsbuildinfo

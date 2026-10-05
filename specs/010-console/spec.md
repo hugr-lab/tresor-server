@@ -34,8 +34,9 @@ system. The design brief: `design/ui-prompt.md` (local).
 
 - **Screens**: secrets (list, detail, editor), variables (list, detail, editor), dynamic secrets
   (`token_exchange`), Access (grants by role and group), the references check, the service.
-- **Stack**: React 18, TypeScript, Vite, Tailwind, Radix primitives, TanStack Table, Lucide icons,
-  `oidc-client-ts`. Every dependency MIT, ISC or Apache-2.0; fonts SIL OFL (Manrope, JetBrains Mono), bundled,
+- **Stack**: React 18, TypeScript, Vite, Tailwind, react-router, Lucide icons, `oidc-client-ts`. No component
+  library: Radix's scroll lock injects `<style>` tags, which the CSP refuses; dialogs are native `<dialog>`s
+  (their own focus trap and Escape), menus are small components. Every dependency MIT, ISC or Apache-2.0; fonts SIL OFL (Manrope, JetBrains Mono), bundled,
   never from a CDN.
 - **Source** in `web/console/`; the build (`dist/`, `dist-mfe/`) is embedded in the binary (`go:embed`), as hub's
   console is. The image builds it in its own stage; `go build` alone embeds a placeholder page.
@@ -51,8 +52,9 @@ system. The design brief: `design/ui-prompt.md` (local).
   issuers that have a `client_id` (the public client people log in with: tresor's human flows).
 - **Login**: OIDC Authorization Code + PKCE in the browser, against the issuer's public client. The redirect URI
   `<public_url>/ui/callback` must be registered at the IdP. The access token is kept in memory (the PKCE state in
-  `sessionStorage`), sent as `Authorization: Bearer`; renewed by the IdP's refresh or a new login, without losing
-  an editor's input.
+  `sessionStorage`), sent as `Authorization: Bearer`; renewed by the IdP's refresh token. When the session ends,
+  a banner signs in again in a popup: the page and an editor's input stay. A reload signs in again through the
+  IdP's own session (the issuer used last in the tab), with no prompt when it has one.
 - **Headers** on `/ui/`: a Content-Security-Policy (`default-src 'self'`; `connect-src 'self'`, the issuers'
   origins and `ui.connect_src`; no inline script; no frame: the token is renewed by a refresh, never in a hidden
   frame; a component that injects `<style>` takes the page's nonce; `frame-ancestors` from `ui.frame_ancestors`, `'none'` by default),
@@ -83,6 +85,9 @@ never through a delegation grant (`403 actor_not_allowed`). Every request is aud
   - `reference`: the reference as written (a location, never its value);
   - `value`: only with `values=1`, only for a parameter **not** in `redact_keys` and not a reference. Secret
     parameters and the values behind references are never returned, to anyone. Audited as `reveal`.
+  - The editor loads the values it may show (`values=1`) to fill a replace: opening a replace is a `reveal`.
+  - Grant ids are tresor's (`g-` and FNV-1a 64 of the principal), or the principal's existing grant's: a grant
+    made in the console and one made from SQL are one grant.
   - The params merge never unmarks a kept parameter: a mark goes only with a value set anew, so no value the
     administrator never saw can become visible.
 - `PATCH /admin/v1/secrets/{name}/params` with `If-Match` →

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 )
 
@@ -43,6 +44,12 @@ type Config struct {
 func Handler(cfg Config) http.Handler {
 	files, _ := fs.Sub(dist, "dist")
 	index, _ := fs.ReadFile(files, "index.html")
+	if missing := missingAssets(files, index); missing != "" {
+		// a page whose files are not here (a local build's index.html committed alone) would load nothing
+		index = []byte(`<!doctype html><html lang="en"><head><meta charset="utf-8"><base href="/ui/"><title>tresor console</title>` +
+			`</head><body><p>The tresor console is not complete in this binary (` + html.EscapeString(missing) +
+			` is missing): build it with npm run build in web/console, or use the image.</p></body></html>`)
+	}
 	// the build names its files relative to <base href>: the service may live below a path
 	index = []byte(strings.Replace(string(index), `<base href="/ui/">`, `<base href="`+html.EscapeString(cfg.BasePath)+`/ui/">`, 1))
 	if cfg.Issuers == nil {
@@ -90,6 +97,19 @@ func Handler(cfg Config) http.Handler {
 		h.Set("Cache-Control", "no-cache")
 		_, _ = w.Write(index)
 	})
+}
+
+// assetRef is a file the page names: ./assets/<file>
+var assetRef = regexp.MustCompile(`(?:src|href)="\./(assets/[^"]+)"`)
+
+// missingAssets names the first file the page names that the build does not hold; "" when all are there.
+func missingAssets(files fs.FS, index []byte) string {
+	for _, m := range assetRef.FindAllSubmatch(index, -1) {
+		if _, err := fs.Stat(files, string(m[1])); err != nil {
+			return string(m[1])
+		}
+	}
+	return ""
 }
 
 // policy is the console's Content-Security-Policy: its own files only, and the issuers' origins (with
