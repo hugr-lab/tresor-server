@@ -67,7 +67,7 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- if .Values.vaultToken.enabled -}}
 {{- range (($cfg.material | default dict).sources | default list) -}}
 {{- $sauth := ((.vault | default dict).auth | default dict) -}}
-{{- if and .vault (has $sauth.method (list "kubernetes" "jwt")) (not $sauth.jwt_file) -}}
+{{- if and (eq (.kind | default "") "vault") .vault (has $sauth.method (list "kubernetes" "jwt")) (not $sauth.jwt_file) -}}
 {{- $_ := set $sauth "jwt_file" "/var/run/tresor/vault-token/token" -}}
 {{- $_ := set .vault "auth" $sauth -}}
 {{- end -}}
@@ -107,12 +107,17 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- /* the logins the chart's token serves: the top-level vault's, and named sources' own (spec 008) */ -}}
 {{- $tokenLogin := has ($auth.method | default "") (list "kubernetes" "jwt") -}}
 {{- range (((.Values.config.material | default dict).sources | default list)) -}}
-{{- $sauth := ((.vault | default dict).auth | default dict) -}}
+{{- if and (eq (.kind | default "") "vault") .vault -}}
+{{- $sauth := (.vault.auth | default dict) -}}
+{{- if not .vault.address -}}
+{{- fail (printf "config.material.sources[%s].vault.address is required" .name) -}}
+{{- end -}}
 {{- if has ($sauth.method | default "") (list "kubernetes" "jwt") -}}
 {{- $tokenLogin = true -}}
 {{- end -}}
 {{- if and (eq ($sauth.method | default "") "jwt") (not $sauth.jwt_file) (not $.Values.vaultToken.enabled) -}}
 {{- fail (printf "config.material.sources[%s].vault.auth.method jwt: vaultToken.enabled (or its jwt_file)" .name) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- if and .Values.vaultToken.enabled $auth.jwt_file -}}
@@ -160,7 +165,7 @@ API), or Vault's kubernetes login with no token of its own (vaultToken). */}}
 {{- if not .Values.vaultToken.enabled -}}
 {{- range (((.Values.config.material | default dict).sources | default list)) -}}
 {{- $sauth := ((.vault | default dict).auth | default dict) -}}
-{{- if and (eq ($sauth.method | default "") "kubernetes") (not $sauth.jwt_file) -}}
+{{- if and (eq (.kind | default "") "vault") (eq ($sauth.method | default "") "kubernetes") (not $sauth.jwt_file) -}}
 {{- $vaultPod = true -}}
 {{- end -}}
 {{- end -}}

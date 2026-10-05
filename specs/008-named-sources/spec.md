@@ -45,10 +45,12 @@ material:
       dns_suffix: .vault.azure.net
 ```
 
-- **The name** is the scheme: `^[a-z][a-z0-9-]{0,15}$`. Unique among all sources. The built-in sections
-  (`material.azkv`, `material.k8s`, `material.vault`) are sources named after their kind. A named source may
-  not take a name a configured built-in section has. A future kind's built-in section (`aws`, `gcp`) that
-  collides with a named source is a configuration error at start, not a silent change.
+- **The name** is the scheme: a lower-case letter, then letters and digits with single dashes between, 16 at
+  most. Unique among all sources. The built-in sections (`material.azkv`, `material.k8s`, `material.vault`)
+  are sources named after their kind.
+- **The kinds' names are reserved**: `azkv`, `k8s`, `vault`, and the coming `aws`, `gcp` are never a named
+  source's, configured or not. A source named `vault` beside an unconfigured `material.vault` would move
+  `state.password_ref: ref+vault://…`, and every stored `ref+vault://` reference, to another server.
 - **The kinds**: `vault` and `azkv`.
   - `k8s` is not one: another cluster would need a kubeconfig with credentials, a static secret.
   - Phase 4's kinds (AWS, GCP) take named instances from the start.
@@ -60,7 +62,10 @@ material:
     file serves both when both roles accept its audience;
   - a second Azure identity is a user-assigned managed identity (Container Apps holds several) or, under
     workload identity, another app registration with a federated credential to the same ServiceAccount,
-    possibly in another tenant (`tenant_id`).
+    possibly in another tenant (`tenant_id`). A source's own `azure:` names its `client_id`: with none,
+    `managed` is the system-assigned identity and `workload` the webhook's, the top-level one's likely.
+- **A Vault client per own block**: a named source with its own `vault:` logs in by itself, even with the
+  top-level settings; one with none shares the process's client.
 
 ### The parse
 
@@ -79,18 +84,21 @@ material:
   `jwt_file` gets the chart's token file.
 - The pod's own ServiceAccount token is mounted for a named source's `kubernetes` login with no token of its
   own, as for the top-level one.
-- The render refuses a named source's `jwt` with no token, and `vaultToken` with no login to serve.
+- The render refuses a named source's `jwt` with no token, its `vault:` with no address, and `vaultToken`
+  with no login to serve. Only `kind: vault` sources count.
 
 ### `state.password_ref`
 
 - It may name a named source: `ref+vault-us://…` reads with that source's connection.
-- The rule is unchanged: outside that source's allowlist. The configuration check (`Material.admits`) learns
-  the named sources.
+- **It is outside the allowlist of every source of its kind**, not only the one it names: two sources of a
+  kind may reach the same server (a named one inheriting `vault:`, two blocks with one address) or the same
+  Key Vault (its names are global in a cloud). Both the configuration (`Config.admits`) and the sources' own
+  parse at start (`Resolver.AdmitsPlace`) check so.
 
 ### Audit, spans, metrics
 
 - They name the source by its name (`ref+vault-us://…`, the scheme as written). The kind is added as an
-  attribute (`tresor.source.kind`).
+  attribute: `tresor.source.kind` on spans, `kind` on `tresor.references`.
 
 ## Enforcement & security
 

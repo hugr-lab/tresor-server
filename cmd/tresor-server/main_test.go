@@ -70,3 +70,20 @@ func TestNamedVaultSource(t *testing.T) {
 		t.Fatal("a name no source has")
 	}
 }
+
+// the sources' own parse, beside config's: a password through one source is refused when another of its kind
+// admits the place - the same server, under another name
+func TestPasswordOutsideEverySourceAtStart(t *testing.T) {
+	v := config.Vault{Address: "https://bao.example", Auth: config.VaultAuth{Method: "token_file", TokenFile: "/t"}}
+	cfg := &config.Config{Vault: v, Material: config.Material{
+		Vault:   config.VaultAllow{Allow: []config.VaultMount{{Mount: "secret"}}},
+		Sources: []config.NamedSource{{Name: "bao2", Kind: "vault", Allow: []config.SourceAllow{{Mount: "kv"}}}}}}
+	r, err := materialResolver(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.AdmitsPlace("vault", "secret/tresor/db#password") || r.AdmitsPlace("vault", "other/tresor/db#password") ||
+		r.AdmitsPlace("azkv", "secret/tresor") {
+		t.Fatal("AdmitsPlace")
+	}
+}

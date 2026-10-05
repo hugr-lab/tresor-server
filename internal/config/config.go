@@ -197,16 +197,22 @@ type SourceAllow struct {
 // with credentials).
 var NamedSourceKinds = []string{"vault", "azkv"}
 
+// ReservedSourceNames are the kinds' own names, now and to come: never a named source's, so a reference or a
+// password written to a kind's source never moves to another (spec 008).
+var ReservedSourceNames = []string{"azkv", "k8s", "vault", "aws", "gcp"}
+
 // Source is a source with its connection resolved: a built-in section's (its name is its kind) or a named
 // one's, with the top-level vault: or azure: when it has none of its own.
 type Source struct {
 	Name, Kind string
 	Named      bool
-	Vault      Vault      // kind vault: the connection
-	Azure      Azure      // kind azkv: the identity
-	VaultAllow VaultAllow // kind vault: the allowlist, the cache
-	AzKV       AzKV       // kind azkv: the allowlist, the cache, the cloud
-	K8s        K8s        // kind k8s
+	// OwnConnection: a named source's own vault: or azure: block; false, the top-level one's
+	OwnConnection bool
+	Vault         Vault      // kind vault: the connection
+	Azure         Azure      // kind azkv: the identity
+	VaultAllow    VaultAllow // kind vault: the allowlist, the cache
+	AzKV          AzKV       // kind azkv: the allowlist, the cache, the cloud
+	K8s           K8s        // kind k8s
 }
 
 // Source is the source references of a scheme read from (configured or not: state.password_ref reads outside
@@ -218,10 +224,10 @@ func (c *Config) Source(scheme string) (Source, bool) {
 		}
 		s := Source{Name: n.Name, Kind: n.Kind, Named: true, Vault: c.Vault, Azure: c.Azure}
 		if n.Vault != nil {
-			s.Vault = *n.Vault
+			s.Vault, s.OwnConnection = *n.Vault, true
 		}
 		if n.Azure != nil {
-			s.Azure = *n.Azure
+			s.Azure, s.OwnConnection = *n.Azure, true
 		}
 		for _, a := range n.Allow {
 			switch n.Kind {
@@ -782,11 +788,6 @@ func (kv AzKV) validate(where string) error {
 
 // validateSources checks the named sources (spec 008): a name of their own, a kind, a connection, an allowlist.
 func (c *Config) validateSources() error {
-	builtin := map[string]bool{
-		"azkv":  len(c.Material.AzKV.Allow) > 0,
-		"k8s":   len(c.Material.K8s.Allow) > 0,
-		"vault": len(c.Material.Vault.Allow) > 0,
-	}
 	seen := map[string]bool{}
 	for i, n := range c.Material.Sources {
 		where := fmt.Sprintf("material.sources[%d]", i)
@@ -795,8 +796,9 @@ func (c *Config) validateSources() error {
 			return fmt.Errorf("%s.name: the references' scheme - a lower-case letter, then letters, digits or dashes, 16 at most", where)
 		case seen[n.Name]:
 			return fmt.Errorf("%s.name: %s is named twice", where, n.Name)
-		case builtin[n.Name]:
-			return fmt.Errorf("%s.name: %s is material.%s's - name the source otherwise", where, n.Name, n.Name)
+		case slices.Contains(ReservedSourceNames, n.Name):
+			return fmt.Errorf("%s.name: %s is a kind's own name (%s) - name the source otherwise", where, n.Name,
+				strings.Join(ReservedSourceNames, ", "))
 		case n.Kind == "k8s":
 			return fmt.Errorf("%s.kind: k8s reads this cluster only (material.k8s): another would need a kubeconfig's credentials", where)
 		case !slices.Contains(NamedSourceKinds, n.Kind):
@@ -835,6 +837,11 @@ func (c *Config) validateSources() error {
 				if err := n.Azure.validate(where+".azure", true); err != nil {
 					return err
 				}
+				// its own: managed with no client_id is the system-assigned identity, workload the webhook's -
+				// the top-level one's, likely
+				if n.Azure.Identity != "default" && n.Azure.ClientID == "" {
+					return fmt.Errorf("%s.azure.client_id: a source's own identity names its client id", where)
+				}
 			} else if c.Azure.Identity == "" {
 				return fmt.Errorf("%s reads with the service's Azure identity: azure.identity (or its own azure:) is required", where)
 			}
@@ -849,7 +856,8 @@ func (c *Config) validateSources() error {
 // vaultMount is a Vault mount's name: one segment.
 var vaultMount = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$`)
 
-// admits says whether a reference's place is within an allowlist, as the sources compare: Kubernetes and Vault
+// admits says whether a reference's place is within an allowlist - of any source of its source's kind, not only
+// the one its scheme names - as the sources compare: Kubernetes and Vault
 // names exactly, Key Vault names without case. It errs toward admitting: a reference that does not parse may be
 // said admitted, and the service refuses it at start anyway.
 func (c *Config) admits(ref string) bool {
@@ -857,10 +865,25 @@ func (c *Config) admits(ref string) bool {
 	if !ok || !strings.HasPrefix(ref, "ref+") {
 		return false
 	}
-	s, ok := c.Source(scheme)
+	named, ok := c.Source(scheme)
 	if !ok {
 		return false
 	}
+	// every source of the kind: another may admit the same place, on the same server or vault (spec 008)
+	sources := c.Sources()
+	if !named.allows() {
+		sources = append(sources, named)
+	}
+	for _, s := range sources {
+		if s.Kind == named.Kind && s.admits(rest) {
+			return true
+		}
+	}
+	return false
+}
+
+// admits says whether the source's allowlist admits the place a reference names after its scheme.
+func (s Source) admits(rest string) bool {
 	switch s.Kind {
 	case "k8s":
 		parts := strings.Split(rest, "/")

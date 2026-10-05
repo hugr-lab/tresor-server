@@ -282,7 +282,7 @@ func azureOf(a config.Azure) (azcore.TokenCredential, error) {
 // vaultOf is a source's Vault client: the process's own for the top-level vault:, one of its own for a named
 // source's vault: block (spec 008).
 func vaultOf(cfg *config.Config, s config.Source) (*vault.Client, error) {
-	if s.Vault == cfg.Vault {
+	if !s.OwnConnection {
 		return vaultClient(cfg)
 	}
 	return newVaultClient(s.Vault)
@@ -412,8 +412,16 @@ func serve(configPath string, log *slog.Logger) error {
 		return err
 	}
 	// the sources' own parse, beside config's: the database's password is no administrator's to read
-	if ref := cfg.State.PasswordRef; ref != "" && resolver != nil && resolver.Admits(ref) {
-		return errors.New("state.password_ref is within material's allowlist: an administrator could read the database's password")
+	// every source of the kind: another may admit the same place, on the same server or vault (spec 008)
+	if ref := cfg.State.PasswordRef; ref != "" {
+		scheme, where, _ := strings.Cut(strings.TrimPrefix(ref, material.Prefix), "://")
+		s, ok := cfg.Source(scheme)
+		if !ok {
+			return fmt.Errorf("state.password_ref: no source is named %s", scheme)
+		}
+		if resolver.AdmitsPlace(s.Kind, where) {
+			return errors.New("state.password_ref is within material's allowlist: an administrator could read the database's password")
+		}
 	}
 	level, err := audit.ParseLevel(cfg.Audit.Level)
 	if err != nil {

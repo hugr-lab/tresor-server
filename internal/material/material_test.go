@@ -106,7 +106,7 @@ func TestSchemeNames(t *testing.T) {
 			t.Errorf("%s: refused", name)
 		}
 	}
-	for _, name := range []string{"", "2bao", "-x", "Vault", "vault_us", "abcdefghijklmnopq", "va.ult"} {
+	for _, name := range []string{"", "2bao", "-x", "a-", "a--b", "Vault", "vault_us", "abcdefghijklmnopq", "va.ult"} {
 		if SchemeName(name) {
 			t.Errorf("%s: accepted", name)
 		}

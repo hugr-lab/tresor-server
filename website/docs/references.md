@@ -99,7 +99,8 @@ vault: {address: https://bao.example.eu:8200, auth: {method: kubernetes, role: t
   - no escape, no query, one `#field`.
 - **`state.password_ref: ref+vault://…`** reads a database's password. As for every source, it must be
   outside `material.vault.allow`. A named source's reference (`ref+vault-us://…`) reads with that source's
-  connection, outside its allowlist.
+  connection. It must be outside the allowlist of **every** source of its kind: two sources may reach the same
+  server.
 
 ## Named sources
 
@@ -123,15 +124,17 @@ material:
       allow: [{vault: partner-kv, prefixes: [duckdb-]}]
 ```
 
-- **The name** is the references' scheme: a lower-case letter, then letters, digits or dashes, 16 at most.
-  - It may not be the name of a kind's section that is configured (`vault` beside `material.vault`).
-  - Every reference written before keeps its meaning.
+- **The name** is the references' scheme: a lower-case letter, then letters and digits with single dashes
+  between, 16 at most.
+  - The kinds' names are reserved: `azkv`, `k8s`, `vault`, `aws`, `gcp`. So every reference written before
+    keeps its meaning.
 - **The kinds**: `vault` and `azkv`. `k8s` reads this cluster only: another would need a kubeconfig's
   credentials.
 - **The connection**:
   - a `vault:` block, as the top-level one, or the top-level one when unset;
-  - an `azure:` block: `identity`, `client_id`, and `tenant_id` (with `workload`: an app registration in
-    another tenant, federated to the same ServiceAccount). The top-level `azure:` when unset.
+  - an `azure:` block: `identity`, `client_id` (required, but for `default`), and `tenant_id` (with
+    `workload`: an app registration in another tenant, federated to the same ServiceAccount). The top-level
+    `azure:` when unset.
   - Neither needs a static secret. A second Azure identity is another user-assigned managed identity
     (Container Apps), or another app registration under workload identity.
 - **Each allowlist is the source's own.** A place one source admits is not admitted for another of the kind.

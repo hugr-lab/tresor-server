@@ -456,8 +456,45 @@ func TestNamedSources(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	// a built-in name is free when its section is not configured
-	if _, err := Parse([]byte(good + top + "material: {sources: [{name: vault, kind: vault, allow: [{mount: kv}]}]}\n")); err != nil {
-		t.Fatalf("a free built-in name: %v", err)
+	// a kind's own name is never a named source's, configured or not: a password or a reference written to
+	// it would move to another server
+	for _, name := range []string{"vault", "k8s", "azkv", "aws", "gcp"} {
+		if _, err := Parse([]byte(good + top + "material: {sources: [{name: " + name + ", kind: vault, allow: [{mount: kv}]}]}\n")); err == nil {
+			t.Errorf("a source named %s: accepted", name)
+		}
+	}
+}
+
+// the database's password is outside every source of its kind (spec 008): another may admit the same place, on
+// the same server or vault
+func TestPasswordOutsideEverySource(t *testing.T) {
+	top := "vault: {address: 'https://bao.example', auth: {method: kubernetes, role: tresor}}\nazure: {identity: workload}\n"
+	pg := func(ref, material string) string {
+		return strings.Replace(good, "state: {kind: memory}", "state: {kind: postgres, dsn: 'host=db user=t dbname=t', auth: password, password_ref: '"+ref+"'}", 1) +
+			"keys: {kind: local, key_env: TRESOR_TEST_KEK}\n" + top + "material: " + material + "\n"
+	}
+	bao2 := "{name: bao2, kind: vault, allow: [{mount: kv}]}"
+	own := func(name string) string {
+		return "{name: " + name + ", kind: vault, vault: {address: 'https://bao.us.example', auth: {method: kubernetes, role: t}}, allow: [{mount: kv}]}"
+	}
+	for name, doc := range map[string]string{
+		"through a named source, admitted by the built-in":           pg("ref+bao2://secret/tresor/db#password", "{vault: {allow: [{mount: secret}]}, sources: ["+bao2+"]}"),
+		"through the built-in, admitted by a named source":           pg("ref+vault://kv/tresor/db#password", "{vault: {allow: [{mount: secret}]}, sources: ["+bao2+"]}"),
+		"through one named source, admitted by another":              pg("ref+us1://secret/db#password", "{sources: ["+own("us1")+", "+strings.Replace(own("us2"), "mount: kv", "mount: secret", 1)+"]}"),
+		"Key Vault through the built-in, admitted by a named source": pg("ref+azkv://kv2/db", "{azkv: {allow: [{vault: kv1}]}, sources: [{name: p, kind: azkv, azure: {identity: workload, client_id: c}, allow: [{vault: kv2}]}]}"),
+	} {
+		if _, err := Parse([]byte(doc)); err == nil || !strings.Contains(err.Error(), "allowlist") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := Parse([]byte(pg("ref+bao2://other/tresor/db#password", "{vault: {allow: [{mount: secret}]}, sources: ["+bao2+"]}"))); err != nil {
+		t.Fatalf("outside every allowlist: %v", err)
+	}
+	// a source's own identity names its client id: none is the system-assigned or the webhook's, likely the
+	// top-level one
+	for _, id := range []string{"{identity: managed}", "{identity: workload, tenant_id: t}"} {
+		if _, err := Parse([]byte(good + top + "material: {sources: [{name: p, kind: azkv, azure: " + id + ", allow: [{vault: kv2}]}]}\n")); err == nil {
+			t.Errorf("%s: accepted", id)
+		}
 	}
 }

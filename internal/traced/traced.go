@@ -135,7 +135,7 @@ func (s *source) Resolve(ctx context.Context, ref material.Ref) (value, version 
 		attribute.String("tresor.source.kind", s.Kind()))
 	value, version, err = s.Source.Resolve(ctx, ref)
 	end(sp, err)
-	telemetry.References.Add(ctx, 1, metric.WithAttributes(attribute.String("scheme", s.Scheme()),
+	telemetry.References.Add(ctx, 1, metric.WithAttributes(attribute.String("scheme", s.Scheme()), attribute.String("kind", s.Kind()),
 		attribute.String("outcome", telemetry.Outcome(err))))
 	return
 }
