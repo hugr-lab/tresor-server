@@ -32,6 +32,7 @@ type Allow struct {
 
 // Source resolves vault references.
 type Source struct {
+	name     string // the scheme: "vault", or a named source's (spec 008)
 	vault    Caller
 	allow    []Allow
 	cacheTTL time.Duration
@@ -47,10 +48,25 @@ type cached struct {
 
 // New returns a source over the allowlist; cacheTTL keeps a value read that long (0: read at every fetch).
 func New(v Caller, allow []Allow, cacheTTL time.Duration) *Source {
-	return &Source{vault: v, allow: allow, cacheTTL: cacheTTL, cache: map[string]cached{}}
+	return &Source{name: "vault", vault: v, allow: allow, cacheTTL: cacheTTL, cache: map[string]cached{}}
 }
 
-func (s *Source) Scheme() string { return "vault" }
+// Named is the source under another name (spec 008): ref+<name>://.
+func (s *Source) Named(name string) *Source {
+	s.name = name
+	return s
+}
+
+func (s *Source) Scheme() string { return s.name }
+func (s *Source) Kind() string   { return "vault" }
+
+// allowlist names the setting that lists what this source may read.
+func (s *Source) allowlist() string {
+	if s.name == "vault" {
+		return "material.vault.allow"
+	}
+	return "material.sources[" + s.name + "].allow"
+}
 
 var (
 	segment = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$`)
@@ -62,20 +78,20 @@ var (
 func (s *Source) Parse(text string) (material.Ref, error) {
 	where, fld, ok := strings.Cut(text, "#")
 	if !ok || !field.MatchString(fld) {
-		return material.Ref{}, errors.New("ref+vault://<mount>/<path>#<field>")
+		return material.Ref{}, fmt.Errorf("ref+%s://<mount>/<path>#<field>", s.name)
 	}
 	mount, path, ok := strings.Cut(where, "/")
 	if !ok || !segment.MatchString(mount) || mount == ".." || path == "" {
-		return material.Ref{}, errors.New("ref+vault://<mount>/<path>#<field>: a mount, then a path")
+		return material.Ref{}, fmt.Errorf("ref+%s://<mount>/<path>#<field>: a mount, then a path", s.name)
 	}
 	for _, seg := range strings.Split(path, "/") {
 		if !segment.MatchString(seg) || seg == ".." {
 			return material.Ref{}, errors.New("a vault path's segments are letters, digits, _ . - (no . nor ..)")
 		}
 	}
-	ref := material.Ref{Scheme: "vault", Vault: mount, Name: path, Key: fld}
+	ref := material.Ref{Scheme: s.name, Kind: "vault", Vault: mount, Name: path, Key: fld}
 	if !s.allowed(ref) {
-		return material.Ref{}, fmt.Errorf("%s is outside the allowlist (material.vault.allow)", ref)
+		return material.Ref{}, fmt.Errorf("%s is outside the allowlist (%s)", ref, s.allowlist())
 	}
 	return ref, nil
 }

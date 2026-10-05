@@ -20,6 +20,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+
 	"github.com/hugr-lab/tresor-server/internal/api"
 	"github.com/hugr-lab/tresor-server/internal/audit"
 	"github.com/hugr-lab/tresor-server/internal/auth"
@@ -214,9 +216,15 @@ func databaseLogin(cfg *config.Config, scope string) (sqlstore.Login, error) {
 }
 
 // passwordResolver reads the database's password reference, and nothing else: its source's allowlist is that
-// one place (outside material's, config checks).
+// one place (outside material's, config checks). Its source may be a named one (spec 008): that one's connection.
 func passwordResolver(cfg *config.Config, ref string) (*material.Resolver, error) {
-	if rest, ok := strings.CutPrefix(ref, "ref+k8s://"); ok {
+	scheme, rest, _ := strings.Cut(strings.TrimPrefix(ref, material.Prefix), "://")
+	s, ok := cfg.Source(scheme)
+	if !ok {
+		return nil, fmt.Errorf("state.password_ref: no source is named %s", scheme)
+	}
+	switch s.Kind {
+	case "k8s":
 		parts := strings.Split(rest, "/")
 		if len(parts) != 3 {
 			return nil, errors.New("state.password_ref: ref+k8s://<namespace>/<secret>/<key>")
@@ -234,87 +242,103 @@ func passwordResolver(cfg *config.Config, ref string) (*material.Resolver, error
 			return nil, err
 		}
 		return material.New(src), nil
-	}
-	if rest, ok := strings.CutPrefix(ref, "ref+vault://"); ok {
+	case "vault":
 		where, _, _ := strings.Cut(rest, "#")
 		mount, path, _ := strings.Cut(where, "/")
-		v, err := vaultClient(cfg)
+		v, err := vaultOf(cfg, s)
 		if err != nil {
 			return nil, err
 		}
-		return checkedPassword(material.New(vaultkv.New(v, []vaultkv.Allow{{Mount: mount, Prefixes: []string{path}}}, 0)), ref)
+		return checkedPassword(material.New(vaultkv.New(v, []vaultkv.Allow{{Mount: mount, Prefixes: []string{path}}}, 0).Named(s.Name)), ref)
+	case "azkv":
+		parts := strings.Split(rest, "/")
+		if len(parts) < 2 {
+			return nil, fmt.Errorf("state.password_ref: ref+%s://<vault>/<secret>[/<version>]", s.Name)
+		}
+		cred, err := azureOf(s.Azure)
+		if err != nil {
+			return nil, err
+		}
+		return checkedPassword(material.New(azkvsource.New([]azkvsource.Allow{{Vault: parts[0], Prefixes: []string{parts[1]}}}, cred,
+			azkvsource.Options{DNSSuffix: s.AzKV.DNSSuffix}).Named(s.Name)), ref)
 	}
-	rest := strings.TrimPrefix(ref, "ref+azkv://")
-	parts := strings.Split(rest, "/")
-	if len(parts) < 2 {
-		return nil, errors.New("state.password_ref: ref+azkv://<vault>/<secret>[/<version>]")
-	}
-	cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
-	if err != nil {
-		return nil, err
-	}
-	return checkedPassword(material.New(azkvsource.New([]azkvsource.Allow{{Vault: parts[0], Prefixes: []string{parts[1]}}}, cred,
-		azkvsource.Options{DNSSuffix: cfg.Material.AzKV.DNSSuffix})), ref)
+	return nil, fmt.Errorf("state.password_ref: a %s source", s.Kind)
 }
 
 // checkedPassword: the password reference parses, at start - not at the first connection.
 func checkedPassword(r *material.Resolver, ref string) (*material.Resolver, error) {
 	if !r.Admits(ref) {
 		return nil, errors.New("state.password_ref does not parse: ref+k8s://<namespace>/<secret>/<key>, " +
-			"ref+azkv://<vault>/<secret>[/<version>] or ref+vault://<mount>/<path>#<field>")
+			"ref+azkv://<vault>/<secret>[/<version>] or ref+vault://<mount>/<path>#<field> (or a named source's)")
 	}
 	return r, nil
+}
+
+// azureOf is an identity's credential.
+func azureOf(a config.Azure) (azcore.TokenCredential, error) {
+	return azure.Credential(azure.Identity{Kind: a.Identity, ClientID: a.ClientID, TenantID: a.TenantID})
+}
+
+// vaultOf is a source's Vault client: the process's own for the top-level vault:, one of its own for a named
+// source's vault: block (spec 008).
+func vaultOf(cfg *config.Config, s config.Source) (*vault.Client, error) {
+	if !s.OwnConnection {
+		return vaultClient(cfg)
+	}
+	return newVaultClient(s.Vault)
 }
 
 // materialResolver is where references may read (material:), or nil: then every reference is refused.
 func materialResolver(cfg *config.Config) (*material.Resolver, error) {
 	var sources []material.Source
-	if kv := cfg.Material.AzKV; len(kv.Allow) > 0 {
-		cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
-		if err != nil {
-			return nil, err
-		}
-		allow := make([]azkvsource.Allow, len(kv.Allow))
-		for i, a := range kv.Allow {
-			allow[i] = azkvsource.Allow{Vault: a.Vault, Prefixes: a.Prefixes}
-		}
-		sources = append(sources, traced.Source(azkvsource.New(allow, cred, azkvsource.Options{DNSSuffix: kv.DNSSuffix, CacheTTL: kv.CacheTTL})))
-	}
-	if k := cfg.Material.K8s; len(k.Allow) > 0 {
-		// the service's own namespace holds its own credentials (a local KEK, a password, a client secret):
-		// never readable by a reference
-		if own, err := kube.Namespace(cfg.State.Namespace); err == nil {
-			for _, a := range k.Allow {
-				if a.Namespace == own {
-					return nil, fmt.Errorf("material.k8s.allow names %s, the service's own namespace: its credentials are "+
-						"there - keep the Secrets references read in another", own)
+	for _, s := range cfg.Sources() {
+		switch s.Kind {
+		case "azkv":
+			cred, err := azureOf(s.Azure)
+			if err != nil {
+				return nil, fmt.Errorf("material (%s): %w", s.Name, err)
+			}
+			allow := make([]azkvsource.Allow, len(s.AzKV.Allow))
+			for i, a := range s.AzKV.Allow {
+				allow[i] = azkvsource.Allow{Vault: a.Vault, Prefixes: a.Prefixes}
+			}
+			sources = append(sources, traced.Source(azkvsource.New(allow, cred,
+				azkvsource.Options{DNSSuffix: s.AzKV.DNSSuffix, CacheTTL: s.AzKV.CacheTTL}).Named(s.Name)))
+		case "k8s":
+			// the service's own namespace holds its own credentials (a local KEK, a password, a client secret):
+			// never readable by a reference
+			if own, err := kube.Namespace(cfg.State.Namespace); err == nil {
+				for _, a := range s.K8s.Allow {
+					if a.Namespace == own {
+						return nil, fmt.Errorf("material.k8s.allow names %s, the service's own namespace: its credentials are "+
+							"there - keep the Secrets references read in another", own)
+					}
 				}
 			}
+			rc, err := kube.Config()
+			if err != nil {
+				return nil, err
+			}
+			allow := make([]k8ssource.Allow, len(s.K8s.Allow))
+			for i, a := range s.K8s.Allow {
+				allow[i] = k8ssource.Allow{Namespace: a.Namespace, Prefixes: a.Prefixes}
+			}
+			src, err := k8ssource.New(allow, rc)
+			if err != nil {
+				return nil, err
+			}
+			sources = append(sources, traced.Source(src))
+		case "vault":
+			v, err := vaultOf(cfg, s)
+			if err != nil {
+				return nil, fmt.Errorf("material (%s): %w", s.Name, err)
+			}
+			allow := make([]vaultkv.Allow, len(s.VaultAllow.Allow))
+			for i, a := range s.VaultAllow.Allow {
+				allow[i] = vaultkv.Allow{Mount: a.Mount, Prefixes: a.Prefixes}
+			}
+			sources = append(sources, traced.Source(vaultkv.New(v, allow, s.VaultAllow.CacheTTL).Named(s.Name)))
 		}
-		rc, err := kube.Config()
-		if err != nil {
-			return nil, err
-		}
-		allow := make([]k8ssource.Allow, len(k.Allow))
-		for i, a := range k.Allow {
-			allow[i] = k8ssource.Allow{Namespace: a.Namespace, Prefixes: a.Prefixes}
-		}
-		src, err := k8ssource.New(allow, rc)
-		if err != nil {
-			return nil, err
-		}
-		sources = append(sources, traced.Source(src))
-	}
-	if mv := cfg.Material.Vault; len(mv.Allow) > 0 {
-		v, err := vaultClient(cfg)
-		if err != nil {
-			return nil, err
-		}
-		allow := make([]vaultkv.Allow, len(mv.Allow))
-		for i, a := range mv.Allow {
-			allow[i] = vaultkv.Allow{Mount: a.Mount, Prefixes: a.Prefixes}
-		}
-		sources = append(sources, traced.Source(vaultkv.New(v, allow, mv.CacheTTL)))
 	}
 	if len(sources) == 0 {
 		return nil, nil
@@ -388,8 +412,16 @@ func serve(configPath string, log *slog.Logger) error {
 		return err
 	}
 	// the sources' own parse, beside config's: the database's password is no administrator's to read
-	if ref := cfg.State.PasswordRef; ref != "" && resolver != nil && resolver.Admits(ref) {
-		return errors.New("state.password_ref is within material's allowlist: an administrator could read the database's password")
+	// every source of the kind: another may admit the same place, on the same server or vault (spec 008)
+	if ref := cfg.State.PasswordRef; ref != "" {
+		scheme, where, _ := strings.Cut(strings.TrimPrefix(ref, material.Prefix), "://")
+		s, ok := cfg.Source(scheme)
+		if !ok {
+			return fmt.Errorf("state.password_ref: no source is named %s", scheme)
+		}
+		if resolver.AdmitsPlace(s.Kind, where) {
+			return errors.New("state.password_ref is within material's allowlist: an administrator could read the database's password")
+		}
 	}
 	level, err := audit.ParseLevel(cfg.Audit.Level)
 	if err != nil {
@@ -549,13 +581,16 @@ func vaultClient(cfg *config.Config) (*vault.Client, error) {
 	if vaultOnce.client != nil {
 		return vaultOnce.client, nil
 	}
-	v := cfg.Vault
-	c, err := vault.New(vault.Config{Address: v.Address, Namespace: v.Namespace, CAFile: v.CAFile,
-		Auth: vault.Auth{Method: v.Auth.Method, Mount: v.Auth.Mount, Role: v.Auth.Role, JWTFile: v.Auth.JWTFile,
-			TokenFile: v.Auth.TokenFile}})
+	c, err := newVaultClient(cfg.Vault)
 	if err != nil {
 		return nil, err
 	}
 	vaultOnce.client = c
 	return c, nil
+}
+
+func newVaultClient(v config.Vault) (*vault.Client, error) {
+	return vault.New(vault.Config{Address: v.Address, Namespace: v.Namespace, CAFile: v.CAFile,
+		Auth: vault.Auth{Method: v.Auth.Method, Mount: v.Auth.Mount, Role: v.Auth.Role, JWTFile: v.Auth.JWTFile,
+			TokenFile: v.Auth.TokenFile}})
 }

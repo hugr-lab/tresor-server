@@ -131,10 +131,11 @@ func Source(src material.Source) material.Source { return &source{src} }
 type source struct{ material.Source }
 
 func (s *source) Resolve(ctx context.Context, ref material.Ref) (value, version string, err error) {
-	ctx, sp := span(ctx, "material.resolve", attribute.String("tresor.scheme", s.Scheme()))
+	ctx, sp := span(ctx, "material.resolve", attribute.String("tresor.scheme", s.Scheme()),
+		attribute.String("tresor.source.kind", s.Kind()))
 	value, version, err = s.Source.Resolve(ctx, ref)
 	end(sp, err)
-	telemetry.References.Add(ctx, 1, metric.WithAttributes(attribute.String("scheme", s.Scheme()),
+	telemetry.References.Add(ctx, 1, metric.WithAttributes(attribute.String("scheme", s.Scheme()), attribute.String("kind", s.Kind()),
 		attribute.String("outcome", telemetry.Outcome(err))))
 	return
 }

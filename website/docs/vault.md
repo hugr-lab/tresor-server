@@ -108,6 +108,15 @@ config:
 `scripts/ci/kind.sh` checks this in CI: OpenBao in the cluster with Kubernetes auth and the projected token,
 the KEK in Transit, a `ref+vault` reference read through the protocol, on the Kubernetes store.
 
+## A second Vault
+
+Another Vault (another region, another team's) is a [named source](references.md#named-sources):
+`material.sources` with `kind: vault` and a `vault:` block of its own. References name it: `ref+vault-us://…`.
+
+- With the chart's `vaultToken`, a named source's `kubernetes` or `jwt` login gets the same token file. Each
+  Vault's role must accept its audience.
+- The KEK and `client_auth: vault` use the top-level `vault:` only.
+
 ## Failures
 
 - **Fail closed.** A Vault that does not answer gives `503`, never an empty value.

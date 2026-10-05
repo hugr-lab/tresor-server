@@ -5,7 +5,7 @@
 #     delete;
 #   - PostgreSQL in the cluster, its password from a Kubernetes Secret (state.password_ref: ref+k8s).
 #   - OpenBao in the cluster: Kubernetes auth with a projected token, the KEK in Transit, ref+vault, the
-#     Kubernetes store.
+#     Kubernetes store; a second OpenBao as a named source (ref+bao2).
 # Each is checked through the protocol (scripts/ci/kindcheck). Needs docker, kind, kubectl, helm, go, openssl.
 #
 #   scripts/ci/kind.sh            # TRESOR_KIND_KEEP=1 keeps the cluster afterwards
@@ -209,30 +209,35 @@ install p tresor-pg --set config.state.kind=postgres \
 	--set config.state.auth=password --set config.state.password_ref=ref+k8s://db/pg/password
 smoke p tresor-pg
 
-echo "kind: OpenBao with Kubernetes auth (spec 007): the KEK in Transit, ref+vault, the Kubernetes store"
-ca_cert bao bao.bao.svc
-kubectl create namespace bao
-kubectl -n bao create secret tls bao-tls --cert "$work/bao.crt" --key "$work/bao.key"
-kubectl -n bao create configmap bao-conf --from-literal=tls.hcl='listener "tcp" {
+# bao_up <namespace> <value>: an OpenBao in the namespace, TLS of the run's CA at bao.<namespace>.svc:8200; the
+# Kubernetes auth method, its role for the release b's ServiceAccount (the audience of the chart's projected token,
+# vaultToken) and a policy: the KEK's Transit key, and the KV paths references may read; secret/duckdb/lake holds
+# <value>
+bao_up() {
+	local ns="$1" value="$2"
+	ca_cert "$ns" "bao.$ns.svc"
+	kubectl create namespace "$ns"
+	kubectl -n "$ns" create secret tls bao-tls --cert "$work/$ns.crt" --key "$work/$ns.key"
+	kubectl -n "$ns" create configmap bao-conf --from-literal=tls.hcl='listener "tcp" {
   address = "0.0.0.0:8443"
   tls_cert_file = "/tls/tls.crt"
   tls_key_file = "/tls/tls.key"
 }'
-kubectl apply -f - <<'EOF'
+	sed "s/NAMESPACE/$ns/g" <<'EOF' | kubectl apply -f -
 apiVersion: v1
 kind: ServiceAccount
-metadata: {name: bao, namespace: bao}
+metadata: {name: bao, namespace: NAMESPACE}
 ---
 # the Kubernetes auth method reviews the service's tokens with OpenBao's own
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
-metadata: {name: bao-auth-delegator}
+metadata: {name: NAMESPACE-auth-delegator}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:auth-delegator}
-subjects: [{kind: ServiceAccount, name: bao, namespace: bao}]
+subjects: [{kind: ServiceAccount, name: bao, namespace: NAMESPACE}]
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: bao, namespace: bao}
+metadata: {name: bao, namespace: NAMESPACE}
 spec:
   selector: {matchLabels: {app: bao}}
   template:
@@ -256,19 +261,13 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: bao, namespace: bao}
+metadata: {name: bao, namespace: NAMESPACE}
 spec:
   selector: {app: bao}
   ports: [{port: 8200, targetPort: 8443}]
 EOF
-baodump() {
-	kubectl -n bao get pods -o wide || true
-	kubectl -n bao logs deploy/bao --tail 50 || true
-}
-kubectl -n bao rollout status deploy/bao --timeout 180s || { baodump; exit 1; }
-# the service's role: its ServiceAccount, the audience of the chart's projected token (vaultToken); its policy:
-# the KEK's Transit key and the KV paths it may read
-kubectl -n bao exec -i deploy/bao -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN=root sh -eu >/dev/null <<'EOF' || { baodump; exit 1; }
+	kubectl -n "$ns" rollout status deploy/bao --timeout 180s || { baodump "$ns"; exit 1; }
+	kubectl -n "$ns" exec -i deploy/bao -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN=root VALUE="$value" sh -eu >/dev/null <<'EOF' || { baodump "$ns"; exit 1; }
 bao auth enable kubernetes
 bao write auth/kubernetes/config kubernetes_host=https://kubernetes.default.svc
 bao policy write tresor - <<'HCL'
@@ -282,22 +281,33 @@ bao write auth/kubernetes/role/tresor bound_service_account_names=b-tresor-serve
   bound_service_account_namespaces=tresor-bao audience=vault token_policies=tresor token_ttl=1h
 bao secrets enable transit
 bao write -f transit/keys/kek type=aes256-gcm96
-bao kv put secret/duckdb/lake secret=from-openbao
+bao kv put secret/duckdb/lake secret="$VALUE"
 EOF
+}
+baodump() {
+	kubectl -n "$1" get pods -o wide || true
+	kubectl -n "$1" logs deploy/bao --tail 50 || true
+}
+
+echo "kind: OpenBao with Kubernetes auth (spec 007): the KEK in Transit, ref+vault, the Kubernetes store; a second"
+echo "kind: OpenBao as a named source (spec 008), ref+bao2"
+bao_up bao from-openbao
+bao_up bao2 from-the-second-openbao
 install b tresor-bao --set config.state.kind=kubernetes --set localKEK.secretName= --set vaultToken.enabled=true \
 	--set-json 'config.keys={"kind":"vault","key":"kek"}' \
 	--set-json 'config.vault={"address":"https://bao.bao.svc:8200","ca_file":"/etc/tresor-ca/ca.crt","auth":{"method":"kubernetes","role":"tresor"}}' \
-	--set-json 'config.material={"vault":{"allow":[{"mount":"secret","prefixes":["duckdb/"]}]}}'
+	--set-json 'config.material={"vault":{"allow":[{"mount":"secret","prefixes":["duckdb/"]}]},"sources":[{"name":"bao2","kind":"vault","vault":{"address":"https://bao.bao2.svc:8200","ca_file":"/etc/tresor-ca/ca.crt","auth":{"method":"kubernetes","role":"tresor"}},"allow":[{"mount":"secret","prefixes":["duckdb/"]}]}]}'
 smoke b tresor-bao 'ref+vault://secret/duckdb/lake#secret' from-openbao
+smoke b tresor-bao 'ref+bao2://secret/duckdb/lake#secret' from-the-second-openbao
 kek="$(kubectl -n tresor-bao get tresordatakeys -o jsonpath='{.items[*].spec.kekID}')"
 [[ "$kek" == vault:transit/kek:v1* ]] || { echo "kind: the data keys are not under the Transit KEK: $kek" >&2; exit 1; }
 # no material in the pods' log (not through a pipe: grep -q's early exit would fail it under pipefail)
 stdout="$(kubectl -n tresor-bao logs -l app.kubernetes.io/instance=b --tail 500)"
-if grep -q "from-openbao" <<<"$stdout"; then
+if grep -qE "from-openbao|from-the-second-openbao" <<<"$stdout"; then
 	echo "kind: material reached the pods' log" >&2
 	exit 1
 fi
-echo "kind: OpenBao: logged in by Kubernetes auth, data keys under Transit, ref+vault read"
+echo "kind: OpenBao: logged in by Kubernetes auth, data keys under Transit, ref+vault read; ref+bao2 from the second"
 
 echo "kind: the Kubernetes store's namespace deleted: the namespace controller deletes its resources"
 # the policy stays (cluster-scoped): a namespace that would not delete would hang here

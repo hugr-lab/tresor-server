@@ -17,8 +17,9 @@ CREATE PERSISTENT SECRET lake IN corp (
 ```
 
 The service reads the value at each fetch, with its own identity. DuckDB gets the value; the store keeps only
-the reference. Three sources: Azure Key Vault (`ref+azkv://`), Kubernetes Secrets (`ref+k8s://`), and OpenBao or
-HashiCorp Vault KV v2 (`ref+vault://`).
+the reference. Three kinds of source: Azure Key Vault (`ref+azkv://`), Kubernetes Secrets (`ref+k8s://`), and
+OpenBao or HashiCorp Vault KV v2 (`ref+vault://`). [Named sources](#named-sources) add more of a kind under
+names of their own (`ref+vault-us://`).
 
 ## Key Vault: the syntax
 
@@ -97,7 +98,53 @@ vault: {address: https://bao.example.eu:8200, auth: {method: kubernetes, role: t
   - path segments of letters, digits, `_`, `.` and `-`, with no `.` or `..`;
   - no escape, no query, one `#field`.
 - **`state.password_ref: ref+vault://…`** reads a database's password. As for every source, it must be
-  outside `material.vault.allow`.
+  outside `material.vault.allow`. A named source's reference (`ref+vault-us://…`) reads with that source's
+  connection. It must be outside the allowlist of **every** source of its kind: two sources may reach the same
+  server.
+
+## Named sources
+
+The name after `ref+` is a **source**. Each kind's section (`material.azkv`, `material.k8s`, `material.vault`)
+is a source named after its kind. `material.sources` adds more, each with its own name, connection and
+allowlist (spec 008):
+
+```yaml
+material:
+  vault: {allow: [{mount: secret, prefixes: [duckdb/]}]}       # ref+vault://, with the top-level vault:
+  sources:
+    - name: vault-us                                            # ref+vault-us://<mount>/<path>#<field>
+      kind: vault
+      vault:                                                    # its own; the top-level vault: when unset
+        address: https://bao.us.example:8200
+        auth: {method: jwt, mount: jwt-eu-cluster, role: tresor, jwt_file: /var/run/tresor/vault-token/token}
+      allow: [{mount: secret, prefixes: [duckdb/]}]
+    - name: partner                                             # ref+partner://<vault>/<secret>[/<version>]
+      kind: azkv
+      azure: {identity: workload, client_id: <app id>, tenant_id: <the partner's tenant>}
+      allow: [{vault: partner-kv, prefixes: [duckdb-]}]
+```
+
+- **The name** is the references' scheme: a lower-case letter, then letters and digits with single dashes
+  between, 16 at most.
+  - The kinds' names are reserved: `azkv`, `k8s`, `vault`, `aws`, `gcp`. So every reference written before
+    keeps its meaning.
+- **The kinds**: `vault` and `azkv`. `k8s` reads this cluster only: another would need a kubeconfig's
+  credentials.
+- **The connection**:
+  - a `vault:` block, as the top-level one, or the top-level one when unset;
+  - an `azure:` block: `identity`, `client_id` (required, but for `default`), and `tenant_id` (with
+    `workload`: an app registration in another tenant, federated to the same ServiceAccount). The top-level
+    `azure:` when unset.
+  - Neither needs a static secret. A second Azure identity is another user-assigned managed identity
+    (Container Apps), or another app registration under workload identity.
+- **Each allowlist is the source's own.** A place one source admits is not admitted for another of the kind.
+  Its syntax is the kind's: `{mount, prefixes}` for `vault`, `{vault, prefixes}` for `azkv`. `cache_ttl` and,
+  for `azkv`, `dns_suffix` are the source's too.
+- **Renaming or removing a source strands its references.** They are refused at a write, and fail at a fetch
+  as a reference outside the allowlist does. They are never read by another source of the kind. Rename a
+  source only with its references rewritten.
+- The audit and the logs name a reference as written (`ref+vault-us://…`). Spans add the kind
+  (`tresor.source.kind`).
 
 ## The rules
 

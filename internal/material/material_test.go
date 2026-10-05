@@ -13,6 +13,7 @@ import (
 type fake struct{ values map[string]string }
 
 func (fake) Scheme() string { return "fake" }
+func (fake) Kind() string   { return "fake" }
 func (fake) Parse(text string) (Ref, error) {
 	if text == "" || strings.Contains(text, "/") {
 		return Ref{}, errors.New("ref+fake://<name>")
@@ -94,5 +95,35 @@ func TestResolve(t *testing.T) {
 	var none *Resolver
 	if _, _, err := none.Resolve(context.Background(), in); !errors.Is(err, ErrUnresolved) {
 		t.Fatalf("no sources: %v", err)
+	}
+}
+
+// a source's name (spec 008): what every reference written before still is, and dashes; a named vault source's
+// references are logged in the vault form, under its name
+func TestSchemeNames(t *testing.T) {
+	for _, name := range []string{"azkv", "k8s", "vault", "vault-us", "a", "bao2", "abcdefghijklmnop"} {
+		if !SchemeName(name) {
+			t.Errorf("%s: refused", name)
+		}
+	}
+	for _, name := range []string{"", "2bao", "-x", "a-", "a--b", "Vault", "vault_us", "abcdefghijklmnopq", "va.ult"} {
+		if SchemeName(name) {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	ref := Ref{Scheme: "vault-us", Kind: "vault", Vault: "secret", Name: "duckdb/lake", Key: "secret"}
+	if ref.String() != "ref+vault-us://secret/duckdb/lake#secret" {
+		t.Fatal(ref.String())
+	}
+	if (Ref{Scheme: "partner", Kind: "azkv", Vault: "kv", Name: "s"}).String() != "ref+partner://kv/s" {
+		t.Fatal("an azkv source's")
+	}
+	// a reference to a name no source has is refused at a write, and fails at a fetch
+	r := New(fake{values: map[string]string{"id": "AKIA"}})
+	if _, err := r.CheckWrite("s3", params(t, `{"a":"ref+vault-us://secret/x#f"}`), nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a write: %v", err)
+	}
+	if _, _, err := r.Resolve(context.Background(), params(t, `{"a":"ref+vault-us://secret/x#f"}`)); !errors.Is(err, ErrUnresolved) || !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a fetch: %v", err)
 	}
 }

@@ -67,7 +67,7 @@ The service's spans **only continue tresor's trace**: it never starts one.
 | `tresor.audit.events` | by kind and outcome; counted at every audit level |
 | `tresor.audit.dropped` | events a writer failed to write |
 | `tresor.kek.operations`, `tresor.kek.duration` | wrap, unwrap, root, by outcome |
-| `tresor.references` | by scheme and outcome |
+| `tresor.references` | by scheme (the source's name: `vault`, or a named source's), kind and outcome |
 | `tresor.mint` | by outcome |
 | `tresor.state.conflicts` | compare-and-set writes lost and run again |
 | `tresor.state.left_out` | Kubernetes resources a list left out (their MAC) |

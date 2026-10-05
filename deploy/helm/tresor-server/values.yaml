@@ -56,7 +56,8 @@ exchangeToken:
   expirationSeconds: 3600
 
 # A projected ServiceAccount token for the Vault login (spec 007: vault.auth.method kubernetes or jwt): mounted
-# at /var/run/tresor/vault-token/token, and config.vault.auth.jwt_file set to it when unset. Bound to an audience
+# at /var/run/tresor/vault-token/token, and config.vault.auth.jwt_file set to it when unset (and a named source's,
+# config.material.sources[].vault.auth.jwt_file). Bound to an audience
 # (the Vault role's audience), it is good for Vault only, not for the Kubernetes API. Off with method
 # kubernetes: the pod's own ServiceAccount token is mounted instead. Not with a jwt_file of your own.
 vaultToken:

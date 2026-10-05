@@ -19,7 +19,8 @@ const Prefix = "ref+"
 
 // Ref is a parsed reference.
 type Ref struct {
-	Scheme string // "azkv", "k8s"
+	Scheme string // the source's name, as written: "azkv", "k8s", "vault", or a named source's (spec 008)
+	Kind   string // the source's kind: "azkv", "k8s", "vault" ("": Scheme's)
 	// Where, as the source parsed it: for Key Vault the vault, the secret, a version or ""; for Kubernetes the
 	// namespace (Vault), the Secret (Name) and its key (Key).
 	Vault, Name, Key, Version string
@@ -27,8 +28,8 @@ type Ref struct {
 
 // String is the reference as logged: where, never a value.
 func (r Ref) String() string {
-	if r.Scheme == "vault" { // <mount>/<path>#<field>: a path has slashes of its own
-		return Prefix + "vault://" + r.Vault + "/" + r.Name + "#" + r.Key
+	if r.Kind == "vault" || (r.Kind == "" && r.Scheme == "vault") { // <mount>/<path>#<field>: a path has slashes of its own
+		return Prefix + r.Scheme + "://" + r.Vault + "/" + r.Name + "#" + r.Key
 	}
 	s := Prefix + r.Scheme + "://" + r.Vault + "/" + r.Name
 	for _, part := range []string{r.Key, r.Version} {
@@ -39,9 +40,11 @@ func (r Ref) String() string {
 	return s
 }
 
-// Source reads what references of one scheme name.
+// Source reads what references of one scheme name: a kind's built-in source (the scheme is the kind), or a
+// named one (spec 008).
 type Source interface {
 	Scheme() string
+	Kind() string
 	// Parse checks a reference's text (after the scheme) and the allowlist; an error says what is wrong
 	// with it, never a value.
 	Parse(text string) (Ref, error)
@@ -99,15 +102,20 @@ func readParam(raw json.RawMessage) param {
 	return p
 }
 
-var schemeName = regexp.MustCompile(`^[a-z0-9]{1,16}$`)
+// schemeName is a source's name (spec 008): what every reference written before still is, and single dashes
+// between letters and digits; 16 at most
+var schemeName = regexp.MustCompile(`^[a-z](-?[a-z0-9])*$`)
+
+// SchemeName says whether name may name a source.
+func SchemeName(name string) bool { return len(name) <= 16 && schemeName.MatchString(name) }
 
 // parse splits a reference's text: its scheme and the rest. The text is named in no error: a scheme that is
 // not one may be a value written by mistake.
 func (r *Resolver) parse(text string) (Source, Ref, error) {
 	rest := strings.TrimPrefix(text, Prefix)
 	scheme, where, ok := strings.Cut(rest, "://")
-	if !ok || !schemeName.MatchString(scheme) {
-		return nil, Ref{}, fmt.Errorf("%w: ref+<scheme>://..., the scheme in lower-case letters and digits", ErrInvalid)
+	if !ok || !SchemeName(scheme) {
+		return nil, Ref{}, fmt.Errorf("%w: ref+<scheme>://..., the scheme in lower-case letters, digits and dashes", ErrInvalid)
 	}
 	var src Source
 	if r != nil {
@@ -217,6 +225,23 @@ func (r *Resolver) Resolve(ctx context.Context, params map[string]json.RawMessag
 func (r *Resolver) Admits(text string) bool {
 	_, _, err := r.parse(text)
 	return err == nil
+}
+
+// AdmitsPlace says whether any source of a kind admits the place a reference's text names after its scheme
+// (spec 008): a place one source of the kind refuses may be the same place, on the same server or vault, that
+// another admits - the database's password must be outside them all.
+func (r *Resolver) AdmitsPlace(kind, where string) bool {
+	if r == nil {
+		return false
+	}
+	for _, src := range r.sources {
+		if src.Kind() == kind {
+			if _, err := src.Parse(where); err == nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ResolveOne reads what one reference names (state.password_ref): within its source's allowlist, never logged.
