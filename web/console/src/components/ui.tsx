@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, CircleAlert, Lock, MoreHorizontal, Search } from 'lucide-react'
 import type { Verb } from '../lib/types'
 import { ApiError } from '../lib/api'
+import { useApp } from '../context'
 
 export function VerbChips({ verbs }: { verbs: Verb[] }) {
   return (
@@ -157,13 +158,15 @@ export function Banner({ tone, children }: { tone: 'warning' | 'danger' | 'succe
  * or above it when there is no room; closed on a click elsewhere, Escape, a scroll or a resize */
 export function RowMenu({ label, items }: { label: string; items: { label: string; danger?: boolean; onSelect: () => void }[] }) {
   const [at, setAt] = useState<{ top: number; right: number; up: boolean } | null>(null)
+  const { portal } = useApp()
   const button = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
   const open = at !== null
   useEffect(() => {
     if (!open) return
     const close = (e: Event) => {
-      if (e instanceof KeyboardEvent ? e.key === 'Escape' : e.type !== 'mousedown' || (!menu.current?.contains(e.target as Node) && !button.current?.contains(e.target as Node))) {
+      const target = e.composedPath()[0] as Node // inside a shadow root, e.target is its host
+      if (e instanceof KeyboardEvent ? e.key === 'Escape' : e.type !== 'mousedown' || (!menu.current?.contains(target) && !button.current?.contains(target))) {
         setAt(null)
         if (e instanceof KeyboardEvent) button.current?.focus()
       }
@@ -171,12 +174,17 @@ export function RowMenu({ label, items }: { label: string; items: { label: strin
     document.addEventListener('mousedown', close)
     document.addEventListener('keydown', close)
     window.addEventListener('scroll', close, true)
+    // a scroll inside a shadow root does not reach the window (the microfrontend)
+    const shadow = button.current?.getRootNode()
+    const inner = shadow instanceof ShadowRoot ? shadow : undefined
+    inner?.addEventListener('scroll', close, true)
     window.addEventListener('resize', close)
     menu.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
     return () => {
       document.removeEventListener('mousedown', close)
       document.removeEventListener('keydown', close)
       window.removeEventListener('scroll', close, true)
+      inner?.removeEventListener('scroll', close, true)
       window.removeEventListener('resize', close)
     }
   }, [open])
@@ -198,7 +206,7 @@ export function RowMenu({ label, items }: { label: string; items: { label: strin
             className="z-50 flex min-w-[168px] flex-col rounded-md border border-line bg-surface p-1.5 text-left text-ink"
             onKeyDown={(e) => {
               const all = [...(menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])]
-              const i = all.indexOf(document.activeElement as HTMLElement)
+              const i = all.indexOf((menu.current?.getRootNode() as Document | ShadowRoot | undefined)?.activeElement as HTMLElement)
               if (e.key === 'ArrowDown') { e.preventDefault(); all[(i + 1) % all.length]?.focus() }
               if (e.key === 'ArrowUp') { e.preventDefault(); all[(i - 1 + all.length) % all.length]?.focus() }
             }}>
@@ -209,7 +217,7 @@ export function RowMenu({ label, items }: { label: string; items: { label: strin
               </button>
             ))}
           </div>,
-          document.body,
+          portal ?? document.body,
         )}
     </>
   )

@@ -17,6 +17,7 @@ export interface AppState {
   setTheme?: (t: Theme) => void // the standalone console's own switch; a host owns it otherwise
   signOut?: () => void
   embedded: boolean // mounted in a host's shell: no sidebar, no top bar
+  portal?: HTMLElement // where a menu over the page is drawn: inside the shadow root when mounted (its styles)
 }
 
 export const AppContext = createContext<AppState | null>(null)

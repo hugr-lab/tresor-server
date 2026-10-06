@@ -38,7 +38,7 @@ system. The design brief: `design/ui-prompt.md` (local).
   library: Radix's scroll lock injects `<style>` tags, which the CSP refuses; dialogs are native `<dialog>`s
   (their own focus trap and Escape), menus are small components. Every dependency MIT, ISC or Apache-2.0; fonts SIL OFL (Manrope, JetBrains Mono), bundled,
   never from a CDN.
-- **Source** in `web/console/`; the build (`dist/`, `dist-mfe/`) is embedded in the binary (`go:embed`), as hub's
+- **Source** in `web/console/`; the build (`dist/`, with `dist/mfe/`) is embedded in the binary (`go:embed`), as hub's
   console is. The image builds it in its own stage; `go build` alone embeds a placeholder page.
 - **Size**: a desktop console, at least 1280 × 800 px; below that the page scrolls. The microfrontend's content
   keeps at least 960 px.
@@ -66,7 +66,7 @@ system. The design brief: `design/ui-prompt.md` (local).
 ui:
   enabled: true                 # default; false: no /ui/, no /admin/v1
   environment: prod             # optional: the badge in the top bar; unset, none
-  allowed_origins: []           # the microfrontend's hosts (CORS on /v1 and /admin/v1)
+  allowed_origins: []           # the microfrontend's hosts (CORS on /ui/mfe/, /v1, /admin/v1)
   frame_ancestors: []           # pages that may frame /ui/ (CSP); none by default
   connect_src: []               # more origins the sign-in calls (an IdP's endpoints on another host)
 ```
@@ -106,13 +106,16 @@ Writes otherwise use the protocol's routes: `PUT` (create, with `If-None-Match: 
 
 ### The microfrontend
 
-- A second build, `dist-mfe/`: one ES module and its stylesheet, served at `/ui/mfe/`.
-- `mountTresor(element, {apiBase, getToken(audience), theme, basePath, onNavigate, onTitle})` →
-  `{update, unmount}`; and `<tresor-console>` (Shadow DOM; the token through a property, never an attribute).
+- A second build, `dist/mfe/`: one ES module, `tresor.js`, with its styles inside it (constructed style sheets in the
+  shadow root; the fonts' faces in the document, where a shadow root's are not used) and its fonts beside it;
+  served at `/ui/mfe/`, with CORS for `ui.allowed_origins`.
+- `mountTresor(element, {apiBase, getToken(audience), audience, theme, basePath, onNavigate, onTitle})` →
+  `{update({theme, path}), unmount}`, in the element's shadow root; and `<tresor-console>` (the token function
+  through a property, never an attribute; `tresor-navigate` and `tresor-title` events).
 - The host owns sign-in, navigation and the theme; the console renders its content with its own section tabs.
 - **Its token** carries tresor's audience: the IdP adds it to the host's tokens (a Keycloak audience mapper, a
   ZITADEL project) or the host gets one for tresor; `getToken(audience)` covers both.
-- **CORS** on `/v1/*` and `/admin/v1/*` for `ui.allowed_origins` only (bearer tokens, no cookies); or the host
+- **CORS** on `/ui/mfe/*`, `/v1/*` and `/admin/v1/*` for `ui.allowed_origins` only (bearer tokens, no cookies); or the host
   proxies tresor under its own origin and needs none.
 
 ## Enforcement & security
