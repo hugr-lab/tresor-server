@@ -49,7 +49,7 @@ keys:
 - Values under a previous KEK's data keys read as before.
 - The first write after the change seals under a new data key wrapped by the new KEK: the active data key is
   replaced when its KEK id is not the current one (spec 002, unchanged).
-- Readiness checks each previous KEK too (it gives its current id): a previous KEK that does not
+- Readiness checks each previous KEK too, by a round trip (its current id, then its root): a previous KEK that does not
   answer makes the service not ready, since the values under it would not open.
 - `/admin/v1/service` and the console's Service screen list the previous KEKs (kind and where: a key URL, a
   Transit key, a file or a variable's name; never key material).
@@ -76,8 +76,12 @@ and listed in `config.keys.previous` when that is unset. Other kinds need nothin
 - **Read only.** A previous KEK never wraps; `Current` is always the new one.
 - **Fail closed.** An id no KEK owns, a data key whose tag does not match, a previous KEK that does not answer:
   errors, never an empty value. After step 3 nothing under the old KEK opens.
-- **No downgrade.** A data key's tag binds its KEK id; moving it under the old KEK again needs the old KEK's
-  root, which only its holder computes.
+- **No downgrade.** A data key's tag binds its KEK id; a new one under the old KEK needs the old KEK's root,
+  which only its holder computes. A store writer can put back a data key row from before the rewrap: while the
+  old KEK is previous it opens (the same data key), after step 3 it is refused. Until step 3 the old KEK is
+  trusted as the current one: `rewrap` carries over every data key authentic under it.
+- **Rewrap after the rollout.** A replica still on the old configuration makes new data keys under the old KEK;
+  `rewrap` runs once every replica has the new one, and again until it moves none.
 - **The old KEK's material** (a local key file) is needed only until step 3; the docs say to remove it then.
 - **Logs** name KEK ids and data key ids, never key material, as today.
 

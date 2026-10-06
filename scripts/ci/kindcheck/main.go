@@ -43,7 +43,7 @@ func main() {
 	case len(os.Args) == 5 && (os.Args[1] == "keep" || os.Args[1] == "kept"):
 		keep(os.Args[1] == "keep", os.Args[2], os.Args[3], os.Args[4])
 	default:
-		log.Fatal("usage: kindcheck issuer <dir> <issuer> | kindcheck smoke <dir> <issuer> <url>")
+		log.Fatal("usage: kindcheck issuer <dir> <issuer> | kindcheck smoke|keep|kept <dir> <issuer> <url>")
 	}
 }
 

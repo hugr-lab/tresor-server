@@ -135,6 +135,13 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- if and .Values.vaultToken.enabled (not $tokenLogin) -}}
 {{- fail "vaultToken: for a Vault login by kubernetes or jwt (config.vault.auth, or a named source's)" -}}
 {{- end -}}
+{{- if and .Values.localKEK.previousSecretName $keys.previous -}}
+{{- $named := false -}}
+{{- range $keys.previous -}}{{- if hasPrefix "/var/run/tresor/kek-previous/" (.key_file | default "") -}}{{- $named = true -}}{{- end -}}{{- end -}}
+{{- if not $named -}}
+{{- fail "localKEK.previousSecretName is mounted at /var/run/tresor/kek-previous/, but config.keys.previous names no file there" -}}
+{{- end -}}
+{{- end -}}
 {{- if and (hasPrefix "/var/run/tresor/kek/" ($keys.key_file | default "")) (not .Values.localKEK.secretName) -}}
 {{- fail "config.keys.key_file is under the chart's KEK volume: localKEK.secretName names its Secret" -}}
 {{- end -}}

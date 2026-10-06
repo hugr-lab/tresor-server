@@ -148,8 +148,9 @@ Data keys also rotate by age: one older than `keys.data_key_max_age` (30 days) i
 
 ## Moving to another KEK
 
-From a local key to Key Vault or Vault, from one vault's key to another's: the data keys are moved, the values
-stay as they are, and the service serves throughout.
+From a local key to Key Vault or Vault, from one Key Vault key to another, from one Transit key (or mount) to
+another on the same Vault server: the data keys are moved, the values stay as they are, and the service serves
+throughout. Moving between two Vault servers is not supported: one `vault:` client serves every vault KEK.
 
 1. **Both KEKs configured.** The new one is `keys`; the old one is listed under `keys.previous`, read only: data
    keys under it still unwrap, nothing new is wrapped with it. Deploy.
@@ -164,7 +165,8 @@ stay as they are, and the service serves throughout.
 
    New values go under a new data key wrapped by the new KEK. Readiness checks each previous KEK too, and the
    console's Service screen shows them.
-2. **Move the data keys**:
+2. **Move the data keys**, once the rollout has finished (a replica still on the old configuration would make
+   new data keys under the old KEK):
 
    ```bash
    tresor-server rewrap -config server.yaml
@@ -177,5 +179,6 @@ stay as they are, and the service serves throughout.
 - A data key opens only with the KEK that owns its id - never by trying each. A data key left under a KEK that
   is no longer configured is refused (`500`), never read as empty.
 - The same KEK as `keys` and in `keys.previous` is refused at start.
-- A previous `vault` KEK is on the same `vault:` server as the current one's settings.
+- Until step 3 the old KEK is trusted as the current one is: `rewrap` carries over every data key authentic
+  under it.
 - On the chart, `localKEK.previousSecretName` mounts the old local KEK and lists it in `keys.previous`.

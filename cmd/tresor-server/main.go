@@ -391,12 +391,21 @@ func keyWrapper(ctx context.Context, cfg *config.Config) (keys.KeyWrapper, []hea
 			return nil, nil, fmt.Errorf("keys.previous[%d]: %w", i, err)
 		}
 		previous = append(previous, w)
+		// a round trip, not a cached id: the root needs the operation data keys under it are checked with
+		// (Transit's hmac, Key Vault's sign), so a previous KEK the service may not use is not ready
 		checks = append(checks, health.Check{Name: fmt.Sprintf("keys.previous[%d]", i), Run: func(ctx context.Context) error {
-			_, err := w.Current(ctx)
+			id, err := w.Current(ctx)
+			if err == nil {
+				_, err = w.Root(ctx, id)
+			}
 			return err
 		}})
 	}
-	if err := keys.Distinct(ctx, current, previous...); err != nil {
+	// bounded: a KEK that does not answer is not judged here (readiness reports it), and must not hold the start
+	// past the liveness probe; a duplicate missed then is still refused at its first unwrap (two owners)
+	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := keys.Distinct(dctx, current, previous...); err != nil {
 		return nil, nil, err
 	}
 	return traced.Wrapper(keys.Chain(current, previous...)), checks, nil

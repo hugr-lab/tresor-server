@@ -169,7 +169,6 @@ func (w *Wrapper) read(ctx context.Context) (string, azkeys.EncryptionAlgorithm,
 	return string(*resp.Key.KID) + "#" + string(alg), alg, nil
 }
 
-// own splits a key id of this vault's key; ok false for another vault's or key's, or no key id at all.
 // Owns: any version of this vault's key, with an algorithm named.
 func (w *Wrapper) Owns(kekID string) bool {
 	kid, _, hasAlg := strings.Cut(kekID, "#")
@@ -177,6 +176,7 @@ func (w *Wrapper) Owns(kekID string) bool {
 	return hasAlg && ok
 }
 
+// own splits a key id of this vault's key; ok false for another vault's or key's, or no key id at all.
 func (w *Wrapper) own(kid string) (host, name, version string, ok bool) {
 	host, name, version, ok = parseKID(kid)
 	return host, name, version, ok && host == w.host && strings.EqualFold(name, w.name)
