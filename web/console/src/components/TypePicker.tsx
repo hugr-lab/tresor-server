@@ -23,7 +23,13 @@ export function TypePicker({ value, onChange, inUse, disabled }: { value: string
       ...used.map((t) => ({ type: t, group: 'in use here', description: 'held by this service; no template' })),
     ]
     const q = query.trim().toLowerCase()
-    return all.filter((o) => !q || `${o.type} ${o.group} ${o.description}`.toLowerCase().includes(q))
+    if (!q) return all
+    // the type's own name first: exact, then its start, then within it; a match in the description last
+    const rank = (o: Option) => {
+      const t = o.type.toLowerCase()
+      return t === q ? 0 : t.startsWith(q) ? 1 : t.includes(q) ? 2 : `${o.group} ${o.description}`.toLowerCase().includes(q) ? 3 : -1
+    }
+    return all.map((o) => ({ o, r: rank(o) })).filter((x) => x.r >= 0).sort((a, b) => a.r - b.r).map((x) => x.o)
   }, [inUse, query])
   const pick = (t: string) => {
     onChange(t)
@@ -33,7 +39,7 @@ export function TypePicker({ value, onChange, inUse, disabled }: { value: string
   return (
     <div className="relative">
       <div className="flex items-center rounded-sm border border-line bg-surface">
-        <input ref={input} role="combobox" aria-expanded={open} aria-controls="type-options" aria-autocomplete="list" disabled={disabled}
+        <input ref={input} role="combobox" aria-label="Secret type" aria-expanded={open} aria-controls="type-options" aria-autocomplete="list" disabled={disabled}
           className="min-w-0 flex-1 rounded-sm border-0 bg-transparent px-3 py-2 font-mono text-ink outline-none"
           value={open ? query : value}
           placeholder={value ? `${value} — type to search` : 's3, postgres, ducklake…'}

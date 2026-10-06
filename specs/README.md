@@ -23,4 +23,4 @@ Research lives in the local, gitignored `design/` folder.
 | [007](007-vault/spec.md) | OpenBao and HashiCorp Vault: the KEK in Transit, ref+vault, signing, no static secret | implemented |
 | [008](008-named-sources/spec.md) | named material sources: ref+<name>://, more instances of a kind, each its own connection | implemented |
 | [009](009-refs-command/spec.md) | `tresor-server refs`: the stored references the configuration would not resolve | implemented |
-| [010](010-console/spec.md) | the management console: /ui/, /admin/v1, a microfrontend for the hugr platform | accepted |
+| [010](010-console/spec.md) | the management console: /ui/, /admin/v1, a microfrontend for the hugr platform | implemented |

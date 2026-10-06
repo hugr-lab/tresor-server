@@ -19,6 +19,9 @@ Kubernetes 1.30 or later.
   - `state.kind: kubernetes` brings in the CRDs, a Role on them, and the admission policy;
   - `material.k8s.allow` gets a Role per namespace (`get` on Secrets);
   - `state.password_ref: ref+k8s://…` gets a Role on that one Secret, by name.
+- `config.ui`: the management console at `/ui/` (on by default), served through the same Service and ingress;
+  `ui.allowed_origins` for a platform mounting it as a microfrontend. See
+  [Console](https://hugr-lab.github.io/tresor-server/console/).
 - `localKEK.secretName`: a local KEK from a Secret (32 bytes, base64), mounted for `keys.key_file`.
 - `workloadIdentity`: AKS workload identity (`azure.identity: workload`), with the pod's label and the
   ServiceAccount's annotation.

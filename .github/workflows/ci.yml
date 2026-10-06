@@ -94,6 +94,35 @@ jobs:
       - run: npm run licenses
       - run: npm run build
 
+  # the console end to end (spec 010, d): Keycloak in docker, the service with the console, the microfrontend's
+  # test host, Playwright (Chromium)
+  console-e2e:
+    name: Console (end to end)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/console/package-lock.json
+      - run: npm ci
+        working-directory: web/console
+      - run: npx playwright install --with-deps chromium
+        working-directory: web/console
+      - name: end to end
+        run: scripts/ci/console-e2e.sh
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: console-e2e-traces
+          path: web/console/test-results/
+          retention-days: 7
+
   # ZITADEL in docker (spec 006): the service as its issuer's client with key_file, a token minted by exchange
   zitadel:
     name: ZITADEL (token exchange, key_file)
