@@ -65,7 +65,7 @@ export interface ServiceInfo {
   environment: string
   capabilities: string[]
   state: string
-  kek: { kind: string; current?: string; error?: string }
+  kek: { kind: string; current?: string; error?: string; previous?: { kind: string; key: string }[] } // previous: spec 011
   issuers: { issuer: string; audience: string; client_id?: string; exchange?: { client_id: string; client_auth: string } }[]
   sources: Source[]
   policy: { admins: string[]; actors: { principal: string; verbs: string[] }[] }

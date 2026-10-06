@@ -145,3 +145,40 @@ vault:
 3. **Retire the old versions** in the vault once `rewrap` has passed.
 
 Data keys also rotate by age: one older than `keys.data_key_max_age` (30 days) is replaced for new values.
+
+## Moving to another KEK
+
+From a local key to Key Vault or Vault, from one Key Vault key to another, from one Transit key (or mount) to
+another on the same Vault server: the data keys are moved, the values stay as they are, and the service serves
+throughout. Moving between two Vault servers is not supported: one `vault:` client serves every vault KEK.
+
+1. **Both KEKs configured.** The new one is `keys`; the old one is listed under `keys.previous`, read only: data
+   keys under it still unwrap, nothing new is wrapped with it. Deploy.
+
+   ```yaml
+   keys:
+     kind: azurekeyvault
+     key: https://corp-kv.vault.azure.net/keys/tresor-kek
+     previous:
+       - {kind: local, key_file: /var/run/tresor/kek-old/kek}
+   ```
+
+   New values go under a new data key wrapped by the new KEK. Readiness checks each previous KEK too, and the
+   console's Service screen shows them.
+2. **Move the data keys**, once the rollout has finished (a replica still on the old configuration would make
+   new data keys under the old KEK):
+
+   ```bash
+   tresor-server rewrap -config server.yaml
+   ```
+
+   Every data key under a previous KEK is unwrapped with it and wrapped under the new one, its tag made under the
+   new KEK's root. Run it until it moves none.
+3. **Remove `keys.previous`**, deploy, then retire the old KEK (delete the local key's file and its Secret).
+
+- A data key opens only with the KEK that owns its id - never by trying each. A data key left under a KEK that
+  is no longer configured is refused (`500`), never read as empty.
+- The same KEK as `keys` and in `keys.previous` is refused at start.
+- Until step 3 the old KEK is trusted as the current one is: `rewrap` carries over every data key authentic
+  under it.
+- On the chart, `localKEK.previousSecretName` mounts the old local KEK and lists it in `keys.previous`.

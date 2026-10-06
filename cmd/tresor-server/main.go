@@ -155,7 +155,7 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger, readOn
 	case "memory":
 		return memory.New(), nil, nil
 	case "sqlite":
-		wrapper, err := keyWrapper(cfg)
+		wrapper, previous, err := keyWrapper(ctx, cfg)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -164,9 +164,9 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger, readOn
 		if err != nil {
 			return nil, nil, err
 		}
-		return st, []health.Check{{Name: "keys", Run: st.Envelope().Check}}, nil
+		return st, append([]health.Check{{Name: "keys", Run: st.Envelope().Check}}, previous...), nil
 	case "postgres", "sqlserver":
-		wrapper, err := keyWrapper(cfg)
+		wrapper, previous, err := keyWrapper(ctx, cfg)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -183,9 +183,9 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger, readOn
 		if err != nil {
 			return nil, nil, err
 		}
-		return st, []health.Check{{Name: "keys", Run: st.Envelope().Check}}, nil
+		return st, append([]health.Check{{Name: "keys", Run: st.Envelope().Check}}, previous...), nil
 	case "kubernetes":
-		wrapper, err := keyWrapper(cfg)
+		wrapper, previous, err := keyWrapper(ctx, cfg)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -203,7 +203,7 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger, readOn
 			return nil, nil, err
 		}
 		log.Info("state in the Kubernetes API", "namespace", ns)
-		return st, []health.Check{{Name: "keys", Run: st.Envelope().Check}}, nil
+		return st, append([]health.Check{{Name: "keys", Run: st.Envelope().Check}}, previous...), nil
 	}
 	return nil, nil, fmt.Errorf("state.kind %s is not built in", cfg.State.Kind)
 }
@@ -376,16 +376,42 @@ func materialResolver(cfg *config.Config) (*material.Resolver, error) {
 }
 
 // keyWrapper is the configured KEK, traced (spec 005).
-func keyWrapper(cfg *config.Config) (keys.KeyWrapper, error) {
-	w, err := kekOf(cfg)
+// keyWrapper is the configured KEK, chained with the previous ones (spec 011: they unwrap, never wrap), traced;
+// and a readiness check per previous KEK - values under it would not open while it does not answer.
+func keyWrapper(ctx context.Context, cfg *config.Config) (keys.KeyWrapper, []health.Check, error) {
+	current, err := kekOf(cfg, cfg.Keys.Current())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return traced.Wrapper(w), nil
+	var previous []keys.KeyWrapper
+	var checks []health.Check
+	for i, p := range cfg.Keys.Previous {
+		w, err := kekOf(cfg, p)
+		if err != nil {
+			return nil, nil, fmt.Errorf("keys.previous[%d]: %w", i, err)
+		}
+		previous = append(previous, w)
+		// a round trip, not a cached id: the root needs the operation data keys under it are checked with
+		// (Transit's hmac, Key Vault's sign), so a previous KEK the service may not use is not ready
+		checks = append(checks, health.Check{Name: fmt.Sprintf("keys.previous[%d]", i), Run: func(ctx context.Context) error {
+			id, err := w.Current(ctx)
+			if err == nil {
+				_, err = w.Root(ctx, id)
+			}
+			return err
+		}})
+	}
+	// bounded: a KEK that does not answer is not judged here (readiness reports it), and must not hold the start
+	// past the liveness probe; a duplicate missed then is still refused at its first unwrap (two owners)
+	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := keys.Distinct(dctx, current, previous...); err != nil {
+		return nil, nil, err
+	}
+	return traced.Wrapper(keys.Chain(current, previous...)), checks, nil
 }
 
-func kekOf(cfg *config.Config) (keys.KeyWrapper, error) {
-	k := cfg.Keys
+func kekOf(cfg *config.Config, k config.KEK) (keys.KeyWrapper, error) {
 	switch {
 	case k.Kind == "local" && k.KeyEnv != "":
 		return local.FromEnv(k.KeyEnv)
@@ -405,6 +431,24 @@ func kekOf(cfg *config.Config) (keys.KeyWrapper, error) {
 		return azurekeyvault.New(k.Key, cred)
 	}
 	return nil, fmt.Errorf("keys.kind %s is not built in", k.Kind)
+}
+
+// previousKEKs names the previous KEKs for the console: their kind and where they are, never key material.
+func previousKEKs(cfg *config.Config) []map[string]string {
+	out := []map[string]string{}
+	for _, p := range cfg.Keys.Previous {
+		where := p.Key
+		switch {
+		case p.Kind == "vault":
+			where = p.Mount + "/" + p.Key
+		case p.KeyFile != "":
+			where = "file " + p.KeyFile
+		case p.KeyEnv != "":
+			where = "variable " + p.KeyEnv
+		}
+		out = append(out, map[string]string{"kind": p.Kind, "key": where})
+	}
+	return out
 }
 
 func serve(configPath string, log *slog.Logger) error {
@@ -468,6 +512,7 @@ func serve(configPath string, log *slog.Logger) error {
 			Ready: func() (bool, map[string]string) { return checker.Ready() }}
 		if sealed, ok := st.(interface{ Envelope() *keys.Envelope }); ok {
 			c.KEK = sealed.Envelope().Current
+			c.PreviousKEKs = previousKEKs(cfg)
 		}
 		opts = append(opts, api.WithConsole(c))
 	}

@@ -277,8 +277,8 @@ path "transit/decrypt/kek"        { capabilities = ["update"] }
 path "transit/hmac/kek/sha2-256"  { capabilities = ["update"] }
 path "secret/data/duckdb/*"       { capabilities = ["read"] }
 HCL
-bao write auth/kubernetes/role/tresor bound_service_account_names=b-tresor-server \
-  bound_service_account_namespaces=tresor-bao audience=vault token_policies=tresor token_ttl=1h
+bao write auth/kubernetes/role/tresor bound_service_account_names=b-tresor-server,m-tresor-server \
+  bound_service_account_namespaces=tresor-bao,tresor-move audience=vault token_policies=tresor token_ttl=1h
 bao secrets enable transit
 bao write -f transit/keys/kek type=aes256-gcm96
 bao kv put secret/duckdb/lake secret="$VALUE"
@@ -308,6 +308,34 @@ if grep -qE "from-openbao|from-the-second-openbao" <<<"$stdout"; then
 	exit 1
 fi
 echo "kind: OpenBao: logged in by Kubernetes auth, data keys under Transit, ref+vault read; ref+bao2 from the second"
+
+echo "kind: a move to another KEK (spec 011): local -> OpenBao Transit, the old one previous, rewrap, then alone"
+install m tresor-move --set config.state.kind=kubernetes
+forward tresor-move m-tresor-server
+"$work/kindcheck" keep "$work/idp" "$issuer" "http://127.0.0.1:$port"
+move() {
+	if ! helm upgrade m "$chart" -n tresor-move -f "$work/m.yaml" --set config.state.kind=kubernetes --set localKEK.secretName= \
+		--set vaultToken.enabled=true --set-json 'config.keys={"kind":"vault","key":"kek"}' \
+		--set-json 'config.vault={"address":"https://bao.bao.svc:8200","ca_file":"/etc/tresor-ca/ca.crt","auth":{"method":"kubernetes","role":"tresor"}}' \
+		"$@" --wait --timeout 180s; then
+		kubectl -n tresor-move logs -l app.kubernetes.io/instance=m --tail 50 || true
+		exit 1
+	fi
+	kubectl -n tresor-move rollout status deploy/m-tresor-server --timeout 120s
+}
+move --set localKEK.previousSecretName=kek
+forward tresor-move m-tresor-server
+"$work/kindcheck" kept "$work/idp" "$issuer" "http://127.0.0.1:$port"
+kubectl -n tresor-move exec deploy/m-tresor-server -- /tresor-server rewrap -config /etc/tresor/server.yaml
+kek="$(kubectl -n tresor-move get tresordatakeys -o jsonpath='{range .items[*]}{.spec.kekID}{"\n"}{end}')"
+if grep -qv '^vault:transit/kek:v' <<<"$kek"; then
+	echo "kind: a data key is still under the old KEK after rewrap: $kek" >&2
+	exit 1
+fi
+move --set localKEK.previousSecretName=
+forward tresor-move m-tresor-server
+"$work/kindcheck" kept "$work/idp" "$issuer" "http://127.0.0.1:$port"
+echo "kind: the KEK moved: read under the old KEK as previous, rewrapped, read under OpenBao alone"
 
 echo "kind: the Kubernetes store's namespace deleted: the namespace controller deletes its resources"
 # the policy stays (cluster-scoped): a namespace that would not delete would hang here

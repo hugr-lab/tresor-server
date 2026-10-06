@@ -63,6 +63,9 @@ spec:
             {{- if .Values.localKEK.secretName }}
             - {name: kek, mountPath: /var/run/tresor/kek, readOnly: true}
             {{- end }}
+            {{- if .Values.localKEK.previousSecretName }}
+            - {name: kek-previous, mountPath: /var/run/tresor/kek-previous, readOnly: true}
+            {{- end }}
             {{- if .Values.tlsSecret }}
             - {name: tls, mountPath: /var/run/tresor/tls, readOnly: true}
             {{- end }}
@@ -87,6 +90,14 @@ spec:
             secretName: {{ .Values.localKEK.secretName }}
             items: [{key: {{ .Values.localKEK.key | quote }}, path: {{ .Values.localKEK.key | quote }}}]
             defaultMode: 0400   # the pod's user reads it as its owner group (fsGroup)
+        {{- end }}
+        {{- if .Values.localKEK.previousSecretName }}
+        {{- $pk := .Values.localKEK.previousKey | default .Values.localKEK.key }}
+        - name: kek-previous
+          secret:
+            secretName: {{ .Values.localKEK.previousSecretName }}
+            items: [{key: {{ $pk | quote }}, path: {{ $pk | quote }}}]
+            defaultMode: 0400
         {{- end }}
         {{- if .Values.tlsSecret }}
         - name: tls

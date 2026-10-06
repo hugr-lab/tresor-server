@@ -76,6 +76,12 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- if and .Values.localKEK.secretName (not $cfg.keys) -}}
 {{- $_ := set $cfg "keys" (dict "kind" "local" "key_file" (printf "/var/run/tresor/kek/%s" .Values.localKEK.key)) -}}
 {{- end -}}
+{{- /* a previous local KEK (spec 011): read only, until rewrap has moved every data key */ -}}
+{{- if and .Values.localKEK.previousSecretName $cfg.keys (not $cfg.keys.previous) -}}
+{{- $keys := deepCopy $cfg.keys -}}
+{{- $_ := set $keys "previous" (list (dict "kind" "local" "key_file" (printf "/var/run/tresor/kek-previous/%s" (.Values.localKEK.previousKey | default .Values.localKEK.key)))) -}}
+{{- $_ := set $cfg "keys" $keys -}}
+{{- end -}}
 {{- toYaml $cfg -}}
 {{- end -}}
 
@@ -128,6 +134,13 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 {{- if and .Values.vaultToken.enabled (not $tokenLogin) -}}
 {{- fail "vaultToken: for a Vault login by kubernetes or jwt (config.vault.auth, or a named source's)" -}}
+{{- end -}}
+{{- if and .Values.localKEK.previousSecretName $keys.previous -}}
+{{- $named := false -}}
+{{- range $keys.previous -}}{{- if hasPrefix "/var/run/tresor/kek-previous/" (.key_file | default "") -}}{{- $named = true -}}{{- end -}}{{- end -}}
+{{- if not $named -}}
+{{- fail "localKEK.previousSecretName is mounted at /var/run/tresor/kek-previous/, but config.keys.previous names no file there" -}}
+{{- end -}}
 {{- end -}}
 {{- if and (hasPrefix "/var/run/tresor/kek/" ($keys.key_file | default "")) (not .Values.localKEK.secretName) -}}
 {{- fail "config.keys.key_file is under the chart's KEK volume: localKEK.secretName names its Secret" -}}

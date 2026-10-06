@@ -2,6 +2,8 @@
 //
 //	kindcheck issuer <dir> <issuer>        an OIDC issuer's static files: its discovery, its JWKS, its key
 //	kindcheck smoke <dir> <issuer> <url> [<ref> <value>]
+//	kindcheck keep <dir> <issuer> <url>    # a secret written and granted, kept (spec 011: a KEK move)
+//	kindcheck kept <dir> <issuer> <url>    # that secret still read, its material whole
 //	                                       through the protocol: an administrator writes a secret and grants
 //	                                       its use, a user reads it, the administrator deletes it - the service
 //	                                       is up on its store; with a reference, one that reads <value>
@@ -38,8 +40,10 @@ func main() {
 		smoke(os.Args[2], os.Args[3], os.Args[4], "", "")
 	case len(os.Args) == 7 && os.Args[1] == "smoke":
 		smoke(os.Args[2], os.Args[3], os.Args[4], os.Args[5], os.Args[6])
+	case len(os.Args) == 5 && (os.Args[1] == "keep" || os.Args[1] == "kept"):
+		keep(os.Args[1] == "keep", os.Args[2], os.Args[3], os.Args[4])
 	default:
-		log.Fatal("usage: kindcheck issuer <dir> <issuer> | kindcheck smoke <dir> <issuer> <url>")
+		log.Fatal("usage: kindcheck issuer <dir> <issuer> | kindcheck smoke|keep|kept <dir> <issuer> <url>")
 	}
 }
 
@@ -127,6 +131,37 @@ func smoke(dir, iss, url, ref, want string) {
 	call("DELETE", "/v1/secrets/byref", admin, "", 204)
 	call("DELETE", "/v1/variables/byref", admin, "", 204)
 	fmt.Println("kindcheck: a reference resolved at the read, in a secret and in a variable")
+}
+
+// keep writes a secret and grants it (write), or reads it back (!write): across a move to another KEK, the
+// material written before reads after
+func keep(write bool, dir, iss, url string) {
+	call := func(method, path, tok, body string, want int) string {
+		req, err := http.NewRequest(method, strings.TrimSuffix(url, "/")+path, bytes.NewBufferString(body))
+		must(err)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		must(err)
+		defer res.Body.Close()
+		out, _ := io.ReadAll(res.Body)
+		if res.StatusCode != want {
+			log.Fatalf("kindcheck: %s %s: %d, want %d: %s", method, path, res.StatusCode, want, out)
+		}
+		return string(out)
+	}
+	if write {
+		admin := token(dir, iss, "admin", "secrets_admin")
+		call("PUT", "/v1/secrets/kept", admin, `{"type":"s3","provider":"config","scope":["s3://kept"],
+		"params":{"secret":{"type":"VARCHAR","value":"kept-material"}},"redact_keys":["secret"]}`, 201)
+		call("PUT", "/v1/secrets/kept/grants/analysts", admin, `{"principal":"role:analysts","verbs":["use"]}`, 200)
+		fmt.Println("kindcheck: a secret written to keep")
+		return
+	}
+	if got := call("GET", "/v1/secrets/kept", token(dir, iss, "alice", "analysts"), "", 200); !strings.Contains(got, "kept-material") {
+		log.Fatal("kindcheck: the kept secret's material did not read")
+	}
+	fmt.Println("kindcheck: the kept secret read, its material whole")
 }
 
 func must(err error) {

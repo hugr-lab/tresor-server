@@ -78,6 +78,7 @@ func (unreachable) Unwrap(context.Context, []byte, string) ([]byte, error) {
 }
 func (unreachable) Current(context.Context) (string, error)      { return "", errors.New("timeout") }
 func (unreachable) Root(context.Context, string) ([]byte, error) { return nil, errors.New("timeout") }
+func (unreachable) Owns(string) bool                             { return true }
 
 func TestSealOpen(t *testing.T) {
 	st := newStore()

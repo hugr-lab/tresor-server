@@ -23,6 +23,8 @@ Kubernetes 1.30 or later.
   `ui.allowed_origins` for a platform mounting it as a microfrontend. See
   [Console](https://hugr-lab.github.io/tresor-server/console/).
 - `localKEK.secretName`: a local KEK from a Secret (32 bytes, base64), mounted for `keys.key_file`.
+- `localKEK.previousSecretName`: during a move to another KEK (spec 011), the old local KEK from its Secret,
+  mounted and listed in `keys.previous` (read only) until `tresor-server rewrap` has moved every data key.
 - `workloadIdentity`: AKS workload identity (`azure.identity: workload`), with the pod's label and the
   ServiceAccount's annotation.
 - `tlsSecret`: TLS in the pod itself. Otherwise `tls.offload`, with TLS at the ingress.

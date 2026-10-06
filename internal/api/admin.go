@@ -31,7 +31,9 @@ type Console struct {
 	UI      http.Handler                              // GET /ui/...: the build (web/console)
 	Version string                                    // the build's version
 	KEK     func(ctx context.Context) (string, error) // the KEK's current version id; nil: none (memory)
-	Ready   func() (bool, map[string]string)          // readiness, each check's state
+	// PreviousKEKs are keys.previous (spec 011): kind and where, never material
+	PreviousKEKs []map[string]string
+	Ready        func() (bool, map[string]string) // readiness, each check's state
 }
 
 // WithConsole serves the console (spec 010): /ui/ and /admin/v1.
@@ -89,6 +91,9 @@ func (s *Server) adminService(w http.ResponseWriter, r *http.Request) {
 			"connection": connection(src), "allow": allowlist(src), "cache_ttl": cacheTTL(src).String()})
 	}
 	kek := map[string]any{"kind": cfg.Keys.Kind}
+	if len(s.console.PreviousKEKs) > 0 {
+		kek["previous"] = s.console.PreviousKEKs
+	}
 	if s.console.KEK != nil {
 		if current, err := s.console.KEK(r.Context()); err == nil {
 			kek["current"] = current

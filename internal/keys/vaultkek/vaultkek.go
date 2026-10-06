@@ -58,6 +58,12 @@ func (w *Wrapper) kekID(version int) string {
 	return fmt.Sprintf("vault:%s/%s:v%d", w.mount, w.key, version)
 }
 
+// Owns: any version of this mount's key.
+func (w *Wrapper) Owns(kekID string) bool {
+	_, ok := w.version(kekID)
+	return ok
+}
+
 // version reads a KEK id of this key; ok false for another key's, or anything else.
 func (w *Wrapper) version(kekID string) (int, bool) {
 	rest, ok := strings.CutPrefix(kekID, "vault:"+w.mount+"/"+w.key+":v")

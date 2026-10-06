@@ -172,6 +172,34 @@ type Keys struct {
 	DataKeyMaxAge time.Duration `yaml:"data_key_max_age"`
 	// CacheTTL: how long an unwrapped data key stays in memory (default 5 minutes).
 	CacheTTL time.Duration `yaml:"cache_ttl"`
+	// Previous are KEKs data keys may still be wrapped under (spec 011): read only - they unwrap, never wrap.
+	// A move to another KEK lists the old one here until `tresor-server rewrap` has moved every data key.
+	Previous []KEK `yaml:"previous"`
+}
+
+// KEK is one key-encryption key: the current one's settings in Keys, a previous one's in Keys.Previous.
+type KEK struct {
+	Kind    string `yaml:"kind"`
+	KeyEnv  string `yaml:"key_env"`
+	KeyFile string `yaml:"key_file"`
+	Key     string `yaml:"key"`
+	Mount   string `yaml:"mount"`
+}
+
+// Current is the current KEK's settings.
+func (k Keys) Current() KEK {
+	return KEK{Kind: k.Kind, KeyEnv: k.KeyEnv, KeyFile: k.KeyFile, Key: k.Key, Mount: k.Mount}
+}
+
+// Kinds are the kinds of the current KEK and the previous ones, each once.
+func (k Keys) Kinds() []string {
+	out := []string{}
+	for _, kek := range append([]KEK{k.Current()}, k.Previous...) {
+		if kek.Kind != "" && !slices.Contains(out, kek.Kind) {
+			out = append(out, kek.Kind)
+		}
+	}
+	return out
 }
 
 // KeyKinds are the KEKs this build knows.
@@ -554,10 +582,10 @@ func (c *Config) validate() error {
 			return err
 		}
 	}
-	if c.Keys.Kind == "vault" && !c.Vault.used() {
+	if slices.Contains(c.Keys.Kinds(), "vault") && !c.Vault.used() {
 		return errors.New("keys: a vault KEK needs vault: (address, auth)")
 	}
-	if c.Keys.Kind == "azurekeyvault" && c.Azure.Identity == "" {
+	if slices.Contains(c.Keys.Kinds(), "azurekeyvault") && c.Azure.Identity == "" {
 		return errors.New("keys: azurekeyvault needs azure.identity: managed | workload | default")
 	}
 	if c.Azure != (Azure{}) {
@@ -756,40 +784,67 @@ func (k *Keys) validate(required bool) error {
 			return errors.New("keys: is required with a state store on disk - material is sealed at rest " +
 				"(keys: {kind: local, key_env: ...})")
 		}
+		if len(k.Previous) > 0 {
+			return errors.New("keys.previous: needs keys, the KEK they are moved to")
+		}
 		return nil
 	}
+	current := k.Current()
+	if err := current.validate("keys"); err != nil {
+		return err
+	}
+	k.Mount = current.Mount
+	for i := range k.Previous {
+		where := fmt.Sprintf("keys.previous[%d]", i)
+		if err := k.Previous[i].validate(where); err != nil {
+			return err
+		}
+		if k.Previous[i] == current {
+			return fmt.Errorf("%s is keys, the current KEK: a previous KEK is another one", where)
+		}
+		for j := range i {
+			if k.Previous[j] == k.Previous[i] {
+				return fmt.Errorf("%s repeats keys.previous[%d]", where, j)
+			}
+		}
+	}
+	if k.DataKeyMaxAge < 0 || k.CacheTTL < 0 {
+		return errors.New("keys: data_key_max_age and cache_ttl are positive")
+	}
+	return nil
+}
+
+// validate checks one KEK's settings; where names it in an error (keys, keys.previous[0]).
+func (k *KEK) validate(where string) error {
 	if !slices.Contains(KeyKinds, k.Kind) {
-		return fmt.Errorf("keys.kind is none of %s", strings.Join(KeyKinds, " | "))
+		return fmt.Errorf("%s.kind is none of %s", where, strings.Join(KeyKinds, " | "))
 	}
 	switch k.Kind {
 	case "local":
 		if (k.KeyEnv == "") == (k.KeyFile == "") || k.Key != "" || k.Mount != "" {
-			return errors.New("keys: a local KEK comes from key_env or key_file - one of them")
+			return fmt.Errorf("%s: a local KEK comes from key_env or key_file - one of them", where)
 		}
 	case "vault":
 		if k.Key == "" || k.KeyEnv != "" || k.KeyFile != "" || strings.Contains(k.Key, "/") {
-			return errors.New("keys: a vault KEK is keys.key, a Transit key's name (and keys.mount, default transit)")
+			return fmt.Errorf("%s: a vault KEK is key, a Transit key's name (and mount, default transit)", where)
 		}
 		if k.Mount == "" {
 			k.Mount = "transit"
 		}
 	case "azurekeyvault":
 		if k.Mount != "" {
-			return errors.New("keys.mount is a vault KEK's")
+			return fmt.Errorf("%s.mount is a vault KEK's", where)
 		}
 		if k.Key == "" || k.KeyEnv != "" || k.KeyFile != "" {
-			return errors.New("keys: an azurekeyvault KEK is keys.key, https://<vault>/keys/<name> - nothing else")
+			return fmt.Errorf("%s: an azurekeyvault KEK is key, https://<vault>/keys/<name> - nothing else", where)
 		}
 		if !strings.HasPrefix(k.Key, "https://") {
-			return errors.New("keys.key: an https key URL")
+			return fmt.Errorf("%s.key: an https key URL", where)
 		}
 	}
 	if k.KeyEnv != "" && IsSettingVariable(k.KeyEnv) {
-		return fmt.Errorf("keys.key_env names %s, which is read as configuration - give the KEK a variable of "+
-			"its own", k.KeyEnv)
-	}
-	if k.DataKeyMaxAge < 0 || k.CacheTTL < 0 {
-		return errors.New("keys: data_key_max_age and cache_ttl are positive")
+		return fmt.Errorf("%s.key_env names %s, which is read as configuration - give the KEK a variable of "+
+			"its own", where, k.KeyEnv)
 	}
 	return nil
 }
