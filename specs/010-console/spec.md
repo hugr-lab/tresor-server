@@ -1,6 +1,6 @@
 # Spec 010: the management console
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-05
 - **Author**: hugr lab
 
@@ -141,9 +141,13 @@ Writes otherwise use the protocol's routes: `PUT` (create, with `If-None-Match: 
   reference's value, with or without `values=1`; `reveal` is audited; the params merge (keep, set, remove,
   unknown key refused, a concurrent write → 412); grants by principal; the refs check; CORS only for allowed
   origins; CSP and headers on `/ui/`.
-- The console: unit tests (Vitest); end to end (Playwright) against a service with the CI's mock issuer: sign in,
-  create, replace keeping a secret value, grant, delete, the references check, a non-administrator refused.
-- The microfrontend mounted in a test host page.
+- The console: unit tests (Vitest); end to end (Playwright, `scripts/ci/console-e2e.sh`) against the service and
+  Keycloak in docker (the CI's in-process issuer has no browser sign-in), passwords made per run: sign in, create,
+  replace keeping a secret value, grant, delete, the references check, a non-administrator refused, the session
+  ended at the IdP and signed in again in a popup with an editor's input kept; no password or secret value in the
+  service's log.
+- The microfrontend: mounted in jsdom (Vitest), and in the test host on another origin (Playwright): sign-in by the
+  host, sections, the back button, the theme.
 
 ## The PRs
 

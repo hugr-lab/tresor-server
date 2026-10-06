@@ -18,5 +18,5 @@ export default defineConfig({
   server: {
     proxy: { '/v1': 'http://127.0.0.1:8080', '/admin': 'http://127.0.0.1:8080', '/ui/config.json': 'http://127.0.0.1:8080' },
   },
-  test: { environment: 'jsdom' },
+  test: { environment: 'jsdom', include: ['src/**/*.test.{ts,tsx}'] }, // e2e/ is Playwright's
 } as never)

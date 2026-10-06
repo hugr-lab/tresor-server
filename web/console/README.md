@@ -11,6 +11,8 @@ npm run typecheck
 npm run licenses     # every shipped package permissive (MIT, ISC, Apache-2.0, BSD, OFL)
 npm run build        # dist/ and dist/mfe/: then `go build ./cmd/tresor-server` embeds them
 npm run host         # the microfrontend's test host on 127.0.0.1:18444 (below)
+../../scripts/ci/console-e2e.sh   # end to end: Keycloak in docker, the service, the test host, Playwright
+                     # (once: npx playwright install chromium)
 ```
 
 - `dist/index.html` in git is a placeholder: `go build` alone serves it. A local `npm run build` replaces it;

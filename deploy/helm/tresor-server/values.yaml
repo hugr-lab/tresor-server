@@ -24,6 +24,12 @@ config:
   issuers: []              # required
   policy:
     admins: []
+  # the management console at /ui/ (docs: Console): people sign in with the issuers that have a client_id
+  # (a public client; redirect URI <public_url>/ui/callback). On by default.
+  # ui:
+  #   environment: prod                              # a badge in the console's top bar
+  #   allowed_origins: [https://platform.example]    # shells mounting it as a microfrontend (CORS)
+  #   enabled: false                                 # no /ui/, no /admin/v1
 
 # A local KEK from a Secret (32 bytes, base64): mounted at /var/run/tresor/kek/<key>, and config.keys set to
 # it when unset. A static secret, for clusters with no KMS.
