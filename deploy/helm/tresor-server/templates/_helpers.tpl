@@ -76,6 +76,12 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- if and .Values.localKEK.secretName (not $cfg.keys) -}}
 {{- $_ := set $cfg "keys" (dict "kind" "local" "key_file" (printf "/var/run/tresor/kek/%s" .Values.localKEK.key)) -}}
 {{- end -}}
+{{- /* a previous local KEK (spec 011): read only, until rewrap has moved every data key */ -}}
+{{- if and .Values.localKEK.previousSecretName $cfg.keys (not $cfg.keys.previous) -}}
+{{- $keys := deepCopy $cfg.keys -}}
+{{- $_ := set $keys "previous" (list (dict "kind" "local" "key_file" (printf "/var/run/tresor/kek-previous/%s" (.Values.localKEK.previousKey | default .Values.localKEK.key)))) -}}
+{{- $_ := set $cfg "keys" $keys -}}
+{{- end -}}
 {{- toYaml $cfg -}}
 {{- end -}}
 

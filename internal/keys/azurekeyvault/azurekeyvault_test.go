@@ -399,3 +399,23 @@ func TestSigner(t *testing.T) {
 		t.Fatal("a key the vault has not")
 	}
 }
+
+// Owns (spec 011): any version of this vault's key, with an algorithm; another vault, key or no algorithm: not
+func TestOwns(t *testing.T) {
+	w, err := NewWithOps("https://corp.vault.azure.net/keys/kek", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]bool{
+		"https://corp.vault.azure.net/keys/kek/0123abcd#RSA-OAEP-256":  true,
+		"https://corp.vault.azure.net/keys/KEK/0123abcd#RSA-OAEP-256":  true,
+		"https://corp.vault.azure.net/keys/kek/0123abcd":               false,
+		"https://other.vault.azure.net/keys/kek/0123abcd#RSA-OAEP-256": false,
+		"https://corp.vault.azure.net/keys/kek2/0123abcd#RSA-OAEP-256": false,
+		"local:00": false,
+	} {
+		if w.Owns(id) != want {
+			t.Errorf("%q: %v", id, !want)
+		}
+	}
+}

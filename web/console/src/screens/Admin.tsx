@@ -1,5 +1,5 @@
 // Access (grants by role and group), the references check, and the service as it runs.
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Check, CheckCircle2, CircleAlert, Search, Users } from 'lucide-react'
 import { useApp, useLoad } from '../context'
@@ -246,7 +246,18 @@ export function Service() {
             <dt className="text-muted">KEK</dt><dd className="m-0 font-mono">{s.kek.kind || '—'}</dd>
             <dt className="text-muted">Current version</dt><dd className="m-0 break-all font-mono">{s.kek.current ?? s.kek.error ?? '—'}</dd>
             <dt className="text-muted">State store</dt><dd className="m-0 font-mono">{s.state}</dd>
+            {s.kek.previous?.map((p, i) => (
+              <Fragment key={i}>
+                <dt className="text-muted">{i === 0 ? 'Previous (read only)' : ''}</dt>
+                <dd className="m-0 break-all font-mono">{p.kind} · {p.key}</dd>
+              </Fragment>
+            ))}
           </dl>
+          {!!s.kek.previous?.length && (
+            <span className="rounded-sm bg-warning-soft px-3 py-2 text-[12px] text-warning">
+              A move to another KEK is under way: data keys under a previous KEK still open. Run <span className="font-mono">tresor-server rewrap</span>, then remove <span className="font-mono">keys.previous</span>.
+            </span>
+          )}
           <span className="text-[12px] text-muted">The KEK stays in its store (a file, Key Vault, Transit): shown here is only its kind and the version data keys are wrapped with now.</span>
         </section>
         <section className="card flex flex-col gap-3">

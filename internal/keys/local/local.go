@@ -67,6 +67,9 @@ func decode(value, from string) (*Wrapper, error) {
 
 func (w *Wrapper) Current(context.Context) (string, error) { return w.id, nil }
 
+// Owns: this key's id only.
+func (w *Wrapper) Owns(kekID string) bool { return kekID == w.id }
+
 // Root is HMAC-SHA256 under the local key: only who holds the key computes it.
 func (w *Wrapper) Root(_ context.Context, kekID string) ([]byte, error) {
 	if kekID != w.id {

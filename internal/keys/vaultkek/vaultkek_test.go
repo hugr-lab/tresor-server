@@ -250,3 +250,20 @@ func TestRootIsTheHolders(t *testing.T) {
 		})
 	}
 }
+
+// Owns (spec 011): every version of this mount's key, nothing else
+func TestOwns(t *testing.T) {
+	w, err := New(nil, "transit", "kek")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]bool{
+		"vault:transit/kek:v1": true, "vault:transit/kek:v12": true,
+		"vault:transit/kek:v0": false, "vault:transit/kek:v01": false, "vault:transit/kek2:v1": false,
+		"vault:other/kek:v1": false, "local:00": false, "": false,
+	} {
+		if w.Owns(id) != want {
+			t.Errorf("%q: %v", id, !want)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -533,5 +534,47 @@ func TestUI(t *testing.T) {
 		if _, err := Parse([]byte(good + d + "\n")); err == nil {
 			t.Errorf("%s: accepted", d)
 		}
+	}
+}
+
+// keys.previous (spec 011): read-only KEKs, validated as keys; never the current one, never repeated
+func TestPreviousKEKs(t *testing.T) {
+	base := strings.Replace(good, "state: {kind: memory}", "state: {kind: sqlite, path: /data/tresor.db}", 1)
+	doc := base + "vault: {address: 'https://bao:8200', auth: {method: token_file, token_file: /t}}\n" +
+		"keys: {kind: vault, key: tresor, previous: [{kind: local, key_file: /old}, {kind: vault, key: old}]}\n"
+	cfg, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Keys.Previous) != 2 || cfg.Keys.Previous[1].Mount != "transit" || cfg.Keys.Mount != "transit" {
+		t.Fatalf("previous: %+v", cfg.Keys)
+	}
+	if got := cfg.Keys.Kinds(); strings.Join(got, ",") != "vault,local" {
+		t.Fatalf("kinds: %v", got)
+	}
+	local := base + "keys: {kind: local, key_file: /new, previous: [{kind: local, key_file: /old}]}\n"
+	for name, d := range map[string]string{
+		"the current one again":   strings.Replace(local, "key_file: /old", "key_file: /new", 1),
+		"repeated":                strings.Replace(local, "[{kind: local, key_file: /old}]", "[{kind: local, key_file: /old}, {kind: local, key_file: /old}]", 1),
+		"no key source":           strings.Replace(local, "{kind: local, key_file: /old}", "{kind: local}", 1),
+		"an unknown kind":         strings.Replace(local, "{kind: local, key_file: /old}", "{kind: hsm, key: x}", 1),
+		"a store setting":         strings.Replace(local, "{kind: local, key_file: /old}", "{kind: local, key_file: /old, cache_ttl: 1m}", 1),
+		"azurekeyvault, no azure": strings.Replace(local, "{kind: local, key_file: /old}", "{kind: azurekeyvault, key: 'https://kv.vault.azure.net/keys/k'}", 1),
+		"vault, no vault":         strings.Replace(local, "{kind: local, key_file: /old}", "{kind: vault, key: old}", 1),
+		"previous with no keys":   good + "keys: {previous: [{kind: local, key_file: /old}]}\n",
+	} {
+		if _, err := Parse([]byte(d)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// from the environment: a YAML list, as every list
+	t.Setenv("TRESOR_KEYS__PREVIOUS", "[{kind: local, key_env: TRESOR_OLD_KEK}]")
+	path := t.TempDir() + "/server.yaml"
+	if err := os.WriteFile(path, []byte(base+"keys: {kind: local, key_file: /new}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err = Load(path)
+	if err != nil || len(cfg.Keys.Previous) != 1 || cfg.Keys.Previous[0].KeyEnv != "TRESOR_OLD_KEK" {
+		t.Fatalf("from the environment: %v %+v", err, cfg)
 	}
 }

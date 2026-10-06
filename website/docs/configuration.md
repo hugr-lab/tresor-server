@@ -99,11 +99,13 @@ store but `memory`.
 
 | Setting | |
 | --- | --- |
-| `keys.kind` | `local` or `azurekeyvault`. |
+| `keys.kind` | `local`, `azurekeyvault` or `vault`. |
 | `keys.key_env`, `keys.key_file` | `local`: a 32-byte key, base64. |
-| `keys.key` | `azurekeyvault`: `https://<vault>/keys/<name>`, with no version. |
+| `keys.key` | `azurekeyvault`: `https://<vault>/keys/<name>`, with no version; `vault`: the Transit key's name. |
+| `keys.mount` | `vault`: the Transit mount; default `transit`. |
 | `keys.data_key_max_age` | A data key older than this is replaced for new values; default `720h`. |
 | `keys.cache_ttl` | How long an unwrapped data key stays in memory; default `5m`. |
+| `keys.previous` | KEKs data keys may still be under, read only, during a [move to another KEK](encryption.md#moving-to-another-kek): a list of `{kind, key_env, key_file, key, mount}`. |
 
 ### `material`
 

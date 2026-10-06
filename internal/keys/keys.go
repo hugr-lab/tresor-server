@@ -21,6 +21,9 @@ type KeyWrapper interface {
 	// KEK wraps with its public key, so a data key that unwraps proves nothing - the root authenticates it.
 	// Deterministic, never stored.
 	Root(ctx context.Context, kekID string) ([]byte, error)
+	// Owns says whether kekID names a version of this KEK: a chain (spec 011) unwraps with the KEK that owns
+	// the id, never by trying each.
+	Owns(kekID string) bool
 }
 
 // DataKey is a data key as stored: wrapped, and authenticated by a tag under the KEK's root.

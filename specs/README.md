@@ -24,4 +24,4 @@ Research lives in the local, gitignored `design/` folder.
 | [008](008-named-sources/spec.md) | named material sources: ref+<name>://, more instances of a kind, each its own connection | implemented |
 | [009](009-refs-command/spec.md) | `tresor-server refs`: the stored references the configuration would not resolve | implemented |
 | [010](010-console/spec.md) | the management console: /ui/, /admin/v1, a microfrontend for the hugr platform | implemented |
-| [011](011-kek-migration/spec.md) | moving to another KEK: `keys.previous` (read only), then `rewrap` | draft |
+| [011](011-kek-migration/spec.md) | moving to another KEK: `keys.previous` (read only), then `rewrap` | implemented |

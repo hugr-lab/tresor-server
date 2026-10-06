@@ -1,6 +1,6 @@
 # Spec 011: moving to another KEK - `keys.previous`, then `rewrap`
 
-- **Status**: draft
+- **Status**: implemented
 - **Date**: 2026-10-06
 - **Author**: hugr lab
 
@@ -49,9 +49,10 @@ keys:
 - Values under a previous KEK's data keys read as before.
 - The first write after the change seals under a new data key wrapped by the new KEK: the active data key is
   replaced when its KEK id is not the current one (spec 002, unchanged).
-- Readiness checks each previous KEK too (it gives its current id or its root): a previous KEK that does not
+- Readiness checks each previous KEK too (it gives its current id): a previous KEK that does not
   answer makes the service not ready, since the values under it would not open.
-- `/admin/v1/service` and the console's Service screen list the previous KEKs (kind and id, never key material).
+- `/admin/v1/service` and the console's Service screen list the previous KEKs (kind and where: a key URL, a
+  Transit key, a file or a variable's name; never key material).
 
 ### The move
 
@@ -88,8 +89,9 @@ and listed in `config.keys.previous` when that is unset. Other kinds need nothin
   with A removed: `ErrSealed`.
 - Config: `keys.previous` parsed and validated (a missing key, the current KEK repeated); from the environment.
 - The command: `rewrap` local → local (two files) against SQLite, end to end.
-- CI: local → OpenBao Transit on kind (spec 007's `kind.sh`), the conformance suite passing before and after
-  `rewrap`.
+- CI: local → OpenBao Transit on kind (spec 007's `kind.sh`): a secret written under the local KEK reads with
+  OpenBao current and the local one previous, `rewrap` in the pod moves every data key under Transit, and it reads
+  with OpenBao alone.
 
 ## Alternatives considered
 

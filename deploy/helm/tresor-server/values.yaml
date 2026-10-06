@@ -36,6 +36,11 @@ config:
 localKEK:
   secretName: ""
   key: key
+  # A move to another KEK (spec 011): the old local KEK from its Secret, mounted at
+  # /var/run/tresor/kek-previous/<previousKey> and listed in config.keys.previous when that is unset (read only).
+  # Removed once `tresor-server rewrap` has moved every data key.
+  previousSecretName: ""
+  previousKey: ""          # default: key
 
 # A kubernetes.io/tls Secret the pod serves with itself (tls.cert, tls.key set to it); empty: tls.offload.
 tlsSecret: ""
