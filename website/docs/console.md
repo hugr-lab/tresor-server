@@ -24,8 +24,9 @@ corp`); the console is for looking at what the service holds and changing it wit
   "secret" switch does too) is **never shown**: it is kept or set anew.
 - A parameter not marked is shown on request (**Show values**), and each such request is audited as `reveal`.
 - A reference is shown as written, never what it resolves to.
-- Every view is audited as `inspect` (see [Observability](observability.md)). Using a secret still needs a grant:
-  an administrator holds no `use` by being one.
+- Views through the console's own API (`/admin/v1`) are audited as `inspect`, and Show values as `reveal`,
+  subject to `audit.level` (see [Observability](observability.md)); the lists and grants come from the protocol's
+  routes, audited as theirs. Using a secret still needs a grant: an administrator holds no `use` by being one.
 
 ## Signing in
 
@@ -45,7 +46,8 @@ ui:
 
 At the IdP:
 
-- **Redirect URI**: `<public_url>/ui/callback`; the same as the post-logout redirect (`<public_url>/ui/`).
+- **Redirect URI**: `<public_url>/ui/callback` (the sign-in popup uses it too); **post-logout redirect URI**:
+  `<public_url>/ui/`.
 - **Web origin** (CORS for the token endpoint): the service's origin.
 - **The audience**: the access token must carry the service's `audience`. Keycloak: an audience mapper on the
   client. ZITADEL: the project's audience. Entra: the API's scope in `scopes`
@@ -68,6 +70,7 @@ const { mountTresor } = await import('https://secrets.corp.example/ui/mfe/tresor
 const tresor = mountTresor(element, {
   apiBase: 'https://secrets.corp.example',
   getToken: async (audience) => token,   // an access token with the service's audience, before each request
+  audience: 'duckdb-secrets',            // optional: handed to getToken when the shell's tokens lack it
   basePath: '/platform/secrets',         // the shell's path the console lives under
   theme: 'dark',
   onNavigate: (path, { replace }) => history[replace ? 'replaceState' : 'pushState'](null, '', path),
@@ -77,7 +80,7 @@ tresor.update({ theme: 'light' })          // or { path } when the shell navigat
 tresor.unmount()
 ```
 
-Or the element: `<tresor-console api-base="…" base-path="…" theme="dark">`, mounted once its `getToken`
+Or the element: `<tresor-console api-base="…" base-path="…" audience="…" theme="dark">`, mounted once its `getToken`
 property is set (a token is never an attribute).
 
 ```yaml

@@ -11,7 +11,10 @@ export default defineConfig({
   use: {
     baseURL: process.env.E2E_TRESOR_URL,
     viewport: { width: 1440, height: 900 },
-    trace: 'retain-on-failure',
+    // no trace: it records fill()'s values and request bodies - this run's passwords - into a CI artifact;
+    // a screenshot draws a password field as dots
+    trace: 'off',
+    screenshot: 'only-on-failure',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } }],
 })

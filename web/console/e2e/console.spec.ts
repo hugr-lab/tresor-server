@@ -31,6 +31,11 @@ test('a non-administrator is refused', async ({ page }) => {
 })
 
 test("a secret's life: create, show, replace keeping the secret value, grant, delete", async ({ page }) => {
+  // what the service answers, not only what the page draws: a secret value is never in an answer
+  const answers: Promise<string>[] = []
+  page.on('response', (r) => {
+    if (/\/(admin\/)?v1\//.test(new URL(r.url()).pathname)) answers.push(r.text().catch(() => ''))
+  })
   await signIn(page, 'anna', env('E2E_ADMIN_PW'))
   await expect(page.getByRole('heading', { name: 'Secrets' })).toBeVisible()
 
@@ -72,6 +77,9 @@ test("a secret's life: create, show, replace keeping the secret value, grant, de
   await dialog.locator('input').fill('e2e-pg')
   await dialog.getByRole('button', { name: /Delete/ }).click()
   await expect(page.getByText('No secrets yet')).toBeVisible()
+  const bodies = await Promise.all(answers)
+  expect(bodies.length).toBeGreaterThan(5)
+  expect(bodies.filter((b) => b.includes('e2e-hunter2'))).toEqual([])
 })
 
 test('the references check runs', async ({ page }) => {
@@ -101,8 +109,9 @@ test("the session ends: signed in again in a popup, the editor's input kept", as
   const popup = context.waitForEvent('page')
   await page.getByRole('button', { name: 'Sign in again' }).click()
   const p = await popup
+  const closed = p.waitForEvent('close')
   await login(p, 'anna', env('E2E_ADMIN_PW'))
-  await p.waitForEvent('close')
+  await closed
   await expect(page.getByText('Your session ended')).toBeHidden()
   await expect(page.getByRole('textbox', { name: /^Name/ })).toHaveValue('typed-before-the-end')
 })
@@ -120,7 +129,12 @@ test('the microfrontend in a host on another origin', async ({ page }) => {
   await page.goBack()
   await expect(page.locator('#title')).toHaveText('tresor · Secrets')
   await tabs.getByRole('link', { name: 'Access' }).click()
-  await expect(page.locator('#title')).toHaveText('tresor · Access') // the host's earlier path not applied again
+  // the host's earlier path is not applied again: still on Access once things settle
+  await expect(page).toHaveURL(/\/platform\/tresor\/access$/)
+  await page.waitForTimeout(800)
+  await expect(page).toHaveURL(/\/platform\/tresor\/access$/)
+  await expect(page.locator('#title')).toHaveText('tresor · Access')
+  await expect(page.locator('#slot').getByRole('region', { name: 'Roles and groups' })).toBeVisible()
   await page.locator('#theme').click()
   await expect(page.locator('#slot .mfe-root')).toHaveAttribute('data-theme', 'dark')
 })
