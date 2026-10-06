@@ -133,5 +133,5 @@ material:
 
 ## Follow-ups
 
-- `tresor-server refs`: list the stored references whose source is not configured (after a rename) - spec 009.
+- `tresor-server refs`: list the stored references whose source is not configured (after a rename). Done: spec 009.
 - Phase 4 (AWS, GCP) kinds, named from the start.
