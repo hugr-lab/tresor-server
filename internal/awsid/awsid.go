@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -28,8 +29,9 @@ type Identity struct {
 	RoleARN string
 }
 
-// staticVariables are the environment's static keys: the SDK would prefer them to the platform's identity.
-var staticVariables = []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}
+// staticVariables are the environment's static keys, with the SDK's legacy names: it would prefer them to the
+// platform's identity.
+var staticVariables = []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_ACCESS_KEY", "AWS_SECRET_KEY"}
 
 // Config returns the SDK's configuration for the identity.
 func Config(ctx context.Context, id Identity, log *slog.Logger) (aws.Config, error) {
@@ -48,6 +50,13 @@ func Config(ctx context.Context, id Identity, log *slog.Logger) (aws.Config, err
 			log.Warn("static AWS keys from the environment (aws.static_credentials: allow): for development and tests only")
 		}
 		break
+	}
+	// endpoints come from configuration only: an AWS_ENDPOINT_URL[_<SERVICE>] would send KMS calls - data keys -
+	// or Secrets Manager reads to another host
+	for _, kv := range os.Environ() {
+		if name, value, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "AWS_ENDPOINT_URL") && value != "" {
+			return aws.Config{}, fmt.Errorf("%s is set: AWS endpoints come from aws.endpoint_url only", name)
+		}
 	}
 	opts := []func(*config.LoadOptions) error{config.WithRegion(id.Region),
 		// the shared files (~/.aws) are a developer's, never the service's

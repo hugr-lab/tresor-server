@@ -97,7 +97,7 @@ type AWSLogin struct {
 func (l AWSLogin) Password(ctx context.Context) (string, error) {
 	token, err := rdsauth.BuildAuthToken(ctx, l.Endpoint, l.Region, l.User, l.Credentials)
 	if err != nil {
-		return "", errors.New("the database login: the service's AWS identity did not sign an RDS token")
+		return "", fmt.Errorf("the database login: the service's AWS identity did not sign an RDS token: %w", err)
 	}
 	return token, nil
 }

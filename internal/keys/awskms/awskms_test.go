@@ -3,10 +3,12 @@ package awskms
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"errors"
 	"math/big"
@@ -157,5 +159,33 @@ func TestSigner(t *testing.T) {
 	}
 	if _, err := NewSigner(ctx, &signer{ec: ec, usage: types.KeyUsageTypeEncryptDecrypt}, keyA); err == nil {
 		t.Fatal("an encryption key signs")
+	}
+}
+
+// rsaSigner is KMS signing with an RSA key: PKCS#1 v1.5 over the digest
+type rsaSigner struct{ key *rsa.PrivateKey }
+
+func (f *rsaSigner) DescribeKey(context.Context, *kms.DescribeKeyInput, ...func(*kms.Options)) (*kms.DescribeKeyOutput, error) {
+	return &kms.DescribeKeyOutput{KeyMetadata: &types.KeyMetadata{KeyUsage: types.KeyUsageTypeSignVerify, KeySpec: types.KeySpecRsa2048}}, nil
+}
+
+func (f *rsaSigner) Sign(_ context.Context, in *kms.SignInput, _ ...func(*kms.Options)) (*kms.SignOutput, error) {
+	if in.MessageType != types.MessageTypeDigest || in.SigningAlgorithm != types.SigningAlgorithmSpecRsassaPkcs1V15Sha256 {
+		return nil, &smithy.GenericAPIError{Code: "ValidationException"}
+	}
+	sig, err := rsa.SignPKCS1v15(rand.Reader, f.key, crypto.SHA256, in.Message)
+	return &kms.SignOutput{Signature: sig}, err
+}
+
+func TestSignerRSA(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	s, err := NewSigner(ctx, &rsaSigner{key: key}, keyA)
+	if err != nil || s.Alg() != "RS256" {
+		t.Fatalf("%v %v", s, err)
+	}
+	digest := sha256.Sum256([]byte("header.payload"))
+	sig, err := s.Sign(ctx, digest[:])
+	if err != nil || rsa.VerifyPKCS1v15(&key.PublicKey, crypto.SHA256, digest[:], sig) != nil {
+		t.Fatalf("RS256: %v", err)
 	}
 }

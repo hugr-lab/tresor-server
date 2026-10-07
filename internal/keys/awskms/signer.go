@@ -74,7 +74,8 @@ func (s *Signer) Sign(ctx context.Context, digest []byte) ([]byte, error) {
 		return out.Signature, nil
 	}
 	var rs struct{ R, S *big.Int }
-	if rest, err := asn1.Unmarshal(out.Signature, &rs); err != nil || len(rest) != 0 || rs.R == nil || rs.S == nil {
+	if rest, err := asn1.Unmarshal(out.Signature, &rs); err != nil || len(rest) != 0 || rs.R == nil || rs.S == nil ||
+		rs.R.Sign() <= 0 || rs.S.Sign() <= 0 {
 		return nil, errors.New("KMS answered an ECDSA signature that does not parse")
 	}
 	jws := make([]byte, 64)

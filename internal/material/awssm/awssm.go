@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -138,7 +139,9 @@ func (s *Source) Resolve(ctx context.Context, ref material.Ref) (string, string,
 	value := *out.SecretString
 	if ref.Key != "" {
 		var fields map[string]any
-		if err := json.Unmarshal([]byte(value), &fields); err != nil {
+		dec := json.NewDecoder(strings.NewReader(value))
+		dec.UseNumber() // a large integer stays as written, not a float
+		if err := dec.Decode(&fields); err != nil || dec.More() {
 			return "", "", errors.New("the Secrets Manager secret is not a JSON object: a #field needs one")
 		}
 		v, ok := fields[ref.Key]
@@ -148,9 +151,10 @@ func (s *Source) Resolve(ctx context.Context, ref material.Ref) (string, string,
 		switch t := v.(type) {
 		case string:
 			value = t
-		case float64, bool:
-			b, _ := json.Marshal(t)
-			value = string(b)
+		case json.Number:
+			value = t.String()
+		case bool:
+			value = strconv.FormatBool(t)
 		default:
 			return "", "", fmt.Errorf("the field %s is not a text, a number or a boolean", ref.Key)
 		}

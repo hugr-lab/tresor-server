@@ -29,7 +29,7 @@ import (
 func TestAWS(t *testing.T) {
 	endpoint := os.Getenv("TRESOR_TEST_AWS_ENDPOINT")
 	if endpoint == "" {
-		t.Skip("TRESOR_TEST_AWS_ENDPOINT is not set (an AWS emulator: scripts/ci/aws.sh)")
+		t.Skip("TRESOR_TEST_AWS_ENDPOINT is not set (an AWS emulator: moto, as the CI's aws job runs it)")
 	}
 	t.Setenv("AWS_ACCESS_KEY_ID", "test")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")

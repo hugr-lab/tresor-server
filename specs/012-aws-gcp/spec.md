@@ -24,10 +24,10 @@ The organizations hugr serves keep their credentials in Secrets Manager or Secre
 
 - **AWS**: the SDK's default chain - EKS Pod Identity, IRSA (a projected web identity token), an instance's or a
   task's role. `aws: {region: eu-central-1}`; no access key setting exists (static keys from the environment are
-  refused at start, as `AWS_ACCESS_KEY_ID` would bypass the platform's identity), unless
+  refused at start - the legacy `AWS_ACCESS_KEY` too - as they would bypass the platform's identity), unless
   `aws.static_credentials: allow` says so - for development and tests (an emulator), logged as a warning at start.
 - `aws.endpoint_url`: another endpoint for every AWS API the service calls (an emulator, a VPC endpoint), from
-  configuration only.
+  configuration only: an `AWS_ENDPOINT_URL*` variable is refused at start.
 - **GCP**: Application Default Credentials - GKE Workload Identity, a VM's service account. `gcp: {project: …}`
   for defaults; no key file setting (a `GOOGLE_APPLICATION_CREDENTIALS` key file is refused at start).
 - The chart: `serviceAccount.annotations` for IRSA (`eks.amazonaws.com/role-arn`) and GKE WI
@@ -61,9 +61,9 @@ keys:
     rotate. A move to other keys is spec 011's.
   - GCP: `gcpkms:<key>/cryptoKeyVersions/<n>;mac:<mac key>/cryptoKeyVersions/<m>`: the primary version wraps;
     a new primary is a new id, so data keys move with `rewrap` (as Vault's and Key Vault's versions).
-- **Owns** (spec 011): its key ARN (AWS), its key's name with any version (GCP).
-- The service's role needs: AWS `kms:Encrypt`, `kms:Decrypt`, `kms:GenerateMac` on the two keys (and
-  `kms:DescribeKey`); GCP `cloudkms.cryptoKeyVersions.useToEncrypt`, `useToDecrypt`, `useToSign` (MAC) and
+- **Owns** (spec 011): its exact id - both ARNs (AWS); its key's name with any version (GCP).
+- The service's role needs: AWS `kms:Encrypt`, `kms:Decrypt`, `kms:GenerateMac` on the two keys (the signer,
+  `kms:Sign` and `kms:DescribeKey` on its key); GCP `cloudkms.cryptoKeyVersions.useToEncrypt`, `useToDecrypt`, `useToSign` (MAC) and
   `cloudkms.cryptoKeys.get` on the keys. The docs give a policy and a custom role.
 
 ### The sources

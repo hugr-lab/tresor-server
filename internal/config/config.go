@@ -493,6 +493,15 @@ var (
 	iamRole   = regexp.MustCompile(`^arn:aws[a-z-]*:iam::\d{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$`)
 )
 
+// kmsRegion is the region a KMS key's ARN names.
+func kmsRegion(arn string) string {
+	parts := strings.Split(arn, ":")
+	if len(parts) < 4 {
+		return ""
+	}
+	return parts[3]
+}
+
 // validate checks an AWS identity; where names it in errors.
 func (a AWS) validate(where string) error {
 	if !awsRegion.MatchString(a.Region) {
@@ -693,6 +702,12 @@ func (c *Config) validate() error {
 	if slices.Contains(c.Keys.Kinds(), "awskms") && c.AWS.Region == "" {
 		return errors.New("keys: awskms needs aws.region")
 	}
+	// a key in another region than the one the service calls would fail only at the first call
+	for _, k := range append([]KEK{c.Keys.Current()}, c.Keys.Previous...) {
+		if k.Kind == "awskms" && (kmsRegion(k.Key) != c.AWS.Region || kmsRegion(k.MacKey) != c.AWS.Region) {
+			return fmt.Errorf("keys: the awskms keys are in aws.region (%s): their ARNs name another", c.AWS.Region)
+		}
+	}
 	if a := c.Material.AWS; len(a.Allow) > 0 || a.CacheTTL != 0 {
 		if c.AWS.Region == "" {
 			return errors.New("material.aws reads with the service's AWS identity: aws.region is required")
@@ -738,6 +753,8 @@ func (c *Config) validate() error {
 			return errors.New("state.password_ref reads Vault: vault: is required")
 		case s.Kind == "azkv" && s.Azure.Identity == "":
 			return errors.New("state.password_ref reads Key Vault with the service's Azure identity: azure.identity is required")
+		case s.Kind == "aws" && s.AWS.Region == "":
+			return errors.New("state.password_ref reads Secrets Manager with the service's AWS identity: aws.region is required")
 		}
 	}
 	if c.State.PasswordRef != "" && c.admits(c.State.PasswordRef) {
@@ -787,6 +804,9 @@ func (c *Config) validate() error {
 		if ex := is.Exchange; ex != nil {
 			if err := ex.validate(c.Azure.Identity, c.Vault.used(), c.AWS.Region != ""); err != nil {
 				return fmt.Errorf("issuers[%d]: %w", i, err)
+			}
+			if ex.ClientAuth == "awskms" && kmsRegion(ex.Key) != c.AWS.Region {
+				return fmt.Errorf("issuers[%d]: exchange.key is in aws.region (%s): its ARN names another", i, c.AWS.Region)
 			}
 		}
 		if len(is.Algorithms) == 0 {

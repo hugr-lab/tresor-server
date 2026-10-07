@@ -48,7 +48,7 @@ func TestParse(t *testing.T) {
 	for _, text := range []string{
 		"", "other/lake", "Duckdb/lake", "duckdb//lake", "/duckdb/lake", "duckdb/lake/",
 		"arn:aws:secretsmanager:eu-central-1:123456789012:secret:duckdb/lake",
-		"duckdb/lake#", "duckdb/lake#a b", "duckdb/lake?stage=AWSPREVIOUS", "duckdb/lake?version=short",
+		"duckdb/lake#", "duckdb/lake#a b", "duckdb/lake?stage=AWSPREVIOUS", "duckdb/lake?version=short", "duckdb/lake?version=" + strings.Repeat("a", 32) + "#f",
 		"duckdb/la ke", "duckdb/lake#f#g",
 	} {
 		if ref, err := s.Parse(text); err == nil {
@@ -66,7 +66,7 @@ func TestParse(t *testing.T) {
 func TestResolve(t *testing.T) {
 	f := &fake{secrets: map[string]*secretsmanager.GetSecretValueOutput{
 		"duckdb/lake": text("s3cr3t", "v-1"),
-		"duckdb/pg":   text(`{"user":"etl","password":"pw","port":5432,"tls":true,"nested":{"a":1}}`, "v-2"),
+		"duckdb/pg":   text(`{"user":"etl","password":"pw","port":5432,"tls":true,"nested":{"a":1},"big":12345678901234567890}`, "v-2"),
 		"duckdb/bin":  {SecretBinary: []byte{1, 2}, VersionId: aws.String("v-3")},
 		"duckdb/text": text("not json", "v-4"),
 	}}
@@ -82,7 +82,7 @@ func TestResolve(t *testing.T) {
 	if v, ver, err := read("duckdb/lake"); err != nil || v != "s3cr3t" || ver != "v-1" {
 		t.Fatalf("a string: %q %q %v", v, ver, err)
 	}
-	for field, want := range map[string]string{"user": "etl", "port": "5432", "tls": "true"} {
+	for field, want := range map[string]string{"user": "etl", "port": "5432", "tls": "true", "big": "12345678901234567890"} {
 		if v, _, err := read("duckdb/pg#" + field); err != nil || v != want {
 			t.Errorf("#%s: %q %v", field, v, err)
 		}

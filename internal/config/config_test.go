@@ -616,6 +616,11 @@ func TestAWSConfig(t *testing.T) {
 		"aws on a vault source":     base + "vault: {address: 'https://b:8200', auth: {method: token_file, token_file: /t}}\nkeys: {kind: local, key_file: /k}\nmaterial: {sources: [{name: v2, kind: vault, aws: {region: eu-central-1}, allow: [{mount: secret}]}]}\n",
 		"RDS IAM with no region":    pg + "keys: {kind: local, key_file: /k}\n",
 		"RDS IAM on SQL Server":     strings.Replace(pg, "kind: postgres", "kind: sqlserver", 1) + "aws: {region: eu-central-1}\nkeys: {kind: local, key_file: /k}\n",
+		"a key in another region":   strings.Replace(ok, "aws: {region: eu-central-1}", "aws: {region: eu-west-1}", 1),
+		"a password inside the allowlist": strings.Replace(pg, "auth: aws", "auth: password, password_ref: 'ref+aws://duckdb/pg#password'", 1) +
+			"aws: {region: eu-central-1}\nkeys: {kind: local, key_file: /k}\nmaterial: {aws: {allow: [{prefixes: [duckdb/]}]}}\n",
+		"a password from aws with no region": strings.Replace(pg, "auth: aws", "auth: password, password_ref: 'ref+aws://db/pg#password'", 1) +
+			"keys: {kind: local, key_file: /k}\n",
 	} {
 		if _, err := Parse([]byte(doc)); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -627,5 +632,13 @@ func TestAWSConfig(t *testing.T) {
 	}
 	if _, err := Parse([]byte(ex)); err == nil {
 		t.Error("client_auth: awskms with no region: accepted")
+	}
+	if _, err := Parse([]byte(ex + "aws: {region: us-east-1}\n")); err == nil {
+		t.Error("client_auth: awskms with a key in another region: accepted")
+	}
+	outside := strings.Replace(pg, "auth: aws", "auth: password, password_ref: 'ref+aws://db/pg#password'", 1) +
+		"aws: {region: eu-central-1}\nkeys: {kind: local, key_file: /k}\nmaterial: {aws: {allow: [{prefixes: [duckdb/]}]}}\n"
+	if _, err := Parse([]byte(outside)); err != nil {
+		t.Errorf("a password outside the allowlist: %v", err)
 	}
 }

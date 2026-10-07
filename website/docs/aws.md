@@ -21,7 +21,7 @@ aws:
   region: eu-central-1
 ```
 
-The SDK's default chain, in this order of what a deployment has:
+The SDK's default chain, whichever of these the deployment has (the SDK tries IRSA's web identity first):
 
 - **EKS Pod Identity**: an association between the service's ServiceAccount and an IAM role; nothing in the
   chart.
@@ -29,8 +29,9 @@ The SDK's default chain, in this order of what a deployment has:
   chart: `serviceAccount.annotations` with `eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/tresor`.
 - **An instance's or a task's role** (EC2, ECS).
 
-Static keys from the environment (`AWS_ACCESS_KEY_ID`) are refused at start: the SDK would prefer them to the
-platform's identity. `aws.static_credentials: allow` admits them for development and tests, with a warning.
+Static keys from the environment (`AWS_ACCESS_KEY_ID`, and the SDK's legacy `AWS_ACCESS_KEY`) are refused at
+start: the SDK would prefer them to the platform's identity. So is an `AWS_ENDPOINT_URL[_<SERVICE>]`: endpoints
+come from `aws.endpoint_url` only. `aws.static_credentials: allow` admits them for development and tests, with a warning.
 The shared files (`~/.aws`) are never read. `aws.endpoint_url` sends every call to another endpoint (a VPC
 endpoint, an emulator).
 
@@ -48,7 +49,7 @@ keys:
 - **`mac_key`** gives the KEK's root, which authenticates every data key (see [Encryption](encryption.md#the-root)):
   `GenerateMac`. A symmetric encryption key does not MAC, hence a second key; HMAC keys exist in every region
   KMS does.
-- **ARNs only**: an alias or a bare id would make the KEK's id depend on how the key was named.
+- **ARNs only**, in `aws.region`: an alias or a bare id would make the KEK's id depend on how the key was named.
 - **Rotation**: KMS rotates the encryption key's material inside the same key, and old material still decrypts.
   The KEK's id does not change, so no `rewrap` is needed. An HMAC key does not rotate.
 - **Another key** (or from a local KEK to KMS): [Moving to another KEK](encryption.md#moving-to-another-kek).
@@ -96,7 +97,8 @@ The service's role needs `secretsmanager:GetSecretValue` on those secrets (and `
 managed key that encrypts them).
 
 **Another account or region**: a named source ([References](references.md#named-sources)) with an `aws:` of its
-own. Its `role_arn` is assumed with the service's identity; the role in the other account trusts the service's.
+own. Its `role_arn` is assumed with the service's identity: the service's role needs `sts:AssumeRole` on it, and
+the role in the other account trusts the service's.
 
 ```yaml
 material:

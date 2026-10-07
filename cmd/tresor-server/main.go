@@ -323,7 +323,7 @@ func passwordResolver(cfg *config.Config, ref string) (*material.Resolver, error
 		if err != nil {
 			return nil, err
 		}
-		// that one secret, exactly: the allowlist is the name, read whole
+		// that one reference only: the allowlist is its name, and the resolver resolves nothing else
 		return checkedPassword(material.New(awssm.New(secretsmanager.NewFromConfig(ac), []string{name}, false, 0).Named(s.Name)), ref)
 	}
 	return nil, fmt.Errorf("state.password_ref: a %s source", s.Kind)
@@ -333,7 +333,7 @@ func passwordResolver(cfg *config.Config, ref string) (*material.Resolver, error
 func checkedPassword(r *material.Resolver, ref string) (*material.Resolver, error) {
 	if !r.Admits(ref) {
 		return nil, errors.New("state.password_ref does not parse: ref+k8s://<namespace>/<secret>/<key>, " +
-			"ref+azkv://<vault>/<secret>[/<version>] or ref+vault://<mount>/<path>#<field> (or a named source's)")
+			"ref+azkv://<vault>/<secret>[/<version>], ref+vault://<mount>/<path>#<field> or ref+aws://<secret>[#<field>] (or a named source's)")
 	}
 	return r, nil
 }
