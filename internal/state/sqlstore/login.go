@@ -9,6 +9,8 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	rdsauth "github.com/aws/aws-sdk-go-v2/feature/rds/auth"
 
 	"github.com/hugr-lab/tresor-server/internal/config"
 )
@@ -82,3 +84,20 @@ func (l RefLogin) Password(ctx context.Context) (string, error) {
 
 // dsnHasPassword says whether a DSN carries a password: never allowed - the password comes from the Login.
 func dsnHasPassword(dsn string) bool { return config.DSNHasPassword(dsn) }
+
+// AWSLogin is an RDS IAM authentication token as the password (RDS, Aurora PostgreSQL; spec 012): made by the
+// service's AWS identity for each new connection, valid 15 minutes, never stored. TLS is required by RDS for it.
+type AWSLogin struct {
+	Endpoint    string // host:port, as the DSN names the server
+	Region      string
+	User        string
+	Credentials aws.CredentialsProvider
+}
+
+func (l AWSLogin) Password(ctx context.Context) (string, error) {
+	token, err := rdsauth.BuildAuthToken(ctx, l.Endpoint, l.Region, l.User, l.Credentials)
+	if err != nil {
+		return "", fmt.Errorf("the database login: the service's AWS identity did not sign an RDS token: %w", err)
+	}
+	return token, nil
+}

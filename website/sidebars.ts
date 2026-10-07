@@ -12,6 +12,7 @@ const sidebars: SidebarsConfig = {
     'token-exchange',
     'console',
     'vault',
+    'aws',
     'azure-container-apps',
     'kubernetes',
     'operations',

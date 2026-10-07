@@ -25,6 +25,7 @@ type Config struct {
 	State     State    `yaml:"state"`
 	Keys      Keys     `yaml:"keys"`
 	Azure     Azure    `yaml:"azure"`
+	AWS       AWS      `yaml:"aws"`
 	Vault     Vault    `yaml:"vault"`
 	Material  Material `yaml:"material"`
 	Issuers   []Issuer `yaml:"issuers"`
@@ -168,6 +169,8 @@ type Keys struct {
 	Key string `yaml:"key"`
 	// Mount is the vault KEK's Transit mount (default transit).
 	Mount string `yaml:"mount"`
+	// MacKey is the awskms KEK's HMAC key (spec 012): its root, for an encryption key does not MAC.
+	MacKey string `yaml:"mac_key"`
 	// DataKeyMaxAge: a data key older than this is replaced for new values (default 30 days).
 	DataKeyMaxAge time.Duration `yaml:"data_key_max_age"`
 	// CacheTTL: how long an unwrapped data key stays in memory (default 5 minutes).
@@ -184,11 +187,12 @@ type KEK struct {
 	KeyFile string `yaml:"key_file"`
 	Key     string `yaml:"key"`
 	Mount   string `yaml:"mount"`
+	MacKey  string `yaml:"mac_key"`
 }
 
 // Current is the current KEK's settings.
 func (k Keys) Current() KEK {
-	return KEK{Kind: k.Kind, KeyEnv: k.KeyEnv, KeyFile: k.KeyFile, Key: k.Key, Mount: k.Mount}
+	return KEK{Kind: k.Kind, KeyEnv: k.KeyEnv, KeyFile: k.KeyFile, Key: k.Key, Mount: k.Mount, MacKey: k.MacKey}
 }
 
 // Kinds are the kinds of the current KEK and the previous ones, each once.
@@ -203,7 +207,7 @@ func (k Keys) Kinds() []string {
 }
 
 // KeyKinds are the KEKs this build knows.
-var KeyKinds = []string{"local", "azurekeyvault", "vault"}
+var KeyKinds = []string{"local", "azurekeyvault", "vault", "awskms"}
 
 // Vault is OpenBao or HashiCorp Vault (spec 007): where it is, and how the service logs in with no static
 // secret.
@@ -257,6 +261,7 @@ type Material struct {
 	AzKV  AzKV       `yaml:"azkv"`
 	K8s   K8s        `yaml:"k8s"`
 	Vault VaultAllow `yaml:"vault"`
+	AWS   AWSAllow   `yaml:"aws"`
 	// Sources are named sources (spec 008): more instances of a kind, ref+<name>://, each with its own
 	// connection and allowlist.
 	Sources []NamedSource `yaml:"sources"`
@@ -265,10 +270,11 @@ type Material struct {
 // NamedSource is one named source (spec 008): its name is the references' scheme.
 type NamedSource struct {
 	Name string `yaml:"name"`
-	Kind string `yaml:"kind"` // vault | azkv
+	Kind string `yaml:"kind"` // vault | azkv | aws
 	// Vault (kind vault) and Azure (kind azkv) are the source's own connection; unset, the top-level one.
 	Vault     *Vault        `yaml:"vault"`
 	Azure     *Azure        `yaml:"azure"`
+	AWS       *AWS          `yaml:"aws"` // kind aws: its region, a role in another account
 	Allow     []SourceAllow `yaml:"allow"`
 	CacheTTL  time.Duration `yaml:"cache_ttl"`
 	DNSSuffix string        `yaml:"dns_suffix"` // azkv
@@ -284,7 +290,7 @@ type SourceAllow struct {
 
 // NamedSourceKinds are the kinds a named source may be: k8s is not one (another cluster would need a kubeconfig
 // with credentials).
-var NamedSourceKinds = []string{"vault", "azkv"}
+var NamedSourceKinds = []string{"vault", "azkv", "aws"}
 
 // ReservedSourceNames are the kinds' own names, now and to come: never a named source's, so a reference or a
 // password written to a kind's source never moves to another (spec 008).
@@ -299,6 +305,8 @@ type Source struct {
 	OwnConnection bool
 	Vault         Vault      // kind vault: the connection
 	Azure         Azure      // kind azkv: the identity
+	AWS           AWS        // kind aws: the identity and the region
+	AWSAllow      AWSAllow   // kind aws: the allowlist, the cache
 	VaultAllow    VaultAllow // kind vault: the allowlist, the cache
 	AzKV          AzKV       // kind azkv: the allowlist, the cache, the cloud
 	K8s           K8s        // kind k8s
@@ -311,7 +319,10 @@ func (c *Config) Source(scheme string) (Source, bool) {
 		if n.Name != scheme {
 			continue
 		}
-		s := Source{Name: n.Name, Kind: n.Kind, Named: true, Vault: c.Vault, Azure: c.Azure}
+		s := Source{Name: n.Name, Kind: n.Kind, Named: true, Vault: c.Vault, Azure: c.Azure, AWS: c.AWS}
+		if n.AWS != nil {
+			s.AWS, s.OwnConnection = *n.AWS, true
+		}
 		if n.Vault != nil {
 			s.Vault, s.OwnConnection = *n.Vault, true
 		}
@@ -324,9 +335,11 @@ func (c *Config) Source(scheme string) (Source, bool) {
 				s.VaultAllow.Allow = append(s.VaultAllow.Allow, VaultMount{Mount: a.Mount, Prefixes: a.Prefixes})
 			case "azkv":
 				s.AzKV.Allow = append(s.AzKV.Allow, AzKVAllow{Vault: a.Vault, Prefixes: a.Prefixes})
+			case "aws":
+				s.AWSAllow.Allow = append(s.AWSAllow.Allow, AWSPrefixes{Prefixes: a.Prefixes})
 			}
 		}
-		s.VaultAllow.CacheTTL, s.AzKV.CacheTTL, s.AzKV.DNSSuffix = n.CacheTTL, n.CacheTTL, n.DNSSuffix
+		s.VaultAllow.CacheTTL, s.AzKV.CacheTTL, s.AzKV.DNSSuffix, s.AWSAllow.CacheTTL = n.CacheTTL, n.CacheTTL, n.DNSSuffix, n.CacheTTL
 		return s, true
 	}
 	switch scheme {
@@ -336,6 +349,8 @@ func (c *Config) Source(scheme string) (Source, bool) {
 		return Source{Name: scheme, Kind: scheme, Azure: c.Azure, AzKV: c.Material.AzKV}, true
 	case "k8s":
 		return Source{Name: scheme, Kind: scheme, K8s: c.Material.K8s}, true
+	case "aws":
+		return Source{Name: scheme, Kind: scheme, AWS: c.AWS, AWSAllow: c.Material.AWS}, true
 	}
 	return Source{}, false
 }
@@ -343,7 +358,7 @@ func (c *Config) Source(scheme string) (Source, bool) {
 // Sources are the sources references may read from: the built-in sections with an allowlist, then the named.
 func (c *Config) Sources() []Source {
 	var out []Source
-	for _, kind := range []string{"azkv", "k8s", "vault"} {
+	for _, kind := range []string{"azkv", "k8s", "vault", "aws"} {
 		if s, _ := c.Source(kind); !s.Named && s.allows() {
 			out = append(out, s)
 		}
@@ -357,7 +372,7 @@ func (c *Config) Sources() []Source {
 
 // allows: the source has an allowlist.
 func (s Source) allows() bool {
-	return len(s.VaultAllow.Allow) > 0 || len(s.AzKV.Allow) > 0 || len(s.K8s.Allow) > 0
+	return len(s.VaultAllow.Allow) > 0 || len(s.AzKV.Allow) > 0 || len(s.K8s.Allow) > 0 || len(s.AWSAllow.Allow) > 0
 }
 
 // VaultAllow lets ref+vault://<mount>/<path>#<field> read KV v2 secrets (spec 007): only in the mounts and under
@@ -372,6 +387,49 @@ type VaultAllow struct {
 type VaultMount struct {
 	Mount    string   `yaml:"mount"`
 	Prefixes []string `yaml:"prefixes"`
+}
+
+// AWSAllow lets ref+aws://<secret>[#<field>] read Secrets Manager secrets (spec 012): only names starting with a
+// listed prefix (an entry with none: every secret), in the source's region and account, with the service's AWS
+// identity.
+type AWSAllow struct {
+	Allow []AWSPrefixes `yaml:"allow"`
+	// CacheTTL keeps a value read for this long (default 0: read at every fetch), at most 5 minutes.
+	CacheTTL time.Duration `yaml:"cache_ttl"`
+}
+
+// AWSPrefixes is one entry: the prefixes secrets' names must start with (none: all).
+type AWSPrefixes struct {
+	Prefixes []string `yaml:"prefixes"`
+}
+
+// Prefixes are the allowlist's prefixes, and whether an entry admits every secret.
+func (a AWSAllow) Prefixes() (prefixes []string, all bool) {
+	for _, e := range a.Allow {
+		if len(e.Prefixes) == 0 {
+			all = true
+		}
+		prefixes = append(prefixes, e.Prefixes...)
+	}
+	return prefixes, all
+}
+
+// validate checks a Secrets Manager allowlist; where names it in errors.
+func (a AWSAllow) validate(where string) error {
+	if len(a.Allow) == 0 {
+		return fmt.Errorf("%s: allow lists the secrets' name prefixes references may read - none, no references", where)
+	}
+	for i, e := range a.Allow {
+		for _, p := range e.Prefixes {
+			if p == "" || strings.HasPrefix(p, "arn:") {
+				return fmt.Errorf("%s.allow[%d].prefixes: a secret name's start (duckdb/), not an ARN", where, i)
+			}
+		}
+	}
+	if a.CacheTTL < 0 || a.CacheTTL > 5*time.Minute {
+		return fmt.Errorf("%s.cache_ttl is 0 to 5m: the longest a value may be read stale", where)
+	}
+	return nil
 }
 
 // K8s lets ref+k8s://<namespace>/<secret>/<key> read Kubernetes Secrets (spec 003): only in the namespaces and
@@ -415,6 +473,54 @@ type Azure struct {
 	ClientID string `yaml:"client_id"`
 	// TenantID is another tenant's (workload, in a named source: spec 008); the webhook's otherwise.
 	TenantID string `yaml:"tenant_id"`
+}
+
+// AWS is the service's identity on AWS (spec 012): the SDK's default chain (EKS Pod Identity, IRSA, an
+// instance's or a task's role) in Region; never a static key unless StaticCredentials allows it (tests).
+type AWS struct {
+	Region string `yaml:"region"`
+	// EndpointURL replaces every AWS API's endpoint (LocalStack, a VPC endpoint).
+	EndpointURL string `yaml:"endpoint_url"`
+	// StaticCredentials: allow takes keys from the environment (AWS_ACCESS_KEY_ID): development and tests only.
+	StaticCredentials string `yaml:"static_credentials"`
+	// RoleARN is a role assumed with the service's identity: another account (a named source's).
+	RoleARN string `yaml:"role_arn"`
+}
+
+var (
+	awsRegion = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d$`)
+	kmsKeyARN = regexp.MustCompile(`^arn:aws[a-z-]*:kms:[a-z0-9-]+:\d{12}:key/[A-Za-z0-9-]+$`)
+	iamRole   = regexp.MustCompile(`^arn:aws[a-z-]*:iam::\d{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$`)
+)
+
+// kmsRegion is the region a KMS key's ARN names.
+func kmsRegion(arn string) string {
+	parts := strings.Split(arn, ":")
+	if len(parts) < 4 {
+		return ""
+	}
+	return parts[3]
+}
+
+// validate checks an AWS identity; where names it in errors.
+func (a AWS) validate(where string) error {
+	if !awsRegion.MatchString(a.Region) {
+		return fmt.Errorf("%s.region is an AWS region (eu-central-1)", where)
+	}
+	if a.EndpointURL != "" {
+		u, err := url.Parse(a.EndpointURL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" ||
+			(u.Path != "" && u.Path != "/") {
+			return fmt.Errorf("%s.endpoint_url is an http(s) URL with no path", where)
+		}
+	}
+	if a.StaticCredentials != "" && a.StaticCredentials != "allow" {
+		return fmt.Errorf("%s.static_credentials is allow, or unset", where)
+	}
+	if a.RoleARN != "" && !iamRole.MatchString(a.RoleARN) {
+		return fmt.Errorf("%s.role_arn is an IAM role's ARN", where)
+	}
+	return nil
 }
 
 // validate checks an identity; where names it in errors.
@@ -475,7 +581,7 @@ type ExchangeClient struct {
 }
 
 // ClientAuthKinds are the ways the service logs in at a token endpoint.
-var ClientAuthKinds = []string{"secret", "azure", "file", "keyvault", "key_file", "vault"}
+var ClientAuthKinds = []string{"secret", "azure", "file", "keyvault", "key_file", "vault", "awskms"}
 
 // ServiceRule marks a token as a service's: Claim is present (and equals Equals, when set); the
 // client's name is ClientClaim (default azp).
@@ -562,7 +668,7 @@ func (c *Config) validate() error {
 	if c.State.Kind == "sqlite" && c.State.Path == "" {
 		return errors.New("state.path is required for sqlite")
 	}
-	if err := c.State.validateServer(c.Azure.Identity); err != nil {
+	if err := c.State.validateServer(c.Azure.Identity, c.AWS.Region != ""); err != nil {
 		return err
 	}
 	if c.State.Kind != "kubernetes" && (c.State.Namespace != "" || c.State.Instance != "") {
@@ -587,6 +693,28 @@ func (c *Config) validate() error {
 	}
 	if slices.Contains(c.Keys.Kinds(), "azurekeyvault") && c.Azure.Identity == "" {
 		return errors.New("keys: azurekeyvault needs azure.identity: managed | workload | default")
+	}
+	if c.AWS != (AWS{}) {
+		if err := c.AWS.validate("aws"); err != nil {
+			return err
+		}
+	}
+	if slices.Contains(c.Keys.Kinds(), "awskms") && c.AWS.Region == "" {
+		return errors.New("keys: awskms needs aws.region")
+	}
+	// a key in another region than the one the service calls would fail only at the first call
+	for _, k := range append([]KEK{c.Keys.Current()}, c.Keys.Previous...) {
+		if k.Kind == "awskms" && (kmsRegion(k.Key) != c.AWS.Region || kmsRegion(k.MacKey) != c.AWS.Region) {
+			return fmt.Errorf("keys: the awskms keys are in aws.region (%s): their ARNs name another", c.AWS.Region)
+		}
+	}
+	if a := c.Material.AWS; len(a.Allow) > 0 || a.CacheTTL != 0 {
+		if c.AWS.Region == "" {
+			return errors.New("material.aws reads with the service's AWS identity: aws.region is required")
+		}
+		if err := a.validate("material.aws"); err != nil {
+			return err
+		}
 	}
 	if c.Azure != (Azure{}) {
 		if err := c.Azure.validate("azure", false); err != nil {
@@ -625,6 +753,8 @@ func (c *Config) validate() error {
 			return errors.New("state.password_ref reads Vault: vault: is required")
 		case s.Kind == "azkv" && s.Azure.Identity == "":
 			return errors.New("state.password_ref reads Key Vault with the service's Azure identity: azure.identity is required")
+		case s.Kind == "aws" && s.AWS.Region == "":
+			return errors.New("state.password_ref reads Secrets Manager with the service's AWS identity: aws.region is required")
 		}
 	}
 	if c.State.PasswordRef != "" && c.admits(c.State.PasswordRef) {
@@ -672,8 +802,11 @@ func (c *Config) validate() error {
 			}
 		}
 		if ex := is.Exchange; ex != nil {
-			if err := ex.validate(c.Azure.Identity, c.Vault.used()); err != nil {
+			if err := ex.validate(c.Azure.Identity, c.Vault.used(), c.AWS.Region != ""); err != nil {
 				return fmt.Errorf("issuers[%d]: %w", i, err)
+			}
+			if ex.ClientAuth == "awskms" && kmsRegion(ex.Key) != c.AWS.Region {
+				return fmt.Errorf("issuers[%d]: exchange.key is in aws.region (%s): its ARN names another", i, c.AWS.Region)
 			}
 		}
 		if len(is.Algorithms) == 0 {
@@ -711,7 +844,7 @@ func (c *Config) validate() error {
 }
 
 // validateServer checks a database server's settings (postgres, sqlserver).
-func (s *State) validateServer(identity string) error {
+func (s *State) validateServer(identity string, aws bool) error {
 	if s.Kind != "postgres" && s.Kind != "sqlserver" {
 		if s.DSN != "" || s.Auth != "" || s.PasswordEnv != "" || s.PasswordFile != "" || s.PasswordRef != "" || s.MaxOpenConns != 0 {
 			return fmt.Errorf("state: dsn, auth, password_env, password_file, password_ref, max_open_conns are for a database server, not %s", s.Kind)
@@ -734,6 +867,16 @@ func (s *State) validateServer(identity string) error {
 		if s.PasswordEnv != "" || s.PasswordFile != "" || s.PasswordRef != "" {
 			return errors.New("state.auth: entra takes no password")
 		}
+	case "aws":
+		if s.Kind != "postgres" {
+			return errors.New("state.auth: aws is RDS IAM authentication, for postgres (SQL Server on RDS has none: a password_ref)")
+		}
+		if !aws {
+			return errors.New("state.auth: aws logs in with the service's AWS identity: aws.region is required")
+		}
+		if s.PasswordEnv != "" || s.PasswordFile != "" || s.PasswordRef != "" {
+			return errors.New("state.auth: aws takes no password")
+		}
 	case "password":
 		n := 0
 		for _, v := range []string{s.PasswordEnv, s.PasswordFile, s.PasswordRef} {
@@ -747,7 +890,7 @@ func (s *State) validateServer(identity string) error {
 		if s.PasswordRef != "" {
 			scheme, _, ok := strings.Cut(strings.TrimPrefix(s.PasswordRef, "ref+"), "://")
 			if !ok || !strings.HasPrefix(s.PasswordRef, "ref+") || !material.SchemeName(scheme) {
-				return errors.New("state.password_ref is a reference: ref+k8s://, ref+azkv://, ref+vault:// or a named source's")
+				return errors.New("state.password_ref is a reference: ref+k8s://, ref+azkv://, ref+vault://, ref+aws:// or a named source's")
 			}
 		}
 		if s.PasswordEnv != "" && IsSettingVariable(s.PasswordEnv) {
@@ -755,7 +898,7 @@ func (s *State) validateServer(identity string) error {
 				"variable of its own", s.PasswordEnv)
 		}
 	default:
-		return errors.New("state.auth is entra or password")
+		return errors.New("state.auth is entra, aws or password")
 	}
 	return nil
 }
@@ -819,7 +962,16 @@ func (k *KEK) validate(where string) error {
 	if !slices.Contains(KeyKinds, k.Kind) {
 		return fmt.Errorf("%s.kind is none of %s", where, strings.Join(KeyKinds, " | "))
 	}
+	if k.MacKey != "" && k.Kind != "awskms" {
+		return fmt.Errorf("%s.mac_key is an awskms KEK's", where)
+	}
 	switch k.Kind {
+	case "awskms":
+		if !kmsKeyARN.MatchString(k.Key) || !kmsKeyARN.MatchString(k.MacKey) || k.Key == k.MacKey || k.KeyEnv != "" ||
+			k.KeyFile != "" || k.Mount != "" {
+			return fmt.Errorf("%s: an awskms KEK is key (a symmetric encryption key) and mac_key (an HMAC key): two KMS "+
+				"keys' ARNs, arn:aws:kms:<region>:<account>:key/<id>", where)
+		}
 	case "local":
 		if (k.KeyEnv == "") == (k.KeyFile == "") || k.Key != "" || k.Mount != "" {
 			return fmt.Errorf("%s: a local KEK comes from key_env or key_file - one of them", where)
@@ -927,10 +1079,19 @@ func (c *Config) validateSources() error {
 		where = "material.sources[" + n.Name + "]"
 		s, _ := c.Source(n.Name)
 		for i, a := range n.Allow {
+			if n.Kind == "aws" {
+				if a.Mount != "" || a.Vault != "" {
+					return fmt.Errorf("%s.allow[%d]: an aws source's entries are prefixes only", where, i)
+				}
+				continue
+			}
 			if (n.Kind == "vault") != (a.Mount != "") || (n.Kind == "azkv") != (a.Vault != "") {
 				return fmt.Errorf("%s.allow[%d]: a %s source's entries name a %s", where, i, n.Kind,
 					map[string]string{"vault": "mount", "azkv": "vault"}[n.Kind])
 			}
+		}
+		if n.AWS != nil && n.Kind != "aws" {
+			return fmt.Errorf("%s: aws is an aws source's", where)
 		}
 		switch n.Kind {
 		case "vault":
@@ -965,6 +1126,20 @@ func (c *Config) validateSources() error {
 				return fmt.Errorf("%s reads with the service's Azure identity: azure.identity (or its own azure:) is required", where)
 			}
 			if err := s.AzKV.validate(where); err != nil {
+				return err
+			}
+		case "aws":
+			if n.Vault != nil || n.Azure != nil || n.DNSSuffix != "" {
+				return fmt.Errorf("%s: vault, azure and dns_suffix are other kinds'", where)
+			}
+			if n.AWS != nil {
+				if err := n.AWS.validate(where + ".aws"); err != nil {
+					return err
+				}
+			} else if c.AWS.Region == "" {
+				return fmt.Errorf("%s reads with the service's AWS identity: aws.region (or its own aws:) is required", where)
+			}
+			if err := s.AWSAllow.validate(where); err != nil {
 				return err
 			}
 		}
@@ -1021,6 +1196,13 @@ func (s Source) admits(rest string) bool {
 				return true
 			}
 		}
+	case "aws":
+		name, _, _ := strings.Cut(rest, "?")
+		name, _, _ = strings.Cut(name, "#")
+		prefixes, all := s.AWSAllow.Prefixes()
+		if all || slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(name, p) }) {
+			return true
+		}
 	case "azkv":
 		parts := strings.Split(rest, "/")
 		for _, a := range s.AzKV.Allow {
@@ -1036,7 +1218,7 @@ func (s Source) admits(rest string) bool {
 }
 
 // validate checks an exchange client's login: one way, and what that way needs - nothing of another.
-func (ex *ExchangeClient) validate(identity string, vaultUsed bool) error {
+func (ex *ExchangeClient) validate(identity string, vaultUsed, awsUsed bool) error {
 	if ex.ClientAuth == "" {
 		ex.ClientAuth = "secret"
 	}
@@ -1056,6 +1238,7 @@ func (ex *ExchangeClient) validate(identity string, vaultUsed bool) error {
 		"keyvault": {"key", "kid", "x5t", "assertion_audience"},
 		"key_file": {"key_file", "kid", "x5t", "assertion_audience"},
 		"vault":    {"key", "kid", "x5t", "assertion_audience"},
+		"awskms":   {"key", "kid", "x5t", "assertion_audience"},
 	}[ex.ClientAuth]
 	for name, on := range set {
 		if on && !slices.Contains(allowed, name) {
@@ -1096,6 +1279,13 @@ func (ex *ExchangeClient) validate(identity string, vaultUsed bool) error {
 		}
 		if !vaultUsed {
 			return errors.New("exchange.client_auth: vault signs in Vault: vault: is required")
+		}
+	case "awskms":
+		if !kmsKeyARN.MatchString(ex.Key) || (ex.KID == "" && ex.X5T == "") {
+			return errors.New("exchange.client_auth: awskms signs with key (an asymmetric KMS key's ARN), named by kid or x5t")
+		}
+		if !awsUsed {
+			return errors.New("exchange.client_auth: awskms signs with the service's AWS identity: aws.region is required")
 		}
 	case "key_file":
 		if ex.KeyFile == "" {

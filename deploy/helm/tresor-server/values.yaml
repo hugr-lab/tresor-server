@@ -56,6 +56,8 @@ extraVolumeMounts: []
 serviceAccount:
   create: true
   name: ""
+  # IRSA on EKS (spec 012): {eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/tresor}; EKS Pod Identity
+  # needs nothing here.
   annotations: {}
 
 # A projected ServiceAccount token for an issuer's exchange (client_auth: file, spec 006): mounted at
