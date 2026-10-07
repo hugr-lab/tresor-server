@@ -17,6 +17,7 @@ type fake struct {
 	versions map[string]string // name -> data; "<secret>/versions/latest" resolves to the highest
 	reads    int
 	badCRC   bool
+	noCRC    bool
 }
 
 func (f *fake) AccessSecretVersion(_ context.Context, r *secretmanagerpb.AccessSecretVersionRequest, _ ...gax.CallOption) (*secretmanagerpb.AccessSecretVersionResponse, error) {
@@ -33,7 +34,11 @@ func (f *fake) AccessSecretVersion(_ context.Context, r *secretmanagerpb.AccessS
 	if f.badCRC {
 		c++
 	}
-	return &secretmanagerpb.AccessSecretVersionResponse{Name: name, Payload: &secretmanagerpb.SecretPayload{Data: []byte(data), DataCrc32C: &c}}, nil
+	p := &secretmanagerpb.SecretPayload{Data: []byte(data), DataCrc32C: &c}
+	if f.noCRC {
+		p.DataCrc32C = nil
+	}
+	return &secretmanagerpb.AccessSecretVersionResponse{Name: name, Payload: p}, nil
 }
 
 func TestParseResolve(t *testing.T) {
@@ -42,7 +47,7 @@ func TestParseResolve(t *testing.T) {
 		"projects/corp-data/secrets/duckdb-lake/versions/2": "current",
 		"projects/corp-data/secrets/duckdb-bin/versions/2":  "\xff\xfe",
 	}}
-	s := New(f, []Allow{{Project: "corp-data", Prefixes: []string{"duckdb-"}}, {Project: "123456789012"}}, time.Minute)
+	s := New(f, []Allow{{Project: "corp-data", Prefixes: []string{"duckdb-"}}, {Project: "ml-team"}}, time.Minute)
 	ctx := context.Background()
 	for text, want := range map[string]string{"corp-data/duckdb-lake": "current", "corp-data/duckdb-lake/1": "old"} {
 		ref, err := s.Parse(text)
@@ -59,8 +64,11 @@ func TestParseResolve(t *testing.T) {
 			t.Errorf("%q accepted: %s", text, ref)
 		}
 	}
-	if _, err := s.Parse("123456789012/anything"); err != nil {
-		t.Errorf("a project by number, every secret: %v", err)
+	if _, err := s.Parse("ml-team/anything"); err != nil {
+		t.Errorf("a project with no prefixes, every secret: %v", err)
+	}
+	if _, err := s.Parse("123456789012/anything"); err == nil {
+		t.Error("a project by its number: accepted (one project, two names)")
 	}
 	for _, text := range []string{"corp-data/duckdb-bin", "corp-data/duckdb-gone"} {
 		ref, _ := s.Parse(text)
@@ -68,8 +76,13 @@ func TestParseResolve(t *testing.T) {
 			t.Errorf("%s: %v", text, err)
 		}
 	}
-	f.badCRC = true
+	f.noCRC = true
 	ref, _ := s.Parse("corp-data/duckdb-lake/1")
+	s.cache = map[string]cached{}
+	if _, _, err := s.Resolve(ctx, ref); err == nil {
+		t.Error("no CRC accepted")
+	}
+	f.noCRC, f.badCRC = false, true
 	s.cache = map[string]cached{}
 	if _, _, err := s.Resolve(ctx, ref); err == nil {
 		t.Error("a bad CRC accepted")

@@ -674,6 +674,8 @@ func TestGCPConfig(t *testing.T) {
 		"Cloud SQL IAM on SQL Server": strings.Replace(pg, "kind: postgres", "kind: sqlserver", 1) + "keys: {kind: local, key_file: /k}\n",
 		"a password inside the allowlist": strings.Replace(pg, "auth: gcp", "auth: password, password_ref: 'ref+gcp://corp-data/duckdb-pg'", 1) +
 			"keys: {kind: local, key_file: /k}\nmaterial: {gcp: {allow: [{project: corp-data}]}}\n",
+		"a project by its number": strings.Replace(ok, "project: corp-data", "project: '123456789012'", 1),
+		"an empty prefix":         strings.Replace(ok, "prefixes: [duckdb-]", "prefixes: ['']", 1),
 	} {
 		if _, err := Parse([]byte(doc)); err == nil {
 			t.Errorf("%s: accepted", name)

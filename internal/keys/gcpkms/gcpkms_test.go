@@ -29,6 +29,7 @@ const (
 // fake is Cloud KMS as far as the KEK uses it: a ciphertext names its version and AAD
 type fake struct {
 	primary  int
+	flaky    int // InvalidArgument this many times before answering (a request's CRC failed on the way)
 	down     bool
 	badCRC   bool
 	getCalls int
@@ -58,6 +59,10 @@ func (f *fake) Encrypt(_ context.Context, r *kmspb.EncryptRequest, _ ...gax.Call
 }
 
 func (f *fake) Decrypt(_ context.Context, r *kmspb.DecryptRequest, _ ...gax.CallOption) (*kmspb.DecryptResponse, error) {
+	if f.flaky > 0 {
+		f.flaky--
+		return nil, status.Error(codes.InvalidArgument, "the request's CRC32C did not match")
+	}
 	parts := bytes.SplitN(r.Ciphertext, []byte("|"), 3)
 	if r.Name != key || len(parts) != 3 || !strings.HasPrefix(string(parts[0]), key+"/") || string(parts[1]) != string(r.AdditionalAuthenticatedData) {
 		return nil, status.Error(codes.InvalidArgument, "Decryption failed")
@@ -109,6 +114,16 @@ func TestWrapUnwrapRoot(t *testing.T) {
 	if r3, _ := w.Root(ctx, id2); bytes.Equal(r1, r3) {
 		t.Fatal("two versions, one root")
 	}
+	// a refusal once (a CRC on the way) is retried; twice is the ciphertext's
+	f.flaky = 1
+	if back, err := w.Unwrap(ctx, wrapped, id); err != nil || !bytes.Equal(back, dek) {
+		t.Fatalf("a refusal once: %v", err)
+	}
+	f.flaky = 2
+	if _, err := w.Unwrap(ctx, wrapped, id); !errors.Is(err, keys.ErrSealed) {
+		t.Fatalf("a refusal twice: %v", err)
+	}
+	f.flaky = 0
 	// ids of another pair: not owned, sealed
 	for _, other := range []string{
 		"gcpkms:" + key + "2/cryptoKeyVersions/1;mac:" + mac,

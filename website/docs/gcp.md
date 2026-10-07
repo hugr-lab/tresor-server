@@ -24,7 +24,9 @@ Application Default Credentials, as the deployment has them:
 - **A VM's service account** (Compute Engine, Cloud Run).
 - **Workload identity federation** (an `external_account` credentials file: no key in it).
 
-A service account key or a person's gcloud login is a static secret: refused at start.
+A service account key or a person's gcloud login is a static secret: refused at start; so is federation through
+a program, or from static AWS keys. The clients call `googleapis.com` only: another universe, another metadata
+server (`GCE_METADATA_HOST`) or a client certificate's signer program in the environment stops the start.
 `gcp.static_credentials: allow` admits one for development and tests, with nothing else changed.
 
 ## The KEK: a key and a MAC version
@@ -61,7 +63,8 @@ CREATE PERSISTENT SECRET lake IN corp (
 );
 ```
 
-- `<project>` is the project's id or number; `<secret>` the secret's name; `<version>` a number. With none, the
+- `<project>` is the project's id (not its number: one project under two names would slip past an allowlist);
+  `<secret>` the secret's name; `<version>` a number. With none, the
   latest version is read at each fetch: a new version reaches DuckDB at its next fetch.
 - The payload must be UTF-8 text, and is checked by its CRC32C.
 
@@ -88,8 +91,9 @@ state:
 ```
 
 - The service account's OAuth token (scope `sqlservice.login`) is the password, renewed by its token source.
-- The user is the service account's email without `.gserviceaccount.com`, added to the instance as an IAM
-  user; the account needs `roles/cloudsql.instanceUser` (and `roles/cloudsql.client` to connect).
+- The instance has the flag `cloudsql.iam_authentication=on`; the user is the service account's email without
+  `.gserviceaccount.com`, added to the instance as an IAM user; the account needs `roles/cloudsql.instanceUser`.
+  (`roles/cloudsql.client` is for the connector and the Auth Proxy, not used here.)
 - TLS with `verify-full` needs a server certificate naming the host: give the instance a DNS name (a
   Google-managed CA, `GOOGLE_MANAGED_CAS_CA`) and connect to it. The Cloud SQL connector is not used.
 

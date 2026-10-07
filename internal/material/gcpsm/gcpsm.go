@@ -72,13 +72,14 @@ func (s *Source) allowlist() string {
 }
 
 var (
-	// a project's id, or its number
-	projectID  = regexp.MustCompile(`^([a-z][a-z0-9-]{4,28}[a-z0-9]|[0-9]{1,20})$`)
+	// a project's id - never its number: one project under two names would let a reference reach what an
+	// allowlist naming the other leaves out (spec 008's password_ref check)
+	projectID  = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 	secretID   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,255}$`)
 	versionNum = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
 )
 
-// ProjectID reports whether s is a project's id or number (configuration).
+// ProjectID reports whether s is a project's id (configuration).
 func ProjectID(s string) bool { return projectID.MatchString(s) }
 
 // Parse checks <project>/<secret>[/<version>] and the allowlist; a version is a number (the latest when none).
@@ -93,7 +94,7 @@ func (s *Source) Parse(text string) (material.Ref, error) {
 	}
 	switch {
 	case !projectID.MatchString(ref.Vault):
-		return material.Ref{}, errors.New("a GCP project is its id (6 to 30 lower-case letters, digits or dashes) or its number")
+		return material.Ref{}, errors.New("a GCP project is its id (6 to 30 lower-case letters, digits or dashes), not its number")
 	case !secretID.MatchString(ref.Name):
 		return material.Ref{}, errors.New("a Secret Manager secret's name is 1 to 255 letters, digits, _ or -")
 	case len(parts) == 3 && !versionNum.MatchString(ref.Version):
@@ -144,7 +145,7 @@ func (s *Source) Resolve(ctx context.Context, ref material.Ref) (string, string,
 		return "", "", describe(err)
 	}
 	data := out.GetPayload().GetData()
-	if c := out.GetPayload().GetDataCrc32C(); c == 0 || c != int64(crc32.Checksum(data, castagnoli)) {
+	if c := out.GetPayload().DataCrc32C; c == nil || *c != int64(crc32.Checksum(data, castagnoli)) {
 		return "", "", errors.New("the Secret Manager payload failed its CRC32C check")
 	}
 	if !utf8.Valid(data) {

@@ -113,11 +113,16 @@ func (w *Wrapper) Current(ctx context.Context) (string, error) {
 	if ck.GetPrimary() == nil || !strings.HasPrefix(ck.GetPrimary().GetName(), w.key+"/cryptoKeyVersions/") {
 		return "", errors.New("the KMS key has no primary version (an ENCRYPT_DECRYPT key has one)")
 	}
-	current = w.id(ck.GetPrimary().GetName())
+	read := w.id(ck.GetPrimary().GetName())
 	w.mu.Lock()
-	w.current, w.readAt = current, time.Now()
-	w.mu.Unlock()
-	return current, nil
+	defer w.mu.Unlock()
+	if w.readAt.After(readAt) {
+		// a Wrap meanwhile named the version KMS wraps with: newer than this read (a new primary propagates
+		// to GetCryptoKey and Encrypt at different times)
+		return w.current, nil
+	}
+	w.current, w.readAt = read, time.Now()
+	return read, nil
 }
 
 func (w *Wrapper) Wrap(ctx context.Context, dek []byte) ([]byte, string, error) {
@@ -145,8 +150,14 @@ func (w *Wrapper) Unwrap(ctx context.Context, wrapped []byte, kekID string) ([]b
 		return nil, fmt.Errorf("%w: data key wrapped under another KEK (%s)", keys.ErrSealed, kekID)
 	}
 	// the key, not a version: KMS reads the version from the ciphertext, and refuses one of another key
-	out, err := w.ops.Decrypt(ctx, &kmspb.DecryptRequest{Name: w.key, Ciphertext: wrapped, AdditionalAuthenticatedData: aad,
-		CiphertextCrc32C: crc(wrapped), AdditionalAuthenticatedDataCrc32C: crc(aad)})
+	req := &kmspb.DecryptRequest{Name: w.key, Ciphertext: wrapped, AdditionalAuthenticatedData: aad,
+		CiphertextCrc32C: crc(wrapped), AdditionalAuthenticatedDataCrc32C: crc(aad)}
+	out, err := w.ops.Decrypt(ctx, req)
+	if status.Code(err) == codes.InvalidArgument {
+		// also a request's CRC32C that failed on the way, which KMS says to retry: a second refusal is the
+		// ciphertext's
+		out, err = w.ops.Decrypt(ctx, req)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("unwrapping under the KMS key: %w", describe(err, true))
 	}

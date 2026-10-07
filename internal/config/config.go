@@ -461,7 +461,12 @@ func (g GCPAllow) validate(where string) error {
 	}
 	for i, a := range g.Allow {
 		if !gcpProject.MatchString(a.Project) {
-			return fmt.Errorf("%s.allow[%d].project: a GCP project's id or number", where, i)
+			return fmt.Errorf("%s.allow[%d].project: a GCP project's id (not its number)", where, i)
+		}
+		for _, p := range a.Prefixes {
+			if !gcpSecretPrefix.MatchString(p) {
+				return fmt.Errorf("%s.allow[%d].prefixes: a secret name's start (letters, digits, _ or -)", where, i)
+			}
 		}
 	}
 	if g.CacheTTL < 0 || g.CacheTTL > 5*time.Minute {
@@ -539,9 +544,10 @@ type GCP struct {
 }
 
 var (
-	gcpCryptoKey  = regexp.MustCompile(`^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]{1,63}/cryptoKeys/[A-Za-z0-9_-]{1,63}$`)
-	gcpKeyVersion = regexp.MustCompile(`^(projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]{1,63}/cryptoKeys/[A-Za-z0-9_-]{1,63})/cryptoKeyVersions/[1-9][0-9]*$`)
-	gcpProject    = regexp.MustCompile(`^([a-z][a-z0-9-]{4,28}[a-z0-9]|[0-9]{1,20})$`)
+	gcpCryptoKey    = regexp.MustCompile(`^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]{1,63}/cryptoKeys/[A-Za-z0-9_-]{1,63}$`)
+	gcpKeyVersion   = regexp.MustCompile(`^(projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]{1,63}/cryptoKeys/[A-Za-z0-9_-]{1,63})/cryptoKeyVersions/[1-9][0-9]*$`)
+	gcpSecretPrefix = regexp.MustCompile(`^[A-Za-z0-9_-]{1,255}$`)
+	gcpProject      = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`) // an id, never a number (see gcpsm)
 )
 
 // kmsRegion is the region a KMS key's ARN names.

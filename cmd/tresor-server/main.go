@@ -806,7 +806,7 @@ func awsOf(a config.AWS) (aws.Config, error) {
 }
 
 // gcpClients are the process's Cloud KMS and Secret Manager clients (spec 012): one each, with the service's GCP
-// identity, shared by the KEK, signing and references.
+// identity (Application Default Credentials, found for each), shared by the KEK, signing and references.
 var gcpClients struct {
 	sync.Mutex
 	kms *gcpkmsapi.KeyManagementClient
@@ -818,7 +818,8 @@ func gcpOptions(cfg *config.Config) ([]option.ClientOption, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []option.ClientOption{option.WithCredentials(creds)}, nil
+	// pinned: the universe never comes from the environment
+	return []option.ClientOption{option.WithCredentials(creds), option.WithUniverseDomain(gcpid.Universe)}, nil
 }
 
 func gcpKMS(cfg *config.Config) (*gcpkmsapi.KeyManagementClient, error) {
