@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	rdsauth "github.com/aws/aws-sdk-go-v2/feature/rds/auth"
+	"golang.org/x/oauth2"
 
 	"github.com/hugr-lab/tresor-server/internal/config"
 )
@@ -100,4 +101,21 @@ func (l AWSLogin) Password(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("the database login: the service's AWS identity did not sign an RDS token: %w", err)
 	}
 	return token, nil
+}
+
+// ScopeCloudSQL is the scope of a Cloud SQL IAM database login's token.
+const ScopeCloudSQL = "https://www.googleapis.com/auth/sqlservice.login"
+
+// GCPLogin is the service account's OAuth token as the password (Cloud SQL for PostgreSQL, IAM database
+// authentication; spec 012): the token source renews it, nothing is stored.
+type GCPLogin struct {
+	Tokens oauth2.TokenSource
+}
+
+func (l GCPLogin) Password(context.Context) (string, error) {
+	t, err := l.Tokens.Token()
+	if err != nil {
+		return "", errors.New("the database login: the service's GCP identity did not get a token")
+	}
+	return t.AccessToken, nil
 }

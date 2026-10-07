@@ -17,8 +17,9 @@ CREATE PERSISTENT SECRET lake IN corp (
 ```
 
 The service reads the value at each fetch, with its own identity. DuckDB gets the value; the store keeps only
-the reference. Four kinds of source: Azure Key Vault (`ref+azkv://`), Kubernetes Secrets (`ref+k8s://`),
-OpenBao or HashiCorp Vault KV v2 (`ref+vault://`), and AWS Secrets Manager (`ref+aws://`, see [AWS](aws.md#references-secrets-manager)). [Named sources](#named-sources) add more of a kind under
+the reference. Five kinds of source: Azure Key Vault (`ref+azkv://`), Kubernetes Secrets (`ref+k8s://`),
+OpenBao or HashiCorp Vault KV v2 (`ref+vault://`), AWS Secrets Manager (`ref+aws://`, see [AWS](aws.md#references-secrets-manager))
+and GCP Secret Manager (`ref+gcp://`, see [GCP](gcp.md#references-secret-manager)). [Named sources](#named-sources) add more of a kind under
 names of their own (`ref+vault-us://`).
 
 ## Key Vault: the syntax

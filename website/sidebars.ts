@@ -13,6 +13,7 @@ const sidebars: SidebarsConfig = {
     'console',
     'vault',
     'aws',
+    'gcp',
     'azure-container-apps',
     'kubernetes',
     'operations',

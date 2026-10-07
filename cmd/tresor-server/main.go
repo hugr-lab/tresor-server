@@ -22,11 +22,14 @@ import (
 	"syscall"
 	"time"
 
+	gcpkmsapi "cloud.google.com/go/kms/apiv1"
+	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/jackc/pgx/v5/pgconn"
+	"google.golang.org/api/option"
 
 	"github.com/hugr-lab/tresor-server/internal/api"
 	"github.com/hugr-lab/tresor-server/internal/audit"
@@ -35,16 +38,19 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/azure"
 	"github.com/hugr-lab/tresor-server/internal/clientauth"
 	"github.com/hugr-lab/tresor-server/internal/config"
+	"github.com/hugr-lab/tresor-server/internal/gcpid"
 	"github.com/hugr-lab/tresor-server/internal/health"
 	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/keys/awskms"
 	"github.com/hugr-lab/tresor-server/internal/keys/azurekeyvault"
+	"github.com/hugr-lab/tresor-server/internal/keys/gcpkms"
 	"github.com/hugr-lab/tresor-server/internal/keys/local"
 	"github.com/hugr-lab/tresor-server/internal/keys/vaultkek"
 	"github.com/hugr-lab/tresor-server/internal/kube"
 	"github.com/hugr-lab/tresor-server/internal/material"
 	"github.com/hugr-lab/tresor-server/internal/material/awssm"
 	azkvsource "github.com/hugr-lab/tresor-server/internal/material/azurekeyvault"
+	"github.com/hugr-lab/tresor-server/internal/material/gcpsm"
 	k8ssource "github.com/hugr-lab/tresor-server/internal/material/k8s"
 	"github.com/hugr-lab/tresor-server/internal/material/vaultkv"
 	"github.com/hugr-lab/tresor-server/internal/mint"
@@ -235,6 +241,13 @@ func purgeGrants(ctx context.Context, st state.Store, log *slog.Logger) {
 
 // databaseLogin is how the service logs in to its database server: an Entra token, or a password.
 func databaseLogin(cfg *config.Config, scope string) (sqlstore.Login, error) {
+	if cfg.State.Auth == "gcp" {
+		creds, err := gcpid.Credentials(context.Background(), cfg.GCP.StaticCredentials == "allow", sqlstore.ScopeCloudSQL)
+		if err != nil {
+			return nil, err
+		}
+		return sqlstore.GCPLogin{Tokens: creds.TokenSource}, nil
+	}
 	if cfg.State.Auth == "aws" {
 		pc, err := pgconn.ParseConfig(cfg.State.DSN)
 		if err != nil {
@@ -325,6 +338,19 @@ func passwordResolver(cfg *config.Config, ref string) (*material.Resolver, error
 		}
 		// that one reference only: the allowlist is its name, and the resolver resolves nothing else
 		return checkedPassword(material.New(awssm.New(secretsmanager.NewFromConfig(ac), []string{name}, false, 0).Named(s.Name)), ref)
+	case "gcp":
+		parts := strings.Split(rest, "/")
+		if len(parts) < 2 {
+			return nil, fmt.Errorf("state.password_ref: ref+%s://<project>/<secret>[/<version>]", s.Name)
+		}
+		if _, err := checkedPassword(material.New(gcpsm.New(nil, []gcpsm.Allow{{Project: parts[0], Prefixes: []string{parts[1]}}}, 0).Named(s.Name)), ref); err != nil {
+			return nil, err // before reaching for the API
+		}
+		sm, err := gcpSecrets(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return material.New(gcpsm.New(sm, []gcpsm.Allow{{Project: parts[0], Prefixes: []string{parts[1]}}}, 0).Named(s.Name)), nil
 	}
 	return nil, fmt.Errorf("state.password_ref: a %s source", s.Kind)
 }
@@ -333,7 +359,7 @@ func passwordResolver(cfg *config.Config, ref string) (*material.Resolver, error
 func checkedPassword(r *material.Resolver, ref string) (*material.Resolver, error) {
 	if !r.Admits(ref) {
 		return nil, errors.New("state.password_ref does not parse: ref+k8s://<namespace>/<secret>/<key>, " +
-			"ref+azkv://<vault>/<secret>[/<version>], ref+vault://<mount>/<path>#<field> or ref+aws://<secret>[#<field>] (or a named source's)")
+			"ref+azkv://<vault>/<secret>[/<version>], ref+vault://<mount>/<path>#<field>, ref+aws://<secret>[#<field>] or ref+gcp://<project>/<secret>[/<version>] (or a named source's)")
 	}
 	return r, nil
 }
@@ -409,6 +435,16 @@ func materialResolver(cfg *config.Config) (*material.Resolver, error) {
 			}
 			prefixes, all := s.AWSAllow.Prefixes()
 			sources = append(sources, traced.Source(awssm.New(secretsmanager.NewFromConfig(ac), prefixes, all, s.AWSAllow.CacheTTL).Named(s.Name)))
+		case "gcp":
+			sm, err := gcpSecrets(cfg)
+			if err != nil {
+				return nil, fmt.Errorf("material (%s): %w", s.Name, err)
+			}
+			allow := make([]gcpsm.Allow, len(s.GCPAllow.Allow))
+			for i, a := range s.GCPAllow.Allow {
+				allow[i] = gcpsm.Allow{Project: a.Project, Prefixes: a.Prefixes}
+			}
+			sources = append(sources, traced.Source(gcpsm.New(sm, allow, s.GCPAllow.CacheTTL).Named(s.Name)))
 		}
 	}
 	if len(sources) == 0 {
@@ -477,6 +513,12 @@ func kekOf(cfg *config.Config, k config.KEK) (keys.KeyWrapper, error) {
 			return nil, err
 		}
 		return awskms.New(kms.NewFromConfig(ac), k.Key, k.MacKey)
+	case k.Kind == "gcpkms":
+		c, err := gcpKMS(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return gcpkms.New(c, k.Key, k.MacKey)
 	}
 	return nil, fmt.Errorf("keys.kind %s is not built in", k.Kind)
 }
@@ -713,6 +755,16 @@ func exchangeAuth(ctx context.Context, cfg *config.Config) (map[string]mint.Clie
 				return nil, nil, err
 			}
 			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
+		case "gcpkms":
+			c, err := gcpKMS(cfg)
+			if err != nil {
+				return nil, nil, err
+			}
+			signer, err := gcpkms.NewSigner(ctx, c, ex.Key)
+			if err != nil {
+				return nil, nil, err
+			}
+			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
 		}
 		out[config.IssuerKey(is.Issuer)] = mint.AssertionAuth{ID: clientID, Assertion: source}
 		checks = append(checks, health.Check{
@@ -751,6 +803,53 @@ func awsOf(a config.AWS) (aws.Config, error) {
 	}
 	awsConfigs.made[a] = c
 	return c, nil
+}
+
+// gcpClients are the process's Cloud KMS and Secret Manager clients (spec 012): one each, with the service's GCP
+// identity (Application Default Credentials, found for each), shared by the KEK, signing and references.
+var gcpClients struct {
+	sync.Mutex
+	kms *gcpkmsapi.KeyManagementClient
+	sm  *secretmanager.Client
+}
+
+func gcpOptions(cfg *config.Config) ([]option.ClientOption, error) {
+	creds, err := gcpid.Credentials(context.Background(), cfg.GCP.StaticCredentials == "allow")
+	if err != nil {
+		return nil, err
+	}
+	// pinned: the universe never comes from the environment
+	return []option.ClientOption{option.WithCredentials(creds), option.WithUniverseDomain(gcpid.Universe)}, nil
+}
+
+func gcpKMS(cfg *config.Config) (*gcpkmsapi.KeyManagementClient, error) {
+	gcpClients.Lock()
+	defer gcpClients.Unlock()
+	if gcpClients.kms == nil {
+		opts, err := gcpOptions(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if gcpClients.kms, err = gcpkmsapi.NewKeyManagementClient(context.Background(), opts...); err != nil {
+			return nil, fmt.Errorf("the Cloud KMS client: %w", err)
+		}
+	}
+	return gcpClients.kms, nil
+}
+
+func gcpSecrets(cfg *config.Config) (*secretmanager.Client, error) {
+	gcpClients.Lock()
+	defer gcpClients.Unlock()
+	if gcpClients.sm == nil {
+		opts, err := gcpOptions(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if gcpClients.sm, err = secretmanager.NewClient(context.Background(), opts...); err != nil {
+			return nil, fmt.Errorf("the Secret Manager client: %w", err)
+		}
+	}
+	return gcpClients.sm, nil
 }
 
 // vaultOnce is the process's one Vault client (spec 007): one login, shared by the KEK, references and signing.
