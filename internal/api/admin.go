@@ -138,6 +138,8 @@ func connection(src config.Source) string {
 		return c
 	case "k8s":
 		return "this cluster"
+	case "gcp":
+		return "gcp · the service's identity"
 	case "aws":
 		c := "aws " + src.AWS.Region
 		if src.AWS.RoleARN != "" {
@@ -167,6 +169,9 @@ func allowlist(src config.Source) []string {
 	for _, a := range src.K8s.Allow {
 		place(a.Namespace, a.Prefixes)
 	}
+	for _, a := range src.GCPAllow.Allow {
+		place(a.Project, a.Prefixes)
+	}
 	if src.Kind == "aws" {
 		prefixes, all := src.AWSAllow.Prefixes()
 		if all {
@@ -187,6 +192,8 @@ func cacheTTL(src config.Source) time.Duration {
 		return src.AzKV.CacheTTL
 	case "aws":
 		return src.AWSAllow.CacheTTL
+	case "gcp":
+		return src.GCPAllow.CacheTTL
 	}
 	return 0
 }

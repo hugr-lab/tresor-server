@@ -20,8 +20,8 @@ const Prefix = "ref+"
 
 // Ref is a parsed reference.
 type Ref struct {
-	Scheme string // the source's name, as written: "azkv", "k8s", "vault", "aws", or a named source's (spec 008)
-	Kind   string // the source's kind: "azkv", "k8s", "vault", "aws" ("": Scheme's)
+	Scheme string // the source's name, as written: "azkv", "k8s", "vault", "aws", "gcp", or a named source's (spec 008)
+	Kind   string // the source's kind: "azkv", "k8s", "vault", "aws", "gcp" ("": Scheme's)
 	// Where, as the source parsed it: for Key Vault the vault, the secret, a version or ""; for Kubernetes the
 	// namespace (Vault), the Secret (Name) and its key (Key).
 	Vault, Name, Key, Version string

@@ -28,8 +28,9 @@ The organizations hugr serves keep their credentials in Secrets Manager or Secre
   `aws.static_credentials: allow` says so - for development and tests (an emulator), logged as a warning at start.
 - `aws.endpoint_url`: another endpoint for every AWS API the service calls (an emulator, a VPC endpoint), from
   configuration only: an `AWS_ENDPOINT_URL*` variable is refused at start.
-- **GCP**: Application Default Credentials - GKE Workload Identity, a VM's service account. `gcp: {project: …}`
-  for defaults; no key file setting (a `GOOGLE_APPLICATION_CREDENTIALS` key file is refused at start).
+- **GCP**: Application Default Credentials - GKE Workload Identity, a VM's service account, workload identity
+  federation. A service account key or a person's login (from `GOOGLE_APPLICATION_CREDENTIALS` or gcloud's file)
+  is refused at start, unless `gcp.static_credentials: allow` (tests).
 - The chart: `serviceAccount.annotations` for IRSA (`eks.amazonaws.com/role-arn`) and GKE WI
   (`iam.gke.io/gcp-service-account`), as `workloadIdentity` does for AKS.
 
@@ -49,7 +50,7 @@ keys:
 keys:
   kind: gcpkms
   key: projects/p/locations/europe-west3/keyRings/tresor/cryptoKeys/kek       # ENCRYPT_DECRYPT
-  mac_key: projects/p/locations/europe-west3/keyRings/tresor/cryptoKeys/root  # MAC (HMAC_SHA256)
+  mac_key: projects/p/locations/europe-west3/keyRings/tresor/cryptoKeys/root/cryptoKeyVersions/1  # MAC (HMAC_SHA256): a version - a MAC key has no primary
 ```
 
 - **Wrap**: KMS `Encrypt` with an encryption context (AWS) or additional authenticated data (GCP) binding the
@@ -75,7 +76,8 @@ keys:
 - **Allowlists** as the other sources': AWS - `region`, `account` and name prefixes; GCP - projects and
   name prefixes. Nothing outside them is read.
 - **Named instances** (spec 008): `material.sources[]` with `kind: aws` (another region or account, through an
-  assumed role: `role_arn`, the only cross-account login) and `kind: gcp` (another project).
+  assumed role: `role_arn`, the only cross-account login) and `kind: gcp` (another allowlist and cache; the same
+  identity - a project is in the reference).
 - A binary secret (AWS `SecretBinary`) is refused: a reference is a VARCHAR value.
 
 ### The database
@@ -97,7 +99,8 @@ keys:
    against moto in CI (KMS with HMAC keys, Secrets Manager; Apache-2.0, no account needed); the chart's IRSA
    annotation.
 2. **(b) GCP**: `gcp:` identity, `gcpkms` KEK, `ref+gcp`, `state.auth: gcp`, `client_auth: gcpkms`; tests with
-   fakes of the two APIs (no emulator exists for Cloud KMS or Secret Manager).
+   fakes of the two APIs (no emulator exists for Cloud KMS or Secret Manager); CRC32C checked on every call; the
+   chart's GKE annotation.
 3. **(c) Docs and live runs**: an AWS page (EKS, IRSA, RDS) and a GCP page (GKE, WI, Cloud SQL); one live run on
    each cloud, by hand, with the owner's agreement on the resources and their deletion afterwards.
 

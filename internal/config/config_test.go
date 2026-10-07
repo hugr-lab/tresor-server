@@ -642,3 +642,48 @@ func TestAWSConfig(t *testing.T) {
 		t.Errorf("a password outside the allowlist: %v", err)
 	}
 }
+
+// GCP (spec 012): the gcpkms KEK's key and MAC version, Secret Manager's allowlist, named gcp sources, Cloud SQL
+// IAM authentication, signing with a KMS key version
+func TestGCPConfig(t *testing.T) {
+	const ring = "projects/corp-data/locations/europe-west3/keyRings/tresor/cryptoKeys/"
+	base := strings.Replace(good, "state: {kind: memory}", "state: {kind: sqlite, path: /data/tresor.db}", 1)
+	ok := base + "keys: {kind: gcpkms, key: '" + ring + "kek', mac_key: '" + ring + "root/cryptoKeyVersions/1'}\n" +
+		"material:\n  gcp: {allow: [{project: corp-data, prefixes: [duckdb-]}], cache_ttl: 1m}\n" +
+		"  sources: [{name: gcp-ml, kind: gcp, allow: [{project: ml-team, prefixes: [lake-]}]}]\n"
+	cfg, err := Parse([]byte(ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := cfg.Source("gcp-ml"); s.Kind != "gcp" || len(s.GCPAllow.Allow) != 1 || s.GCPAllow.Allow[0].Project != "ml-team" {
+		t.Fatalf("a named gcp source: %+v", s)
+	}
+	pg := strings.Replace(good, "state: {kind: memory}", "state: {kind: postgres, dsn: 'host=db.example user=tresor@corp-data.iam dbname=t sslmode=verify-full', auth: gcp}", 1)
+	if _, err := Parse([]byte(pg + "keys: {kind: local, key_file: /k}\n")); err != nil {
+		t.Fatalf("Cloud SQL IAM: %v", err)
+	}
+	for name, doc := range map[string]string{
+		"a mac key without a version": strings.Replace(ok, "root/cryptoKeyVersions/1", "root", 1),
+		"a version as the key":        strings.Replace(ok, "key: '"+ring+"kek'", "key: '"+ring+"kek/cryptoKeyVersions/1'", 1),
+		"the key's own version":       strings.Replace(ok, "root/cryptoKeyVersions/1", "kek/cryptoKeyVersions/1", 1),
+		"no mac key":                  strings.Replace(ok, ", mac_key: '"+ring+"root/cryptoKeyVersions/1'", "", 1),
+		"a bad project":               strings.Replace(ok, "project: corp-data", "project: Corp", 1),
+		"a gcp source with a mount":   strings.Replace(ok, "allow: [{project: ml-team, prefixes: [lake-]}]", "allow: [{mount: secret}]", 1),
+		"a gcp source with aws":       strings.Replace(ok, "kind: gcp, allow", "kind: gcp, aws: {region: eu-central-1}, allow", 1),
+		"static credentials, maybe":   ok + "gcp: {static_credentials: maybe}\n",
+		"Cloud SQL IAM on SQL Server": strings.Replace(pg, "kind: postgres", "kind: sqlserver", 1) + "keys: {kind: local, key_file: /k}\n",
+		"a password inside the allowlist": strings.Replace(pg, "auth: gcp", "auth: password, password_ref: 'ref+gcp://corp-data/duckdb-pg'", 1) +
+			"keys: {kind: local, key_file: /k}\nmaterial: {gcp: {allow: [{project: corp-data}]}}\n",
+	} {
+		if _, err := Parse([]byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	ex := strings.Replace(good, "audience: duckdb-secrets", "audience: duckdb-secrets\n    exchange: {client_id: c, client_auth: gcpkms, key: '"+ring+"idp/cryptoKeyVersions/2', kid: k}", 1)
+	if _, err := Parse([]byte(ex)); err != nil {
+		t.Fatalf("client_auth: gcpkms: %v", err)
+	}
+	if _, err := Parse([]byte(strings.Replace(ex, "idp/cryptoKeyVersions/2", "idp", 1))); err == nil {
+		t.Error("client_auth: gcpkms with a key, not a version: accepted")
+	}
+}

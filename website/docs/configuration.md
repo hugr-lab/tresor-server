@@ -86,8 +86,8 @@ Where the service keeps secrets, grants and delegation grants. See [State stores
 | `state.kind` | `memory`, `sqlite`, `postgres`, `sqlserver` or `kubernetes`. Required. |
 | `state.path` | SQLite: the database's file. |
 | `state.dsn` | PostgreSQL, SQL Server: the server, the database, the user. Never a password. |
-| `state.auth` | `entra` (the service's Azure token), `aws` (an RDS IAM token, PostgreSQL; [AWS](aws.md#the-database-rds-iam-authentication)) or `password`. |
-| `state.password_env`, `state.password_file`, `state.password_ref` | `auth: password`: where the password is - one of them. `password_ref` is `ref+k8s://…`, `ref+azkv://…`, `ref+vault://…`, `ref+aws://…` or a named source's, outside every `material` allowlist (every source of its kind). |
+| `state.auth` | `entra` (the service's Azure token), `aws` (an RDS IAM token; [AWS](aws.md#the-database-rds-iam-authentication)), `gcp` (Cloud SQL IAM; [GCP](gcp.md#the-database-cloud-sql-iam-database-authentication)) - PostgreSQL - or `password`. |
+| `state.password_env`, `state.password_file`, `state.password_ref` | `auth: password`: where the password is - one of them. `password_ref` is `ref+k8s://…`, `ref+azkv://…`, `ref+vault://…`, `ref+aws://…`, `ref+gcp://…` or a named source's, outside every `material` allowlist (every source of its kind). |
 | `state.max_open_conns` | The connection pool; default 10. |
 | `state.namespace` | Kubernetes: where the resources are. The pod's own by default; required outside a pod. |
 | `state.instance` | Kubernetes: the installation's id, in every MAC. The namespace by default; keep it stable. |
@@ -99,11 +99,11 @@ store but `memory`.
 
 | Setting | |
 | --- | --- |
-| `keys.kind` | `local`, `azurekeyvault`, `vault` or `awskms`. |
+| `keys.kind` | `local`, `azurekeyvault`, `vault`, `awskms` or `gcpkms`. |
 | `keys.key_env`, `keys.key_file` | `local`: a 32-byte key, base64. |
 | `keys.key` | `azurekeyvault`: `https://<vault>/keys/<name>`, with no version; `vault`: the Transit key's name. |
 | `keys.mount` | `vault`: the Transit mount; default `transit`. |
-| `keys.key`, `keys.mac_key` | `awskms`: two KMS keys' ARNs, a symmetric encryption key and an HMAC key. See [AWS](aws.md#the-kek-two-keys). |
+| `keys.key`, `keys.mac_key` | `awskms`: two KMS keys' ARNs, a symmetric encryption key and an HMAC key. See [AWS](aws.md#the-kek-two-keys). `gcpkms`: a crypto key and a MAC key's version; see [GCP](gcp.md#the-kek-a-key-and-a-mac-version). |
 | `keys.data_key_max_age` | A data key older than this is replaced for new values; default `720h`. |
 | `keys.cache_ttl` | How long an unwrapped data key stays in memory; default `5m`. |
 | `keys.previous` | KEKs data keys may still be under, read only, during a [move to another KEK](encryption.md#moving-to-another-kek): a list of `{kind, key_env, key_file, key, mount, mac_key}`. |
@@ -122,7 +122,9 @@ Where references may read. See [References](references.md).
 | `material.vault.cache_ttl` | Keep a value read for this long; default `0`, at most `5m`. |
 | `material.aws.allow` | `[{prefixes: [duckdb/]}]`: Secrets Manager names' prefixes (an entry with none: all). Needs `aws:`. |
 | `material.aws.cache_ttl` | Keep a value read for this long; default `0`, at most `5m`. |
-| `material.sources` | Named sources (spec 008): `[{name, kind: vault \| azkv \| aws, vault: {…}, azure: {identity, client_id, tenant_id}, aws: {region, role_arn}, allow, cache_ttl, dns_suffix}]`. `ref+<name>://`. See [Named sources](references.md#named-sources). |
+| `material.gcp.allow` | `[{project: corp-data, prefixes: [duckdb-]}]`: the projects (id or number), and the secret-name prefixes (none: all). |
+| `material.gcp.cache_ttl` | Keep a value read for this long; default `0`, at most `5m`. |
+| `material.sources` | Named sources (spec 008): `[{name, kind: vault \| azkv \| aws \| gcp, vault: {…}, azure: {identity, client_id, tenant_id}, aws: {region, role_arn}, allow, cache_ttl, dns_suffix}]`. `ref+<name>://`. See [Named sources](references.md#named-sources). |
 
 ### `azure`
 
@@ -147,6 +149,14 @@ The service's own identity on AWS (spec 012): for KMS, Secrets Manager, RDS. See
 | `aws.static_credentials` | `allow`: keys from the environment are admitted (development, tests); refused otherwise. |
 | `aws.role_arn` | A role assumed with the service's identity (in a named source: another account). |
 
+### `gcp`
+
+The service's own identity on GCP (spec 012): Application Default Credentials. See [GCP](gcp.md).
+
+| Setting | |
+| --- | --- |
+| `gcp.static_credentials` | `allow`: a service account key or a person's login is admitted (development, tests); refused otherwise. |
+
 ### `exchange` (per issuer)
 
 The service's client at the issuer, for `token_exchange` secrets. See [Token exchange](token-exchange.md).
@@ -154,10 +164,10 @@ The service's client at the issuer, for `token_exchange` secrets. See [Token exc
 | Setting | |
 | --- | --- |
 | `client_id` | The service's client. With `key_file`, read from ZITADEL's key file when unset. |
-| `client_auth` | `secret` (default), `azure`, `file`, `keyvault`, `key_file`, `vault` or `awskms`. |
+| `client_auth` | `secret` (default), `azure`, `file`, `keyvault`, `key_file`, `vault`, `awskms` or `gcpkms`. |
 | `client_secret_env` | `secret`: the variable holding the client secret. |
 | `assertion_file` | `file`: a token read at each request (a projected ServiceAccount token). |
-| `key`, `key_file` | `keyvault`: a Key Vault key URL. `vault`: a Transit key, `<mount>/<key>` (needs `vault`). `key_file`: ZITADEL's key file or a PEM key. `awskms`: an asymmetric KMS key's ARN (needs `aws`). |
+| `key`, `key_file` | `keyvault`: a Key Vault key URL. `vault`: a Transit key, `<mount>/<key>` (needs `vault`). `key_file`: ZITADEL's key file or a PEM key. `awskms`: an asymmetric KMS key's ARN (needs `aws`). `gcpkms`: an asymmetric key's version. |
 | `kid`, `x5t` | What the JWT's header names the key by (`kid`; `x5t` for Entra's certificates). |
 | `assertion_audience` | `issuer` (default) or `token_endpoint` (Entra). |
 

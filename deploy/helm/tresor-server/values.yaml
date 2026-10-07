@@ -57,7 +57,7 @@ serviceAccount:
   create: true
   name: ""
   # IRSA on EKS (spec 012): {eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/tresor}; EKS Pod Identity
-  # needs nothing here.
+  # needs nothing here. GKE Workload Identity: {iam.gke.io/gcp-service-account: tresor@<project>.iam.gserviceaccount.com}.
   annotations: {}
 
 # A projected ServiceAccount token for an issuer's exchange (client_auth: file, spec 006): mounted at

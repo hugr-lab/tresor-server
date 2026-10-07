@@ -26,6 +26,7 @@ type Config struct {
 	Keys      Keys     `yaml:"keys"`
 	Azure     Azure    `yaml:"azure"`
 	AWS       AWS      `yaml:"aws"`
+	GCP       GCP      `yaml:"gcp"`
 	Vault     Vault    `yaml:"vault"`
 	Material  Material `yaml:"material"`
 	Issuers   []Issuer `yaml:"issuers"`
@@ -207,7 +208,7 @@ func (k Keys) Kinds() []string {
 }
 
 // KeyKinds are the KEKs this build knows.
-var KeyKinds = []string{"local", "azurekeyvault", "vault", "awskms"}
+var KeyKinds = []string{"local", "azurekeyvault", "vault", "awskms", "gcpkms"}
 
 // Vault is OpenBao or HashiCorp Vault (spec 007): where it is, and how the service logs in with no static
 // secret.
@@ -262,6 +263,7 @@ type Material struct {
 	K8s   K8s        `yaml:"k8s"`
 	Vault VaultAllow `yaml:"vault"`
 	AWS   AWSAllow   `yaml:"aws"`
+	GCP   GCPAllow   `yaml:"gcp"`
 	// Sources are named sources (spec 008): more instances of a kind, ref+<name>://, each with its own
 	// connection and allowlist.
 	Sources []NamedSource `yaml:"sources"`
@@ -270,7 +272,7 @@ type Material struct {
 // NamedSource is one named source (spec 008): its name is the references' scheme.
 type NamedSource struct {
 	Name string `yaml:"name"`
-	Kind string `yaml:"kind"` // vault | azkv | aws
+	Kind string `yaml:"kind"` // vault | azkv | aws | gcp
 	// Vault (kind vault) and Azure (kind azkv) are the source's own connection; unset, the top-level one.
 	Vault     *Vault        `yaml:"vault"`
 	Azure     *Azure        `yaml:"azure"`
@@ -285,12 +287,13 @@ type NamedSource struct {
 type SourceAllow struct {
 	Mount    string   `yaml:"mount"`
 	Vault    string   `yaml:"vault"`
+	Project  string   `yaml:"project"` // gcp
 	Prefixes []string `yaml:"prefixes"`
 }
 
 // NamedSourceKinds are the kinds a named source may be: k8s is not one (another cluster would need a kubeconfig
 // with credentials).
-var NamedSourceKinds = []string{"vault", "azkv", "aws"}
+var NamedSourceKinds = []string{"vault", "azkv", "aws", "gcp"}
 
 // ReservedSourceNames are the kinds' own names, now and to come: never a named source's, so a reference or a
 // password written to a kind's source never moves to another (spec 008).
@@ -307,6 +310,7 @@ type Source struct {
 	Azure         Azure      // kind azkv: the identity
 	AWS           AWS        // kind aws: the identity and the region
 	AWSAllow      AWSAllow   // kind aws: the allowlist, the cache
+	GCPAllow      GCPAllow   // kind gcp: the allowlist, the cache (the service's GCP identity)
 	VaultAllow    VaultAllow // kind vault: the allowlist, the cache
 	AzKV          AzKV       // kind azkv: the allowlist, the cache, the cloud
 	K8s           K8s        // kind k8s
@@ -337,9 +341,11 @@ func (c *Config) Source(scheme string) (Source, bool) {
 				s.AzKV.Allow = append(s.AzKV.Allow, AzKVAllow{Vault: a.Vault, Prefixes: a.Prefixes})
 			case "aws":
 				s.AWSAllow.Allow = append(s.AWSAllow.Allow, AWSPrefixes{Prefixes: a.Prefixes})
+			case "gcp":
+				s.GCPAllow.Allow = append(s.GCPAllow.Allow, GCPProject{Project: a.Project, Prefixes: a.Prefixes})
 			}
 		}
-		s.VaultAllow.CacheTTL, s.AzKV.CacheTTL, s.AzKV.DNSSuffix, s.AWSAllow.CacheTTL = n.CacheTTL, n.CacheTTL, n.DNSSuffix, n.CacheTTL
+		s.VaultAllow.CacheTTL, s.AzKV.CacheTTL, s.AzKV.DNSSuffix, s.AWSAllow.CacheTTL, s.GCPAllow.CacheTTL = n.CacheTTL, n.CacheTTL, n.DNSSuffix, n.CacheTTL, n.CacheTTL
 		return s, true
 	}
 	switch scheme {
@@ -351,6 +357,8 @@ func (c *Config) Source(scheme string) (Source, bool) {
 		return Source{Name: scheme, Kind: scheme, K8s: c.Material.K8s}, true
 	case "aws":
 		return Source{Name: scheme, Kind: scheme, AWS: c.AWS, AWSAllow: c.Material.AWS}, true
+	case "gcp":
+		return Source{Name: scheme, Kind: scheme, GCPAllow: c.Material.GCP}, true
 	}
 	return Source{}, false
 }
@@ -358,7 +366,7 @@ func (c *Config) Source(scheme string) (Source, bool) {
 // Sources are the sources references may read from: the built-in sections with an allowlist, then the named.
 func (c *Config) Sources() []Source {
 	var out []Source
-	for _, kind := range []string{"azkv", "k8s", "vault", "aws"} {
+	for _, kind := range []string{"azkv", "k8s", "vault", "aws", "gcp"} {
 		if s, _ := c.Source(kind); !s.Named && s.allows() {
 			out = append(out, s)
 		}
@@ -372,7 +380,7 @@ func (c *Config) Sources() []Source {
 
 // allows: the source has an allowlist.
 func (s Source) allows() bool {
-	return len(s.VaultAllow.Allow) > 0 || len(s.AzKV.Allow) > 0 || len(s.K8s.Allow) > 0 || len(s.AWSAllow.Allow) > 0
+	return len(s.VaultAllow.Allow) > 0 || len(s.AzKV.Allow) > 0 || len(s.K8s.Allow) > 0 || len(s.AWSAllow.Allow) > 0 || len(s.GCPAllow.Allow) > 0
 }
 
 // VaultAllow lets ref+vault://<mount>/<path>#<field> read KV v2 secrets (spec 007): only in the mounts and under
@@ -427,6 +435,36 @@ func (a AWSAllow) validate(where string) error {
 		}
 	}
 	if a.CacheTTL < 0 || a.CacheTTL > 5*time.Minute {
+		return fmt.Errorf("%s.cache_ttl is 0 to 5m: the longest a value may be read stale", where)
+	}
+	return nil
+}
+
+// GCPAllow lets ref+gcp://<project>/<secret> read Secret Manager secrets (spec 012): only in the projects and under
+// the name prefixes listed, with the service's GCP identity.
+type GCPAllow struct {
+	Allow []GCPProject `yaml:"allow"`
+	// CacheTTL keeps a value read for this long (default 0: read at every fetch), at most 5 minutes.
+	CacheTTL time.Duration `yaml:"cache_ttl"`
+}
+
+// GCPProject is one project (its id or number), and the prefixes its secrets' names must start with (none: all).
+type GCPProject struct {
+	Project  string   `yaml:"project"`
+	Prefixes []string `yaml:"prefixes"`
+}
+
+// validate checks a Secret Manager allowlist; where names it in errors.
+func (g GCPAllow) validate(where string) error {
+	if len(g.Allow) == 0 {
+		return fmt.Errorf("%s: allow lists the projects references may read - none, no references", where)
+	}
+	for i, a := range g.Allow {
+		if !gcpProject.MatchString(a.Project) {
+			return fmt.Errorf("%s.allow[%d].project: a GCP project's id or number", where, i)
+		}
+	}
+	if g.CacheTTL < 0 || g.CacheTTL > 5*time.Minute {
 		return fmt.Errorf("%s.cache_ttl is 0 to 5m: the longest a value may be read stale", where)
 	}
 	return nil
@@ -491,6 +529,19 @@ var (
 	awsRegion = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d$`)
 	kmsKeyARN = regexp.MustCompile(`^arn:aws[a-z-]*:kms:[a-z0-9-]+:\d{12}:key/[A-Za-z0-9-]+$`)
 	iamRole   = regexp.MustCompile(`^arn:aws[a-z-]*:iam::\d{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$`)
+)
+
+// GCP is the service's identity on GCP (spec 012): Application Default Credentials - GKE Workload Identity, a VM's
+// service account, workload identity federation; never a key file or a person's login unless StaticCredentials
+// allows it (tests).
+type GCP struct {
+	StaticCredentials string `yaml:"static_credentials"`
+}
+
+var (
+	gcpCryptoKey  = regexp.MustCompile(`^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]{1,63}/cryptoKeys/[A-Za-z0-9_-]{1,63}$`)
+	gcpKeyVersion = regexp.MustCompile(`^(projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]{1,63}/cryptoKeys/[A-Za-z0-9_-]{1,63})/cryptoKeyVersions/[1-9][0-9]*$`)
+	gcpProject    = regexp.MustCompile(`^([a-z][a-z0-9-]{4,28}[a-z0-9]|[0-9]{1,20})$`)
 )
 
 // kmsRegion is the region a KMS key's ARN names.
@@ -581,7 +632,7 @@ type ExchangeClient struct {
 }
 
 // ClientAuthKinds are the ways the service logs in at a token endpoint.
-var ClientAuthKinds = []string{"secret", "azure", "file", "keyvault", "key_file", "vault", "awskms"}
+var ClientAuthKinds = []string{"secret", "azure", "file", "keyvault", "key_file", "vault", "awskms", "gcpkms"}
 
 // ServiceRule marks a token as a service's: Claim is present (and equals Equals, when set); the
 // client's name is ClientClaim (default azp).
@@ -706,6 +757,14 @@ func (c *Config) validate() error {
 	for _, k := range append([]KEK{c.Keys.Current()}, c.Keys.Previous...) {
 		if k.Kind == "awskms" && (kmsRegion(k.Key) != c.AWS.Region || kmsRegion(k.MacKey) != c.AWS.Region) {
 			return fmt.Errorf("keys: the awskms keys are in aws.region (%s): their ARNs name another", c.AWS.Region)
+		}
+	}
+	if c.GCP.StaticCredentials != "" && c.GCP.StaticCredentials != "allow" {
+		return errors.New("gcp.static_credentials is allow, or unset")
+	}
+	if g := c.Material.GCP; len(g.Allow) > 0 || g.CacheTTL != 0 {
+		if err := g.validate("material.gcp"); err != nil {
+			return err
 		}
 	}
 	if a := c.Material.AWS; len(a.Allow) > 0 || a.CacheTTL != 0 {
@@ -867,6 +926,13 @@ func (s *State) validateServer(identity string, aws bool) error {
 		if s.PasswordEnv != "" || s.PasswordFile != "" || s.PasswordRef != "" {
 			return errors.New("state.auth: entra takes no password")
 		}
+	case "gcp":
+		if s.Kind != "postgres" {
+			return errors.New("state.auth: gcp is Cloud SQL IAM database authentication, for postgres")
+		}
+		if s.PasswordEnv != "" || s.PasswordFile != "" || s.PasswordRef != "" {
+			return errors.New("state.auth: gcp takes no password")
+		}
 	case "aws":
 		if s.Kind != "postgres" {
 			return errors.New("state.auth: aws is RDS IAM authentication, for postgres (SQL Server on RDS has none: a password_ref)")
@@ -890,7 +956,7 @@ func (s *State) validateServer(identity string, aws bool) error {
 		if s.PasswordRef != "" {
 			scheme, _, ok := strings.Cut(strings.TrimPrefix(s.PasswordRef, "ref+"), "://")
 			if !ok || !strings.HasPrefix(s.PasswordRef, "ref+") || !material.SchemeName(scheme) {
-				return errors.New("state.password_ref is a reference: ref+k8s://, ref+azkv://, ref+vault://, ref+aws:// or a named source's")
+				return errors.New("state.password_ref is a reference: ref+k8s://, ref+azkv://, ref+vault://, ref+aws://, ref+gcp:// or a named source's")
 			}
 		}
 		if s.PasswordEnv != "" && IsSettingVariable(s.PasswordEnv) {
@@ -898,7 +964,7 @@ func (s *State) validateServer(identity string, aws bool) error {
 				"variable of its own", s.PasswordEnv)
 		}
 	default:
-		return errors.New("state.auth is entra, aws or password")
+		return errors.New("state.auth is entra, aws, gcp or password")
 	}
 	return nil
 }
@@ -962,8 +1028,8 @@ func (k *KEK) validate(where string) error {
 	if !slices.Contains(KeyKinds, k.Kind) {
 		return fmt.Errorf("%s.kind is none of %s", where, strings.Join(KeyKinds, " | "))
 	}
-	if k.MacKey != "" && k.Kind != "awskms" {
-		return fmt.Errorf("%s.mac_key is an awskms KEK's", where)
+	if k.MacKey != "" && k.Kind != "awskms" && k.Kind != "gcpkms" {
+		return fmt.Errorf("%s.mac_key is an awskms or a gcpkms KEK's", where)
 	}
 	switch k.Kind {
 	case "awskms":
@@ -971,6 +1037,12 @@ func (k *KEK) validate(where string) error {
 			k.KeyFile != "" || k.Mount != "" {
 			return fmt.Errorf("%s: an awskms KEK is key (a symmetric encryption key) and mac_key (an HMAC key): two KMS "+
 				"keys' ARNs, arn:aws:kms:<region>:<account>:key/<id>", where)
+		}
+	case "gcpkms":
+		m := gcpKeyVersion.FindStringSubmatch(k.MacKey)
+		if !gcpCryptoKey.MatchString(k.Key) || m == nil || m[1] == k.Key || k.KeyEnv != "" || k.KeyFile != "" || k.Mount != "" {
+			return fmt.Errorf("%s: a gcpkms KEK is key (an ENCRYPT_DECRYPT key: projects/<p>/locations/<l>/keyRings/<r>/"+
+				"cryptoKeys/<k>) and mac_key (another key's version, a MAC key: …/cryptoKeys/<m>/cryptoKeyVersions/<n>)", where)
 		}
 	case "local":
 		if (k.KeyEnv == "") == (k.KeyFile == "") || k.Key != "" || k.Mount != "" {
@@ -1080,14 +1152,14 @@ func (c *Config) validateSources() error {
 		s, _ := c.Source(n.Name)
 		for i, a := range n.Allow {
 			if n.Kind == "aws" {
-				if a.Mount != "" || a.Vault != "" {
+				if a.Mount != "" || a.Vault != "" || a.Project != "" {
 					return fmt.Errorf("%s.allow[%d]: an aws source's entries are prefixes only", where, i)
 				}
 				continue
 			}
-			if (n.Kind == "vault") != (a.Mount != "") || (n.Kind == "azkv") != (a.Vault != "") {
+			if (n.Kind == "vault") != (a.Mount != "") || (n.Kind == "azkv") != (a.Vault != "") || (n.Kind == "gcp") != (a.Project != "") {
 				return fmt.Errorf("%s.allow[%d]: a %s source's entries name a %s", where, i, n.Kind,
-					map[string]string{"vault": "mount", "azkv": "vault"}[n.Kind])
+					map[string]string{"vault": "mount", "azkv": "vault", "gcp": "project"}[n.Kind])
 			}
 		}
 		if n.AWS != nil && n.Kind != "aws" {
@@ -1140,6 +1212,13 @@ func (c *Config) validateSources() error {
 				return fmt.Errorf("%s reads with the service's AWS identity: aws.region (or its own aws:) is required", where)
 			}
 			if err := s.AWSAllow.validate(where); err != nil {
+				return err
+			}
+		case "gcp":
+			if n.Vault != nil || n.Azure != nil || n.AWS != nil || n.DNSSuffix != "" {
+				return fmt.Errorf("%s: a gcp source reads with the service's GCP identity: vault, azure, aws and dns_suffix are other kinds'", where)
+			}
+			if err := s.GCPAllow.validate(where); err != nil {
 				return err
 			}
 		}
@@ -1196,6 +1275,14 @@ func (s Source) admits(rest string) bool {
 				return true
 			}
 		}
+	case "gcp":
+		parts := strings.Split(rest, "/")
+		for _, a := range s.GCPAllow.Allow {
+			if len(parts) >= 2 && a.Project == parts[0] && (len(a.Prefixes) == 0 ||
+				slices.ContainsFunc(a.Prefixes, func(p string) bool { return strings.HasPrefix(parts[1], p) })) {
+				return true
+			}
+		}
 	case "aws":
 		name, _, _ := strings.Cut(rest, "?")
 		name, _, _ = strings.Cut(name, "#")
@@ -1239,6 +1326,7 @@ func (ex *ExchangeClient) validate(identity string, vaultUsed, awsUsed bool) err
 		"key_file": {"key_file", "kid", "x5t", "assertion_audience"},
 		"vault":    {"key", "kid", "x5t", "assertion_audience"},
 		"awskms":   {"key", "kid", "x5t", "assertion_audience"},
+		"gcpkms":   {"key", "kid", "x5t", "assertion_audience"},
 	}[ex.ClientAuth]
 	for name, on := range set {
 		if on && !slices.Contains(allowed, name) {
@@ -1286,6 +1374,10 @@ func (ex *ExchangeClient) validate(identity string, vaultUsed, awsUsed bool) err
 		}
 		if !awsUsed {
 			return errors.New("exchange.client_auth: awskms signs with the service's AWS identity: aws.region is required")
+		}
+	case "gcpkms":
+		if !gcpKeyVersion.MatchString(ex.Key) || (ex.KID == "" && ex.X5T == "") {
+			return errors.New("exchange.client_auth: gcpkms signs with key (an asymmetric key's version: …/cryptoKeys/<k>/cryptoKeyVersions/<n>), named by kid or x5t")
 		}
 	case "key_file":
 		if ex.KeyFile == "" {
