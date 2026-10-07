@@ -1,6 +1,6 @@
 # Spec 012: AWS and GCP - KMS as the KEK, their secret stores as sources, no static secret
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-06
 - **Author**: hugr lab
 
@@ -24,7 +24,10 @@ The organizations hugr serves keep their credentials in Secrets Manager or Secre
 
 - **AWS**: the SDK's default chain - EKS Pod Identity, IRSA (a projected web identity token), an instance's or a
   task's role. `aws: {region: eu-central-1}`; no access key setting exists (static keys from the environment are
-  refused at start, as `AWS_ACCESS_KEY_ID` would bypass the platform's identity).
+  refused at start, as `AWS_ACCESS_KEY_ID` would bypass the platform's identity), unless
+  `aws.static_credentials: allow` says so - for development and tests (LocalStack), logged as a warning at start.
+- `aws.endpoint_url`: another endpoint for every AWS API the service calls (LocalStack, a VPC endpoint), from
+  configuration only.
 - **GCP**: Application Default Credentials - GKE Workload Identity, a VM's service account. `gcp: {project: …}`
   for defaults; no key file setting (a `GOOGLE_APPLICATION_CREDENTIALS` key file is refused at start).
 - The chart: `serviceAccount.annotations` for IRSA (`eks.amazonaws.com/role-arn`) and GKE WI
@@ -130,8 +133,8 @@ keys:
 
 ## Open questions
 
-- Whether AWS KMS HMAC keys are offered in every region the installations use (to be checked against AWS's
-  list before (a)); where not, the MAC key would live in another region (a cross-region call per root, cached).
+- ~~Whether AWS KMS HMAC keys are offered in every region~~: they are, in every region KMS is (AWS's KMS
+  developer guide, "HMAC keys"); they do not rotate automatically, so the root is stable.
 - The live runs: EKS and GKE clusters cost money while they run; a run of a few hours each, deleted the same day.
 
 ## Follow-ups
