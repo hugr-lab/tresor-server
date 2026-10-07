@@ -20,8 +20,8 @@ const Prefix = "ref+"
 
 // Ref is a parsed reference.
 type Ref struct {
-	Scheme string // the source's name, as written: "azkv", "k8s", "vault", or a named source's (spec 008)
-	Kind   string // the source's kind: "azkv", "k8s", "vault" ("": Scheme's)
+	Scheme string // the source's name, as written: "azkv", "k8s", "vault", "aws", or a named source's (spec 008)
+	Kind   string // the source's kind: "azkv", "k8s", "vault", "aws" ("": Scheme's)
 	// Where, as the source parsed it: for Key Vault the vault, the secret, a version or ""; for Kubernetes the
 	// namespace (Vault), the Secret (Name) and its key (Key).
 	Vault, Name, Key, Version string
@@ -29,6 +29,16 @@ type Ref struct {
 
 // String is the reference as logged: where, never a value.
 func (r Ref) String() string {
+	if r.Kind == "aws" || (r.Kind == "" && r.Scheme == "aws") { // <secret>[#<field>][?version=<id>]: a name has slashes
+		s := Prefix + r.Scheme + "://" + r.Name
+		if r.Key != "" {
+			s += "#" + r.Key
+		}
+		if r.Version != "" {
+			s += "?version=" + r.Version
+		}
+		return s
+	}
 	if r.Kind == "vault" || (r.Kind == "" && r.Scheme == "vault") { // <mount>/<path>#<field>: a path has slashes of its own
 		return Prefix + r.Scheme + "://" + r.Vault + "/" + r.Name + "#" + r.Key
 	}

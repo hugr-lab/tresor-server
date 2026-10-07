@@ -16,26 +16,34 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/hugr-lab/tresor-server/internal/api"
 	"github.com/hugr-lab/tresor-server/internal/audit"
 	"github.com/hugr-lab/tresor-server/internal/auth"
+	"github.com/hugr-lab/tresor-server/internal/awsid"
 	"github.com/hugr-lab/tresor-server/internal/azure"
 	"github.com/hugr-lab/tresor-server/internal/clientauth"
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/health"
 	"github.com/hugr-lab/tresor-server/internal/keys"
+	"github.com/hugr-lab/tresor-server/internal/keys/awskms"
 	"github.com/hugr-lab/tresor-server/internal/keys/azurekeyvault"
 	"github.com/hugr-lab/tresor-server/internal/keys/local"
 	"github.com/hugr-lab/tresor-server/internal/keys/vaultkek"
 	"github.com/hugr-lab/tresor-server/internal/kube"
 	"github.com/hugr-lab/tresor-server/internal/material"
+	"github.com/hugr-lab/tresor-server/internal/material/awssm"
 	azkvsource "github.com/hugr-lab/tresor-server/internal/material/azurekeyvault"
 	k8ssource "github.com/hugr-lab/tresor-server/internal/material/k8s"
 	"github.com/hugr-lab/tresor-server/internal/material/vaultkv"
@@ -227,6 +235,21 @@ func purgeGrants(ctx context.Context, st state.Store, log *slog.Logger) {
 
 // databaseLogin is how the service logs in to its database server: an Entra token, or a password.
 func databaseLogin(cfg *config.Config, scope string) (sqlstore.Login, error) {
+	if cfg.State.Auth == "aws" {
+		pc, err := pgconn.ParseConfig(cfg.State.DSN)
+		if err != nil {
+			return nil, errors.New("state.dsn does not parse") // pgconn's error may quote the DSN
+		}
+		if pc.TLSConfig == nil {
+			return nil, errors.New("state.auth: aws needs TLS (sslmode=verify-full and the RDS CA): RDS takes an IAM token over TLS only")
+		}
+		ac, err := awsOf(cfg.AWS)
+		if err != nil {
+			return nil, err
+		}
+		return sqlstore.AWSLogin{Endpoint: net.JoinHostPort(pc.Host, strconv.Itoa(int(pc.Port))), Region: cfg.AWS.Region,
+			User: pc.User, Credentials: ac.Credentials}, nil
+	}
 	if cfg.State.Auth == "entra" {
 		cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
 		if err != nil {
@@ -290,6 +313,18 @@ func passwordResolver(cfg *config.Config, ref string) (*material.Resolver, error
 		}
 		return checkedPassword(material.New(azkvsource.New([]azkvsource.Allow{{Vault: parts[0], Prefixes: []string{parts[1]}}}, cred,
 			azkvsource.Options{DNSSuffix: s.AzKV.DNSSuffix}).Named(s.Name)), ref)
+	case "aws":
+		name, _, _ := strings.Cut(rest, "?")
+		name, _, _ = strings.Cut(name, "#")
+		if name == "" {
+			return nil, fmt.Errorf("state.password_ref: ref+%s://<secret>[#<field>]", s.Name)
+		}
+		ac, err := awsOf(s.AWS)
+		if err != nil {
+			return nil, err
+		}
+		// that one secret, exactly: the allowlist is the name, read whole
+		return checkedPassword(material.New(awssm.New(secretsmanager.NewFromConfig(ac), []string{name}, false, 0).Named(s.Name)), ref)
 	}
 	return nil, fmt.Errorf("state.password_ref: a %s source", s.Kind)
 }
@@ -367,6 +402,13 @@ func materialResolver(cfg *config.Config) (*material.Resolver, error) {
 				allow[i] = vaultkv.Allow{Mount: a.Mount, Prefixes: a.Prefixes}
 			}
 			sources = append(sources, traced.Source(vaultkv.New(v, allow, s.VaultAllow.CacheTTL).Named(s.Name)))
+		case "aws":
+			ac, err := awsOf(s.AWS)
+			if err != nil {
+				return nil, fmt.Errorf("material (%s): %w", s.Name, err)
+			}
+			prefixes, all := s.AWSAllow.Prefixes()
+			sources = append(sources, traced.Source(awssm.New(secretsmanager.NewFromConfig(ac), prefixes, all, s.AWSAllow.CacheTTL).Named(s.Name)))
 		}
 	}
 	if len(sources) == 0 {
@@ -429,6 +471,12 @@ func kekOf(cfg *config.Config, k config.KEK) (keys.KeyWrapper, error) {
 			return nil, err
 		}
 		return azurekeyvault.New(k.Key, cred)
+	case k.Kind == "awskms":
+		ac, err := awsOf(cfg.AWS)
+		if err != nil {
+			return nil, err
+		}
+		return awskms.New(kms.NewFromConfig(ac), k.Key, k.MacKey)
 	}
 	return nil, fmt.Errorf("keys.kind %s is not built in", k.Kind)
 }
@@ -655,6 +703,16 @@ func exchangeAuth(ctx context.Context, cfg *config.Config) (map[string]mint.Clie
 				return nil, nil, err
 			}
 			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
+		case "awskms":
+			ac, err := awsOf(cfg.AWS)
+			if err != nil {
+				return nil, nil, err
+			}
+			signer, err := awskms.NewSigner(ctx, kms.NewFromConfig(ac), ex.Key)
+			if err != nil {
+				return nil, nil, err
+			}
+			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
 		}
 		out[config.IssuerKey(is.Issuer)] = mint.AssertionAuth{ID: clientID, Assertion: source}
 		checks = append(checks, health.Check{
@@ -667,6 +725,32 @@ func exchangeAuth(ctx context.Context, cfg *config.Config) (map[string]mint.Clie
 		})
 	}
 	return out, checks, nil
+}
+
+// awsConfigs are the SDK configurations made, one per identity (the top-level aws:, a named source's own): one
+// credentials cache each, shared by the KEK, references, the database and signing.
+var awsConfigs struct {
+	sync.Mutex
+	made map[config.AWS]aws.Config
+}
+
+// awsOf is an identity's SDK configuration (spec 012): the platform's identity, never a static key unless allowed.
+func awsOf(a config.AWS) (aws.Config, error) {
+	awsConfigs.Lock()
+	defer awsConfigs.Unlock()
+	if c, ok := awsConfigs.made[a]; ok {
+		return c, nil
+	}
+	c, err := awsid.Config(context.Background(), awsid.Identity{Region: a.Region, EndpointURL: a.EndpointURL,
+		StaticCredentials: a.StaticCredentials == "allow", RoleARN: a.RoleARN}, slog.Default())
+	if err != nil {
+		return aws.Config{}, err
+	}
+	if awsConfigs.made == nil {
+		awsConfigs.made = map[config.AWS]aws.Config{}
+	}
+	awsConfigs.made[a] = c
+	return c, nil
 }
 
 // vaultOnce is the process's one Vault client (spec 007): one login, shared by the KEK, references and signing.

@@ -123,6 +123,26 @@ jobs:
           path: web/console/test-results/
           retention-days: 7
 
+  # AWS against moto (spec 012): the awskms KEK, ref+aws, a move from a local KEK, signing with a KMS key, through
+  # the service's own wiring (cmd/tresor-server TestAWS). Pinned by digest: moto 5.1's GenerateMac fails.
+  aws:
+    name: AWS (moto)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      moto:
+        image: motoserver/moto@sha256:91fd602a21f49cf9eb82fdf474015a3c131d40104c8297ea6a2ca920708ae32c
+        ports: ['127.0.0.1:18700:5000']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: TestAWS
+        env:
+          TRESOR_TEST_AWS_ENDPOINT: http://127.0.0.1:18700
+        run: go test ./cmd/tresor-server/ -run TestAWS -count=1 -v
+
   # ZITADEL in docker (spec 006): the service as its issuer's client with key_file, a token minted by exchange
   zitadel:
     name: ZITADEL (token exchange, key_file)

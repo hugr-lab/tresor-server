@@ -25,8 +25,8 @@ The organizations hugr serves keep their credentials in Secrets Manager or Secre
 - **AWS**: the SDK's default chain - EKS Pod Identity, IRSA (a projected web identity token), an instance's or a
   task's role. `aws: {region: eu-central-1}`; no access key setting exists (static keys from the environment are
   refused at start, as `AWS_ACCESS_KEY_ID` would bypass the platform's identity), unless
-  `aws.static_credentials: allow` says so - for development and tests (LocalStack), logged as a warning at start.
-- `aws.endpoint_url`: another endpoint for every AWS API the service calls (LocalStack, a VPC endpoint), from
+  `aws.static_credentials: allow` says so - for development and tests (an emulator), logged as a warning at start.
+- `aws.endpoint_url`: another endpoint for every AWS API the service calls (an emulator, a VPC endpoint), from
   configuration only.
 - **GCP**: Application Default Credentials - GKE Workload Identity, a VM's service account. `gcp: {project: …}`
   for defaults; no key file setting (a `GOOGLE_APPLICATION_CREDENTIALS` key file is refused at start).
@@ -94,7 +94,8 @@ keys:
 ### The PRs
 
 1. **(a) AWS**: `aws:` identity, `awskms` KEK, `ref+aws`, `state.auth: aws`, `client_auth: awskms`; tests
-   against LocalStack in CI (KMS with HMAC keys, Secrets Manager); the chart's IRSA annotation.
+   against moto in CI (KMS with HMAC keys, Secrets Manager; Apache-2.0, no account needed); the chart's IRSA
+   annotation.
 2. **(b) GCP**: `gcp:` identity, `gcpkms` KEK, `ref+gcp`, `state.auth: gcp`, `client_auth: gcpkms`; tests with
    fakes of the two APIs (no emulator exists for Cloud KMS or Secret Manager).
 3. **(c) Docs and live runs**: an AWS page (EKS, IRSA, RDS) and a GCP page (GKE, WI, Cloud SQL); one live run on
@@ -116,8 +117,10 @@ keys:
 
 - Go: each KEK and source against a fake of its API (requests, contexts, errors mapped to `ErrSealed` / `503`);
   the root deterministic and bound to the KEK id; Owns; config validation (no static credentials, allowlists).
-- CI: LocalStack (KMS: symmetric and HMAC keys, Secrets Manager) - the conformance suite on SQLite with an
-  `awskms` KEK and a `ref+aws` reference; `rewrap`, a move from a local KEK (spec 011).
+- CI: moto (an AWS emulator: KMS with symmetric, HMAC and signing keys, Secrets Manager) - through the service's
+  own wiring: the awskms KEK on SQLite with its readiness, a move from a local KEK (spec 011) and `rewrap`,
+  `ref+aws` as a string and a JSON field, the allowlist, signing with a KMS key. The image is pinned by digest
+  (moto 5.1's GenerateMac fails). RDS IAM authentication: the token's shape, signed offline.
 - Live, by hand, after the owner agrees: EKS with IRSA, KMS, Secrets Manager, RDS IAM auth; GKE with Workload
   Identity, Cloud KMS, Secret Manager, Cloud SQL IAM auth. Resources deleted afterwards.
 

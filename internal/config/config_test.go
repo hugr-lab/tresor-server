@@ -578,3 +578,54 @@ func TestPreviousKEKs(t *testing.T) {
 		t.Fatalf("from the environment: %v %+v", err, cfg)
 	}
 }
+
+// AWS (spec 012): the identity, the awskms KEK's two keys, Secrets Manager's allowlist, named aws sources,
+// RDS IAM authentication, signing with a KMS key
+func TestAWSConfig(t *testing.T) {
+	const enc, mac = "arn:aws:kms:eu-central-1:123456789012:key/1111aaaa", "arn:aws:kms:eu-central-1:123456789012:key/2222bbbb"
+	base := strings.Replace(good, "state: {kind: memory}", "state: {kind: sqlite, path: /data/tresor.db}", 1)
+	ok := base + "aws: {region: eu-central-1}\nkeys: {kind: awskms, key: '" + enc + "', mac_key: '" + mac + "'}\n" +
+		"material:\n  aws: {allow: [{prefixes: [duckdb/]}], cache_ttl: 1m}\n" +
+		"  sources: [{name: aws-us, kind: aws, aws: {region: us-east-1, role_arn: 'arn:aws:iam::210987654321:role/tresor-reader'}, allow: [{prefixes: [lake-]}]}]\n"
+	cfg, err := Parse([]byte(ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := cfg.Source("aws-us"); s.Kind != "aws" || s.AWS.Region != "us-east-1" || !s.OwnConnection {
+		t.Fatalf("a named aws source: %+v", s)
+	}
+	if p, all := cfg.Material.AWS.Prefixes(); all || len(p) != 1 {
+		t.Fatalf("prefixes: %v %v", p, all)
+	}
+	pg := strings.Replace(good, "state: {kind: memory}", "state: {kind: postgres, dsn: 'host=db.example user=tresor dbname=t sslmode=verify-full', auth: aws}", 1)
+	if _, err := Parse([]byte(pg + "aws: {region: eu-central-1}\nkeys: {kind: awskms, key: '" + enc + "', mac_key: '" + mac + "'}\n")); err != nil {
+		t.Fatalf("RDS IAM: %v", err)
+	}
+	for name, doc := range map[string]string{
+		"awskms with no region":     strings.Replace(ok, "aws: {region: eu-central-1}\n", "", 1),
+		"one key for both":          strings.Replace(ok, "mac_key: '"+mac+"'", "mac_key: '"+enc+"'", 1),
+		"an alias":                  strings.Replace(ok, "key: '"+enc+"'", "key: 'alias/tresor'", 1),
+		"no mac key":                strings.Replace(ok, ", mac_key: '"+mac+"'", "", 1),
+		"a mac key on another kind": base + "keys: {kind: local, key_file: /k, mac_key: '" + mac + "'}\n",
+		"a bad region":              strings.Replace(ok, "region: eu-central-1}", "region: Europe}", 1),
+		"static keys, anything":     strings.Replace(ok, "region: eu-central-1}", "region: eu-central-1, static_credentials: yes}", 1),
+		"an endpoint with a path":   strings.Replace(ok, "region: eu-central-1}", "region: eu-central-1, endpoint_url: 'http://x/y'}", 1),
+		"an ARN prefix":             strings.Replace(ok, "prefixes: [duckdb/]", "prefixes: ['arn:aws:secretsmanager:x']", 1),
+		"a bad role":                strings.Replace(ok, "role_arn: 'arn:aws:iam::210987654321:role/tresor-reader'", "role_arn: 'tresor-reader'", 1),
+		"a mount in an aws source":  strings.Replace(ok, "allow: [{prefixes: [lake-]}]", "allow: [{mount: secret}]", 1),
+		"aws on a vault source":     base + "vault: {address: 'https://b:8200', auth: {method: token_file, token_file: /t}}\nkeys: {kind: local, key_file: /k}\nmaterial: {sources: [{name: v2, kind: vault, aws: {region: eu-central-1}, allow: [{mount: secret}]}]}\n",
+		"RDS IAM with no region":    pg + "keys: {kind: local, key_file: /k}\n",
+		"RDS IAM on SQL Server":     strings.Replace(pg, "kind: postgres", "kind: sqlserver", 1) + "aws: {region: eu-central-1}\nkeys: {kind: local, key_file: /k}\n",
+	} {
+		if _, err := Parse([]byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	ex := strings.Replace(good, "audience: duckdb-secrets", "audience: duckdb-secrets\n    exchange: {client_id: c, client_auth: awskms, key: '"+enc+"', kid: k}", 1)
+	if _, err := Parse([]byte(ex + "aws: {region: eu-central-1}\n")); err != nil {
+		t.Fatalf("client_auth: awskms: %v", err)
+	}
+	if _, err := Parse([]byte(ex)); err == nil {
+		t.Error("client_auth: awskms with no region: accepted")
+	}
+}
