@@ -638,6 +638,8 @@ type ExchangeClient struct {
 	// OmitClientID leaves client_id out of the token request (a client assertion names the client): Keycloak's
 	// federated client authentication refuses a client_id that is not the assertion's sub.
 	OmitClientID bool `yaml:"omit_client_id"`
+	// Grant is the exchange's grant: token_exchange (RFC 8693; the default) or on_behalf_of (Entra; spec 013).
+	Grant string `yaml:"grant"`
 }
 
 // ClientAuthKinds are the ways the service logs in at a token endpoint.
@@ -872,6 +874,12 @@ func (c *Config) validate() error {
 		if ex := is.Exchange; ex != nil {
 			if err := ex.validate(c.Azure.Identity, c.Vault.used(), c.AWS.Region != ""); err != nil {
 				return fmt.Errorf("issuers[%d]: %w", i, err)
+			}
+			// a v1 issuer's token endpoint (/oauth2/token) takes resource, not scope: OBO would be refused for
+			// every caller, looking like the callers' fault
+			if ex.Grant == "on_behalf_of" && strings.Contains(is.Issuer, "sts.windows.net") {
+				return fmt.Errorf("issuers[%d]: exchange.grant on_behalf_of needs Entra's v2 issuer (https://login.microsoftonline.com/<tenant>/v2.0): "+
+					"set the service's app to v2 tokens (requestedAccessTokenVersion: 2)", i)
 			}
 			if ex.ClientAuth == "awskms" && kmsRegion(ex.Key) != c.AWS.Region {
 				return fmt.Errorf("issuers[%d]: exchange.key is in aws.region (%s): its ARN names another", i, c.AWS.Region)
@@ -1337,6 +1345,16 @@ func (ex *ExchangeClient) validate(identity string, vaultUsed, awsUsed bool) err
 		"awskms":   {"key", "kid", "x5t", "assertion_audience"},
 		"gcpkms":   {"key", "kid", "x5t", "assertion_audience"},
 	}[ex.ClientAuth]
+	switch ex.Grant {
+	case "":
+		ex.Grant = "token_exchange"
+	case "token_exchange", "on_behalf_of":
+	default:
+		return errors.New("exchange.grant is token_exchange (RFC 8693) or on_behalf_of (Entra)")
+	}
+	if ex.Grant == "on_behalf_of" && ex.OmitClientID {
+		return errors.New("exchange: on_behalf_of needs client_id in the request - not omit_client_id")
+	}
 	if ex.OmitClientID && ex.ClientAuth != "file" {
 		return errors.New("exchange.omit_client_id is for client_auth: file (Keycloak's federated client authentication); " +
 			"Entra and the signed assertions name the client by client_id")

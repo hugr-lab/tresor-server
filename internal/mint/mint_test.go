@@ -48,7 +48,7 @@ func TestRefusalsNameNoToken(t *testing.T) {
 	if !IsInvalidGrant(err) || strings.Contains(err.Error(), "secret-subject-token") {
 		t.Fatalf("exchange refusal: %v", err)
 	}
-	_, err = serve(t, 400, `{"error":"invalid_grant","error_description":"secret-refresh is dead"}`).Refresh(ctx, "secret-refresh")
+	_, err = serve(t, 400, `{"error":"invalid_grant","error_description":"secret-refresh is dead"}`).Refresh(ctx, "secret-refresh", "", "")
 	if !IsInvalidGrant(err) || strings.Contains(err.Error(), "secret-refresh") {
 		t.Fatalf("refresh refusal: %v", err)
 	}

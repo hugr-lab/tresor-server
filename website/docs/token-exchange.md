@@ -39,14 +39,30 @@ Every way but `secret` needs no secret of the service's own (spec 006).
 - **Readiness** has a check `exchange <issuer>` per issuer: it makes an assertion. A failure there is
   *degraded*, not unready: only `token_exchange` secrets depend on it.
 
-## Entra: a federated credential
+## Entra: On-Behalf-Of, a federated credential
 
-The service's app registration trusts the service's own Azure identity, with no client secret.
+Entra does not take RFC 8693's token exchange; its equivalent is On-Behalf-Of (spec 013). The service's app
+registration trusts the service's own Azure identity, with no client secret.
 
 ```yaml
-exchange: {client_id: <the app registration's client id>, client_auth: azure}
+exchange: {client_id: <the app registration's client id>, client_auth: azure, grant: on_behalf_of}
 azure: {identity: managed}         # Container Apps; workload on AKS
 ```
+
+- **The request**: the caller's token as a JWT bearer assertion, `requested_token_use=on_behalf_of`, and a scope:
+  the secret's `scope`, or `<audience>/.default`. A delegation grant adds `offline_access` for a refresh token.
+- **The issuer is Entra's v2** (`https://login.microsoftonline.com/<tenant>/v2.0`): the service's app issues v2
+  tokens (`requestedAccessTokenVersion: 2` in its manifest). A v1 issuer (`sts.windows.net`) is refused with
+  `on_behalf_of`: its token endpoint takes no scope.
+- **The secret's `audience`** is the downstream API's client id (a GUID): a v2 token's `aud` is always that, and
+  `<audience>/.default` asks for it. An application ID URI works only for a v1 API, with a secret's own `scope`
+  naming the same URI. The service refuses a minted token whose `aud` is not the audience.
+- **Renewal**: under a delegation grant the refresh names the same scope again: an Entra refresh token covers
+  every resource consented.
+- **Consent**: the service's app is granted the downstream API's delegated permission, with admin consent;
+  otherwise Entra refuses (`AADSTS65001`, kept in the refusal's description - the rest of Entra's message is
+  not).
+- **The caller** is a person: OBO mints a token for a user, and Entra refuses an app's token.
 
 1. On the app registration, add a federated credential of the kind *Managed identity*, naming the service's
    user-assigned identity. This holds on Container Apps and on AKS alike: the assertion is the identity's

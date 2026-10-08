@@ -219,7 +219,7 @@ func (s *Server) mintClient(ctx context.Context, issuer string) (*mint.Client, *
 		}
 		auth = mint.SecretAuth{ID: ex.ClientID, Secret: ex.ClientSecret}
 	}
-	return &mint.Client{TokenURL: tokenURL, Auth: auth, Now: s.now}, nil
+	return &mint.Client{TokenURL: tokenURL, Auth: auth, Now: s.now, Grant: ex.Grant}, nil
 }
 
 // checkMinted refuses a token not meant for the audience asked, or meant for this service itself: an IdP
@@ -403,7 +403,7 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 		var next mintResult
 		switch {
 		case token != nil && token.Refresh != "":
-			renewed, err := client.Refresh(ctx, token.Refresh)
+			renewed, err := client.Refresh(ctx, token.Refresh, audience, scope)
 			if err == nil {
 				err = s.checkMinted(renewed, audience)
 			}

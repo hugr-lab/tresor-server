@@ -35,6 +35,7 @@ type IdP struct {
 	mu        sync.Mutex
 	refreshes map[string]Claims // refresh token -> the claims its tokens carry
 	Exchanges int               // exchanges answered
+	OBOs      int               // On-Behalf-Of exchanges answered (Entra's; spec 013)
 	Refreshed int               // refreshes answered
 	LastForm  url.Values        // the last token request (tests read the parameters)
 	// ClientKeys lets the exchange client log in with a signed assertion (spec 006): kid -> public key. An
@@ -180,6 +181,50 @@ func (idp *IdP) token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		idp.Exchanges++
+	case "urn:ietf:params:oauth:grant-type:jwt-bearer":
+		// Entra's On-Behalf-Of (spec 013): no issued_token_type in the answer; the audience from the scope
+		if r.PostForm.Get("requested_token_use") != "on_behalf_of" {
+			deny("invalid_request", "requested_token_use")
+			return
+		}
+		subject := r.PostForm.Get("assertion")
+		payload, ok := unverifiedClaims(subject)
+		if !ok {
+			deny("invalid_grant", "AADSTS50013: Assertion failed signature validation. Trace ID: t-1 Correlation ID: c-1")
+			return
+		}
+		if !audIncludes(payload["aud"], "duckdb-secrets") {
+			deny("invalid_grant", "AADSTS50013: Assertion audience does not match the client. Trace ID: t-3")
+			return
+		}
+		if sub, _ := payload["sub"].(string); strings.HasPrefix(sub, "sa-") { // an app's token: OBO is for users
+			deny("invalid_grant", "AADSTS50000: an application's token cannot be exchanged on behalf of a user. Trace ID: t-4")
+			return
+		}
+		if payload["sub"] == "no-consent" {
+			deny("invalid_grant", "AADSTS65001: The user or administrator has not consented to use the application "+
+				"with ID 'x' named 'tresor'. Trace ID: t-2 Correlation ID: c-2 Timestamp: now")
+			return
+		}
+		var aud string
+		for _, sc := range strings.Fields(r.PostForm.Get("scope")) {
+			if sc == "offline_access" {
+				withRefresh = true
+			} else if aud == "" {
+				aud = strings.TrimSuffix(sc, "/.default")
+			}
+		}
+		claims = Claims{"sub": payload["sub"], "aud": aud, "azp": ExchangeClient, "realm_access": payload["realm_access"], "obo": true}
+		idp.OBOs++
+		answer := map[string]any{"access_token": idp.Token(idp.t, claims), "token_type": "Bearer", "expires_in": 300}
+		if withRefresh {
+			refresh := fmt.Sprintf("rt-%d-%d", time.Now().UnixNano(), len(idp.refreshes))
+			idp.refreshes[refresh] = claims
+			answer["refresh_token"] = refresh
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(answer)
+		return
 	case "refresh_token":
 		stored, ok := idp.refreshes[r.PostForm.Get("refresh_token")]
 		if !ok {
@@ -187,6 +232,21 @@ func (idp *IdP) token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		claims, withRefresh = stored, true
+		if stored["obo"] == true {
+			// as Entra: an OBO refresh names its resource again; one for another resource, or none, is refused
+			// here (Entra could answer for another resource, which the service would refuse anyway)
+			scope := strings.Fields(r.PostForm.Get("scope"))
+			if len(scope) == 0 || strings.TrimSuffix(scope[0], "/.default") != stored["aud"] {
+				deny("invalid_grant", "AADSTS70000: the refresh's scope does not name the token's resource. Trace ID: t-5")
+				return
+			}
+			idp.Refreshed++
+			answer := map[string]any{"access_token": idp.Token(idp.t, claims), "token_type": "Bearer", "expires_in": 300,
+				"refresh_token": r.PostForm.Get("refresh_token")}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(answer)
+			return
+		}
 		idp.Refreshed++
 	default:
 		deny("unsupported_grant_type", "")
@@ -209,6 +269,21 @@ func (idp *IdP) Kill() {
 	idp.mu.Lock()
 	defer idp.mu.Unlock()
 	idp.refreshes = map[string]Claims{}
+}
+
+// audIncludes says whether a token's aud (a string or a list) names want.
+func audIncludes(aud any, want string) bool {
+	switch v := aud.(type) {
+	case string:
+		return v == want
+	case []any:
+		for _, a := range v {
+			if a == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func unverifiedClaims(raw string) (map[string]any, bool) {
