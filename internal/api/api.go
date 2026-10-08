@@ -28,6 +28,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/material"
 	"github.com/hugr-lab/tresor-server/internal/mint"
+	"github.com/hugr-lab/tresor-server/internal/policy"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
@@ -37,13 +38,13 @@ const Protocol = "duckdb-secrets/1"
 // the per-secret verbs, in the protocol's order (specs/009): `use` from a grant to a role or group; the
 // management verbs are the admins'
 var (
-	allVerbs    = []string{"use", "update", "delete", "annotate", "grant"}
-	manageVerbs = []string{"update", "delete", "annotate", "grant"}
+	allVerbs = []string{"use", "update", "delete", "annotate", "grant"}
 )
 
 // Server serves the protocol.
 type Server struct {
 	cfg       *config.Config
+	policy    *policy.Policy // the permission model (internal/policy)
 	verifier  *auth.Verifier
 	store     state.Store
 	log       *slog.Logger
@@ -60,7 +61,7 @@ type Server struct {
 // New wires a server; the verifier and the store are the caller's. It reads the store once, to report
 // grants from before specs/009.
 func New(ctx context.Context, cfg *config.Config, verifier *auth.Verifier, st state.Store, log *slog.Logger, opts ...Option) (*Server, error) {
-	s := &Server{cfg: cfg, verifier: verifier, store: st, log: log, now: time.Now}
+	s := &Server{cfg: cfg, policy: policy.New(cfg.Policy), verifier: verifier, store: st, log: log, now: time.Now}
 	for _, o := range opts {
 		o(s)
 	}
@@ -71,7 +72,7 @@ func New(ctx context.Context, cfg *config.Config, verifier *auth.Verifier, st st
 	// a store from before specs/009 may hold grants the model no longer honours: say so, once, by name
 	for _, sec := range secrets {
 		for _, g := range sec.Grants {
-			if !roleOrGroup(g.Principal) || !slices.Equal(g.Verbs, []string{"use"}) {
+			if !policy.RoleOrGroup(g.Principal) || !slices.Equal(g.Verbs, []string{"use"}) {
 				log.Warn("a grant from before specs/009 is ignored: grants give use to roles and groups only",
 					"secret", sec.Name, "grant", g.ID)
 			}
@@ -308,66 +309,6 @@ func readJSON(r *http.Request, into any) error {
 
 // --- permissions ------------------------------------------------------------------------------------
 
-func (s *Server) isAdmin(c *auth.Caller) bool {
-	return slices.ContainsFunc(s.cfg.Policy.Admins, c.Has)
-}
-
-// verbs is what the caller may do with sec (specs/009): `use` when a grant names one of its roles or groups,
-// and the management verbs for an admin (an admin role implies no `use`). Under a delegation grant `use` is
-// the ACTOR's (a user gets nothing beyond what the server was granted), and a management verb passes only
-// for a user who is an admin, when the actor policy lists it - administration through a duckdb-acl node.
-func (s *Server) verbs(c *auth.Caller, sec *state.Secret) []string {
-	out := []string{} // a list, never null
-	if c.Actor != "" {
-		allowed := s.actorVerbs(c.Actor, c.ActorIssuer)
-		if slices.Contains(allowed, "use") && usable(sec, c.ActorPrincipals) {
-			out = append(out, "use")
-		}
-		// administration through a server: the user's own admin role, and the verbs the policy lets it pass on
-		if s.isAdmin(c) {
-			for _, v := range manageVerbs {
-				if slices.Contains(allowed, v) {
-					out = append(out, v)
-				}
-			}
-		}
-		return out
-	}
-	if usable(sec, c.Principals) {
-		out = append(out, "use")
-	}
-	if s.isAdmin(c) {
-		out = append(out, manageVerbs...)
-	}
-	return out
-}
-
-// usable: a grant gives `use` to one of these principals - a role: or group: grant only. A grant a store kept
-// from before specs/009 (to a subject: or a client:, or of other verbs) gives nothing: it is reported at
-// start and ignored.
-func usable(sec *state.Secret, principals []string) bool {
-	for _, g := range sec.Grants {
-		if roleOrGroup(g.Principal) && slices.Contains(g.Verbs, "use") && slices.Contains(principals, g.Principal) {
-			return true
-		}
-	}
-	return false
-}
-
-func roleOrGroup(p string) bool {
-	role, isRole := strings.CutPrefix(p, "role:")
-	group, isGroup := strings.CutPrefix(p, "group:")
-	return (isRole && role != "") || (isGroup && group != "")
-}
-
-// mayCreate: only admins create - through a server too, when the actor policy lists `create`.
-func (s *Server) mayCreate(c *auth.Caller, name string) bool {
-	if !s.isAdmin(c) {
-		return false
-	}
-	return c.Actor == "" || slices.Contains(s.actorVerbs(c.Actor, c.ActorIssuer), "create")
-}
-
 // visible fetches a secret the caller holds any verb on (under a grant: the actor's use, an admin's management
 // through it); an invisible one is the same 404 as a missing one, so a name's existence does not leak. A secret
 // that does not verify (the Kubernetes store) is 500 to an administrator only: no one else can be shown to hold
@@ -375,7 +316,7 @@ func (s *Server) mayCreate(c *auth.Caller, name string) bool {
 func (s *Server) visible(w http.ResponseWriter, r *http.Request, c *auth.Caller, name string) (*state.Secret, []string, bool) {
 	ns, kind := s.of(r)
 	sec, err := ns.Describe(r.Context(), name) // no material: a permission needs none
-	if errors.Is(err, keys.ErrSealed) && !s.isAdmin(c) {
+	if errors.Is(err, keys.ErrSealed) && !s.policy.IsAdmin(c) {
 		s.log.Error("store read failed", kind, name, "error", err.Error())
 		err = state.ErrNotFound
 	}
@@ -384,7 +325,7 @@ func (s *Server) visible(w http.ResponseWriter, r *http.Request, c *auth.Caller,
 		return nil, nil, false
 	}
 	if err == nil {
-		verbs := s.verbs(c, sec)
+		verbs := s.policy.Verbs(c, sec)
 		if len(verbs) > 0 {
 			return sec, verbs, true
 		}
@@ -464,7 +405,7 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
 	c := callerOf(r)
 	// only admins create (specs/009) - through a server only if its actor policy lists create
-	create := s.mayCreate(c, "")
+	create := s.policy.MayCreate(c)
 	roles := []string{}
 	for _, p := range c.Principals {
 		if !strings.HasPrefix(p, "subject:") {
@@ -526,7 +467,7 @@ func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
 		if typ != "" && !strings.EqualFold(sec.Type, typ) {
 			continue
 		}
-		if verbs := s.verbs(c, sec); len(verbs) > 0 {
+		if verbs := s.policy.Verbs(c, sec); len(verbs) > 0 {
 			out = append(out, descriptor(sec, verbs))
 		}
 	}
@@ -765,7 +706,7 @@ func (s *Server) upsert(w http.ResponseWriter, r *http.Request, name string, cre
 	saved, err := ns.Update(r.Context(), name, func(current *state.Secret) (*state.Secret, error) {
 		refused, isNew = nil, false // fn may run again, on a fresher secret (state.Store)
 		if current == nil {
-			if !s.mayCreate(c, name) {
+			if !s.policy.MayCreate(c) {
 				kind := "no_verb"
 				if c.Actor != "" {
 					kind = "actor_not_allowed"
@@ -779,8 +720,8 @@ func (s *Server) upsert(w http.ResponseWriter, r *http.Request, name string, cre
 			isNew = true
 			return created(), nil
 		}
-		verbs := s.verbs(c, current)
-		if len(verbs) == 0 || (!slices.Contains(verbs, "update") && !s.mayCreate(c, name)) {
+		verbs := s.policy.Verbs(c, current)
+		if len(verbs) == 0 || (!slices.Contains(verbs, "update") && !s.policy.MayCreate(c)) {
 			// invisible, or not ours to create: the same answer as for a missing name the caller may not
 			// create - neither tells that the name exists
 			kind := "no_verb"
@@ -827,7 +768,7 @@ func (s *Server) upsert(w http.ResponseWriter, r *http.Request, name string, cre
 			status = http.StatusCreated
 			o.event.Detail = "created"
 		}
-		writeJSON(w, status, s.describe(r, saved, s.verbs(c, saved)))
+		writeJSON(w, status, s.describe(r, saved, s.policy.Verbs(c, saved)))
 	}
 }
 
@@ -851,7 +792,7 @@ func (s *Server) mutate(w http.ResponseWriter, r *http.Request, verb string,
 			missing = true
 			return nil, state.ErrNotFound
 		}
-		verbs := s.verbs(c, current)
+		verbs := s.policy.Verbs(c, current)
 		if len(verbs) == 0 {
 			missing = true
 			return nil, state.ErrNotFound
@@ -875,7 +816,7 @@ func (s *Server) mutate(w http.ResponseWriter, r *http.Request, verb string,
 		problem(w, http.StatusPreconditionFailed, "precondition_failed", "the entry changed: If-Match not met")
 	case errors.Is(err, state.ErrNotFound):
 		problem(w, http.StatusNotFound, "not_found", "no such grant")
-	case errors.Is(err, keys.ErrSealed) && !s.isAdmin(c) && !errors.Is(err, errInvalid):
+	case errors.Is(err, keys.ErrSealed) && !s.policy.IsAdmin(c) && !errors.Is(err, errInvalid):
 		// a secret that does not verify, to a caller who cannot be shown to hold a verb on it: as missing
 		s.log.Error("store write failed", kind, name, "error", err.Error())
 		problem(w, http.StatusNotFound, "not_found", fmt.Sprintf("no %s %q", kind, name))
@@ -916,7 +857,7 @@ func (s *Server) patchSecret(w http.ResponseWriter, r *http.Request) {
 	})
 	if ok {
 		observed(r).event.Version = saved.Version
-		writeJSON(w, http.StatusOK, s.describe(r, saved, s.verbs(callerOf(r), saved)))
+		writeJSON(w, http.StatusOK, s.describe(r, saved, s.policy.Verbs(callerOf(r), saved)))
 	}
 }
 
@@ -1010,13 +951,4 @@ func (s *Server) deleteGrant(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		w.WriteHeader(http.StatusNoContent)
 	}
-}
-
-func validPrincipal(p string) bool {
-	for _, prefix := range []string{"role:", "group:", "subject:", "client:"} {
-		if strings.HasPrefix(p, prefix) && len(p) > len(prefix) {
-			return true
-		}
-	}
-	return false
 }

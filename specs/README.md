@@ -28,3 +28,4 @@ Research lives in the local, gitignored `design/` folder.
 | [012](012-aws-gcp/spec.md) | phase 4 - AWS and GCP: KMS as the KEK, Secrets Manager and Secret Manager as sources, no static secret | accepted |
 | [013](013-entra-on-behalf-of/spec.md) | Entra On-Behalf-Of for `token_exchange` secrets: `exchange.grant: on_behalf_of` | implemented |
 | [014](014-sql-mac/spec.md) | a MAC on the SQL stores: `state.mac`, who may use what authenticated | implemented |
+| [015](015-policy-package/spec.md) | `internal/policy`: the permission model in a package of its own (a refactor) | implemented |

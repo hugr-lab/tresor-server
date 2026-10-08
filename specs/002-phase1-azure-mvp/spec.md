@@ -593,7 +593,7 @@ fails it).
 
 ## Follow-ups
 
-- `internal/policy` out of `internal/api`.
+- `internal/policy` out of `internal/api`. Done: spec 015.
 - OpenTelemetry traces and the audit (spec 001). Done: spec 005.
 - A database password as a `ref+azkv://` reference. Done: `state.password_ref` (spec 003; `ref+vault` in
   007, named sources in 008).

@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/hugr-lab/tresor-server/internal/auth"
-	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
@@ -96,22 +95,6 @@ func (s *Server) loadGrant(ctx context.Context, id string) (*grant, error) {
 	return gr, nil
 }
 
-// actorVerbs is what the policy lets this server (its client: principal, from this issuer) do for users;
-// nil when it may not act at all.
-func (s *Server) actorVerbs(client, issuer string) []string {
-	for _, a := range s.cfg.Policy.Actors {
-		if client != "" && a.Principal == client &&
-			(a.Issuer == "" || config.IssuerKey(a.Issuer) == config.IssuerKey(issuer)) {
-			return a.Verbs
-		}
-	}
-	return nil
-}
-
-func (s *Server) actorAllowed(client, issuer string) bool {
-	return len(s.actorVerbs(client, issuer)) > 0
-}
-
 // delegated resolves the Delegation header: the effective caller - the user's identity, with Actor set and
 // the actor's own principals for every permission check - or an error that is always unauthenticated to the
 // client: a grant presented by anyone but its actor is no grant.
@@ -145,7 +128,7 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := actor.Client()
-	if !actor.Service || !s.actorAllowed(client, actor.Issuer) {
+	if !actor.Service || !s.policy.ActorAllowed(client, actor.Issuer) {
 		problem(w, http.StatusForbidden, "actor_not_allowed", "this caller may not act for users")
 		return
 	}
@@ -188,7 +171,7 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// the user's tokens for what the server may mint (specs/010): now, while the subject token lives
-	mayMint := slices.Contains(s.actorVerbs(client, actor.Issuer), "use")
+	mayMint := slices.Contains(s.policy.ActorVerbs(client, actor.Issuer), "use")
 	var minted map[string]mintResult
 	if mayMint {
 		minted = s.mintAtGrant(r.Context(), user, body.SubjectToken, actor)
@@ -242,7 +225,7 @@ func (s *Server) revokeGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, subject := r.URL.Query().Get("actor"), r.URL.Query().Get("subject")
-	if s.isAdmin(c) {
+	if s.policy.IsAdmin(c) {
 		if actor == "" && subject == "" {
 			problem(w, http.StatusUnprocessableEntity, "invalid_secret", "name an actor or a subject to revoke")
 			return
@@ -268,7 +251,7 @@ func (s *Server) revokeGrant(w http.ResponseWriter, r *http.Request) {
 		grantStoreProblem(w, err, "the grant could not be read")
 		return
 	}
-	if gr == nil || c.Actor != "" || (gr.actorOwner != c.Owner() && !s.isAdmin(c)) {
+	if gr == nil || c.Actor != "" || (gr.actorOwner != c.Owner() && !s.policy.IsAdmin(c)) {
 		problem(w, http.StatusNotFound, "not_found", "no such delegation grant")
 		return
 	}

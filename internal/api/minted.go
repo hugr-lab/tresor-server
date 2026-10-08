@@ -21,6 +21,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/mint"
+	"github.com/hugr-lab/tresor-server/internal/policy"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
@@ -251,7 +252,7 @@ func (s *Server) mintAtGrant(ctx context.Context, user *auth.Caller, subject str
 	}
 	targets := map[string][2]string{}
 	for _, listed := range secrets {
-		if isMinted(listed) && usable(listed, actor.Principals) {
+		if isMinted(listed) && policy.Usable(listed, actor.Principals) {
 			sec, err := s.store.Get(ctx, listed.Name) // a list carries no params: the audience is in them
 			if err != nil {
 				s.log.Error("store read failed", "secret", listed.Name, "error", err.Error())
