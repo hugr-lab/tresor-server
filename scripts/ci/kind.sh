@@ -6,6 +6,8 @@
 #   - PostgreSQL in the cluster, its password from a Kubernetes Secret (state.password_ref: ref+k8s).
 #   - OpenBao in the cluster: Kubernetes auth with a projected token, the KEK in Transit, ref+vault, the
 #     Kubernetes store; a second OpenBao as a named source (ref+bao2).
+#   - Keycloak 26.6 in the cluster: the service's exchange client authenticated by its projected ServiceAccount
+#     token (federated client authentication), a token minted by exchange.
 # Each is checked through the protocol (scripts/ci/kindcheck). Needs docker, kind, kubectl, helm, go, openssl.
 #
 #   scripts/ci/kind.sh            # TRESOR_KIND_KEEP=1 keeps the cluster afterwards
@@ -336,6 +338,114 @@ move --set localKEK.previousSecretName=
 forward tresor-move m-tresor-server
 "$work/kindcheck" kept "$work/idp" "$issuer" "http://127.0.0.1:$port"
 echo "kind: the KEK moved: read under the old KEK as previous, rewrapped, read under OpenBao alone"
+
+echo "kind: Keycloak's federated client authentication (spec 006): the service's exchange client logged in by its"
+echo "kind: projected ServiceAccount token, a Kubernetes identity provider in Keycloak - no client secret"
+kc_admin_secret="$(openssl rand -hex 16)"
+kc_caller_secret="$(openssl rand -hex 16)"
+kc_issuer=https://keycloak.kc.svc:8443/realms/tresor
+ca_cert kc keycloak.kc.svc
+kubectl create namespace kc
+kubectl -n kc create secret tls kc-tls --cert "$work/kc.crt" --key "$work/kc.key"
+KC_ADMIN_SECRET="$kc_admin_secret" KC_CALLER_SECRET="$kc_caller_secret" python3 - "$work/realm.json" <<'PY'
+import json, os, sys
+aud = lambda name, audience: {"name": name, "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+                              "config": {"included.client.audience": audience, "access.token.claim": "true"}}
+caller = lambda cid, secret: {"clientId": cid, "secret": secret, "publicClient": False, "standardFlowEnabled": False,
+                              "serviceAccountsEnabled": True, "protocolMappers": [aud("aud", "duckdb-secrets")]}
+realm = {
+    "realm": "tresor", "enabled": True,
+    "roles": {"realm": [{"name": "secrets_admin"}, {"name": "analysts"}]},
+    # the cluster's service-account issuer: Keycloak reads its keys with its own ServiceAccount token
+    "identityProviders": [{"alias": "k8s", "providerId": "kubernetes", "enabled": True,
+                           "config": {"issuer": "https://kubernetes.default.svc.cluster.local"}}],
+    "clients": [
+        # the service's exchange client: no secret, its ServiceAccount's token is its credential
+        {"clientId": "duckdb-secrets", "publicClient": False, "standardFlowEnabled": False, "serviceAccountsEnabled": False,
+         "clientAuthenticatorType": "federated-jwt",
+         "attributes": {"jwt.credential.issuer": "k8s", "jwt.credential.sub": "system:serviceaccount:tresor-kc:k-tresor-server",
+                        "standard.token.exchange.enabled": "true"},
+         "protocolMappers": [aud("aud", "lake-api")]},
+        caller("ci-admin", os.environ["KC_ADMIN_SECRET"]),
+        caller("ci-caller", os.environ["KC_CALLER_SECRET"]),
+        {"clientId": "lake-api", "publicClient": False, "standardFlowEnabled": False},
+    ],
+    "users": [
+        {"username": "service-account-ci-admin", "enabled": True, "serviceAccountClientId": "ci-admin", "realmRoles": ["secrets_admin"]},
+        {"username": "service-account-ci-caller", "enabled": True, "serviceAccountClientId": "ci-caller", "realmRoles": ["analysts"]},
+    ],
+}
+json.dump(realm, open(sys.argv[1], "w"))
+PY
+kubectl -n kc create configmap kc-realm --from-file=realm.json="$work/realm.json"
+rm -f "$work/realm.json"
+kubectl apply -f - <<'YAML'
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: keycloak, namespace: kc}
+---
+# Keycloak reads the cluster's service-account issuer (discovery, keys) with its own token
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: kc-issuer-discovery}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:service-account-issuer-discovery}
+subjects: [{kind: ServiceAccount, name: keycloak, namespace: kc}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: keycloak, namespace: kc}
+spec:
+  selector: {matchLabels: {app: keycloak}}
+  template:
+    metadata: {labels: {app: keycloak}}
+    spec:
+      serviceAccountName: keycloak
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.6.4
+          args: [start-dev, --import-realm, --https-port=8443, --https-certificate-file=/tls/tls.crt,
+                 --https-certificate-key-file=/tls/tls.key, --hostname=https://keycloak.kc.svc:8443,
+                 --truststore-paths=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt]
+          env: [{name: KC_BOOTSTRAP_ADMIN_USERNAME, value: admin}, {name: KC_BOOTSTRAP_ADMIN_PASSWORD, value: unused-here}]
+          ports: [{containerPort: 8443}]
+          readinessProbe: {httpGet: {path: /realms/tresor, port: 8443, scheme: HTTPS}, periodSeconds: 5, failureThreshold: 60}
+          resources: {requests: {cpu: 100m, memory: 512Mi}}
+          volumeMounts:
+            - {name: tls, mountPath: /tls, readOnly: true}
+            - {name: realm, mountPath: /opt/keycloak/data/import, readOnly: true}
+      volumes:
+        - {name: tls, secret: {secretName: kc-tls}}
+        - {name: realm, configMap: {name: kc-realm}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: keycloak, namespace: kc}
+spec: {selector: {app: keycloak}, ports: [{port: 8443, targetPort: 8443}]}
+YAML
+if ! kubectl -n kc rollout status deploy/keycloak --timeout 300s; then
+	kubectl -n kc logs deploy/keycloak --tail 80 || true
+	exit 1
+fi
+install k tresor-kc --set config.state.kind=kubernetes \
+	--set exchangeToken.enabled=true --set exchangeToken.audience="$kc_issuer" --set exchangeToken.expirationSeconds=600 \
+	--set-json 'config.issuers=[{"issuer":"'"$kc_issuer"'","audience":"duckdb-secrets","roles_claim":"realm_access.roles","exchange":{"client_id":"duckdb-secrets","client_auth":"file","assertion_file":"/var/run/tresor/idp-token/token"}}]'
+forward tresor-kc k-tresor-server
+tresor_port="$port"
+kubectl -n kc port-forward svc/keycloak :8443 >"$work/kc.forward" &
+pids+=($!)
+kc_port=""
+for _ in $(seq 30); do
+	kc_port="$(sed -n 's/^Forwarding from 127.0.0.1:\([0-9]*\) .*/\1/p' "$work/kc.forward" | head -1)"
+	[ -n "$kc_port" ] && break
+	sleep 1
+done
+if ! KC_ADMIN_SECRET="$kc_admin_secret" KC_CALLER_SECRET="$kc_caller_secret" \
+	"$work/kindcheck" kc "$work/ca.crt" "https://127.0.0.1:$kc_port" "http://127.0.0.1:$tresor_port"; then
+	kubectl -n kc logs deploy/keycloak --tail 60 | grep -iE "warn|error|client" || true
+	kubectl -n tresor-kc logs -l app.kubernetes.io/instance=k --tail 40 || true
+	exit 1
+fi
+echo "kind: Keycloak minted by exchange, the service authenticated by its ServiceAccount token"
 
 echo "kind: the Kubernetes store's namespace deleted: the namespace controller deletes its resources"
 # the policy stays (cluster-scoped): a namespace that would not delete would hang here
