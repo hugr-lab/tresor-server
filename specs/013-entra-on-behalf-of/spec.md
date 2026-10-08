@@ -1,6 +1,6 @@
 # Spec 013: Entra On-Behalf-Of for `token_exchange` secrets
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-08
 - **Author**: hugr lab
 
@@ -93,6 +93,13 @@ gets Entra's refusal, mapped as `invalid_grant`: OBO is for users.
   - a test user's token for the service; a `token_exchange` secret read: a token minted by OBO, for the user, for
     the downstream API - the service holding no secret.
   This also settles spec 006's open question on the managed identity as a federated credential.
+- **Run 2026-10-08** (`scripts/dev/aca_live.sh` with `TRESOR_LIVE_OBO=1`, then `scripts/dev/obo_live.sh`), the
+  owner's tenant, northeurope (westeurope refused new resources for the subscription): a person signed in by
+  device code, read a `token_exchange` secret, and got a token Entra minted by On-Behalf-Of for them (`oid`), for
+  the downstream API (`aud`) - the service authenticated by its user-assigned managed identity as the app
+  registration's federated credential, no secret. Before the consent had propagated, Entra answered
+  `AADSTS65001` (after accepting the client's assertion). Everything was deleted afterwards: the resource groups,
+  the downstream app, the federated credential and the delegated grant.
 
 ## Alternatives considered
 

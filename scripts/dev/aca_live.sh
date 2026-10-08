@@ -27,9 +27,13 @@ up() {
 	local database="${1:-sqlserver}"
 	echo "aca_live: deploying the recipe ($database) into $rg - several minutes"
 	az group create -n "$rg" -l "$location" -o none
+	# TRESOR_LIVE_OBO=1 (scripts/dev/obo_live.sh): the service mints token_exchange secrets by Entra's On-Behalf-Of,
+	# its managed identity the app registration's federated credential - no secret (spec 013)
+	local exchange=""
+	[ -n "${TRESOR_LIVE_OBO:-}" ] && exchange=", exchange: {client_id: '$ENTRA_API_CLIENT_ID', client_auth: azure, grant: on_behalf_of}"
 	az deployment group create -g "$rg" -n "$deployment" -f "$root/deploy/azure-container-apps/main.bicep" -o none \
 		-p database="$database" \
-		-p issuers="[{issuer: '$issuer', audience: '$ENTRA_API_CLIENT_ID', client_id: '$ENTRA_PEOPLE_CLIENT_ID', scopes: [openid, offline_access, '$ENTRA_API_URI/access_as_user'], human_flows: [authorization_code, device_code], service_flows: [client_credentials, private_key_jwt], roles_claim: roles, service: {claim: idtyp, equals: app, client_claim: azp}}]" \
+		-p issuers="[{issuer: '$issuer', audience: '$ENTRA_API_CLIENT_ID', client_id: '$ENTRA_PEOPLE_CLIENT_ID', scopes: [openid, offline_access, '$ENTRA_API_URI/access_as_user'], human_flows: [authorization_code, device_code], service_flows: [client_credentials, private_key_jwt], roles_claim: roles, service: {claim: idtyp, equals: app, client_claim: azp}$exchange}]" \
 		-p admins="[role:secrets_admin, 'client:$ENTRA_NODE_CLIENT_ID']"
 }
 
