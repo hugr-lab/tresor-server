@@ -3,8 +3,8 @@ package sqlstore
 import (
 	"encoding/json"
 	"errors"
-	"strings"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
