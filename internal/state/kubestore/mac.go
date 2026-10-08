@@ -1,7 +1,7 @@
 package kubestore
 
 import (
-	"encoding/binary"
+	"github.com/hugr-lab/tresor-server/internal/state/canon"
 )
 
 // The specs of the custom resources. What is not sealed is authenticated by a MAC (spec 003) under a data key:
@@ -79,112 +79,73 @@ type keyringSpec struct {
 	MAC       []byte `json:"mac,omitempty"`
 }
 
-// canon is the canonical encoding a MAC is over: the format and the kind first, the installation's id, then
-// every field length-prefixed and every list count-prefixed, absent told from empty.
-type canon []byte
-
-func newCanon(k kind, instance string) *canon {
-	c := canon("tresor-server/mac/1\x00")
-	c.str(k.name)
-	c.str(instance)
-	return &c
-}
-
-func (c *canon) str(s string) { c.bytes([]byte(s)) }
-
-func (c *canon) bytes(b []byte) {
-	if b == nil {
-		*c = append(*c, 0)
-		return
-	}
-	*c = append(*c, 1)
-	*c = binary.BigEndian.AppendUint64(*c, uint64(len(b)))
-	*c = append(*c, b...)
-}
-
-func (c *canon) i64(n int64) { *c = binary.BigEndian.AppendUint64(*c, uint64(n)) }
-
-// count opens a list: absent (nil) or n entries.
-func (c *canon) count(isNil bool, n int) {
-	if isNil {
-		*c = append(*c, 0)
-		return
-	}
-	*c = append(*c, 1)
-	*c = binary.BigEndian.AppendUint64(*c, uint64(n))
-}
-
-func (c *canon) strs(ss []string) {
-	c.count(ss == nil, len(ss))
-	for _, s := range ss {
-		c.str(s)
-	}
-}
+// newCanon starts a record's canonical encoding (the shared one: package canon).
+func newCanon(k kind, instance string) *canon.Canon { return canon.New(k.name, instance) }
 
 // canonical is a secret's (k: TresorSecret) or a variable's (TresorVariable): the kind keeps one from verifying
 // as the other.
 func (s *secretSpec) canonical(k kind, instance string) []byte {
 	c := newCanon(k, instance)
-	c.str(s.Name)
-	c.str(s.RowID)
-	c.str(s.Type)
-	c.str(s.Provider)
-	c.strs(s.Scope)
-	c.strs(s.RedactKeys)
-	c.str(s.Comment)
-	c.str(s.Owner)
-	c.i64(s.Version)
-	c.i64(s.CreatedAt)
-	c.i64(s.UpdatedAt)
-	c.count(s.Grants == nil, len(s.Grants))
+	c.Str(s.Name)
+	c.Str(s.RowID)
+	c.Str(s.Type)
+	c.Str(s.Provider)
+	c.Strs(s.Scope)
+	c.Strs(s.RedactKeys)
+	c.Str(s.Comment)
+	c.Str(s.Owner)
+	c.I64(s.Version)
+	c.I64(s.CreatedAt)
+	c.I64(s.UpdatedAt)
+	c.Count(s.Grants == nil, len(s.Grants))
 	for _, g := range s.Grants {
-		c.str(g.ID)
-		c.str(g.Principal)
-		c.strs(g.Verbs)
+		c.Str(g.ID)
+		c.Str(g.Principal)
+		c.Strs(g.Verbs)
 	}
-	c.str(s.DataKeyID)
-	c.bytes(s.Sealed)
+	c.Str(s.DataKeyID)
+	c.Bytes(s.Sealed)
 	return *c
 }
 
 func (g *grantSpec) canonical(instance string) []byte {
 	c := newCanon(kindGrant, instance)
-	c.bytes(g.IDHash)
-	c.str(g.ActorOwner)
-	c.str(g.ActorClient)
-	c.str(g.ActorIssuer)
-	c.str(g.UserOwner)
-	c.str(g.User)
-	c.i64(g.ExpiresAt)
-	c.i64(g.SubjectExpiresAt)
-	c.str(g.DataKeyID)
-	c.bytes(g.SubjectSealed)
+	c.Bytes(g.IDHash)
+	c.Str(g.ActorOwner)
+	c.Str(g.ActorClient)
+	c.Str(g.ActorIssuer)
+	c.Str(g.UserOwner)
+	c.Str(g.User)
+	c.I64(g.ExpiresAt)
+	c.I64(g.SubjectExpiresAt)
+	c.Str(g.DataKeyID)
+	c.Bytes(g.SubjectSealed)
 	return *c
 }
 
 func (t *tokenSpec) canonical(instance string) []byte {
 	c := newCanon(kindToken, instance)
-	c.bytes(t.IDHash)
-	c.bytes(t.Key)
-	c.i64(t.Version)
-	c.str(t.Failed)
-	c.str(t.DataKeyID)
-	c.bytes(t.Sealed)
+	c.Bytes(t.IDHash)
+	c.Bytes(t.Key)
+	c.I64(t.Version)
+	c.Str(t.Failed)
+	c.Str(t.DataKeyID)
+	c.Bytes(t.Sealed)
 	return *c
 }
 
 func (a *actorSpec) canonical(instance string) []byte {
 	c := newCanon(kindActor, instance)
-	c.str(a.ActorOwner)
-	c.i64(a.Counter)
-	c.str(a.DataKeyID)
+	c.Str(a.ActorOwner)
+	c.I64(a.Counter)
+	c.Str(a.DataKeyID)
 	return *c
 }
 
 func (k *keyringSpec) canonical(instance string) []byte {
 	c := newCanon(kindKeyring, instance)
-	c.str(installationName)
-	c.str(k.Instance)
-	c.str(k.DataKeyID)
+	c.Str(installationName)
+	c.Str(k.Instance)
+	c.Str(k.DataKeyID)
 	return *c
 }

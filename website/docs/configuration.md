@@ -89,6 +89,7 @@ Where the service keeps secrets, grants and delegation grants. See [State stores
 | `state.auth` | `entra` (the service's Azure token), `aws` (an RDS IAM token; [AWS](aws.md#the-database-rds-iam-authentication)), `gcp` (Cloud SQL IAM; [GCP](gcp.md#the-database-cloud-sql-iam-database-authentication)) - PostgreSQL - or `password`. |
 | `state.password_env`, `state.password_file`, `state.password_ref` | `auth: password`: where the password is - one of them. `password_ref` is `ref+k8s://…`, `ref+azkv://…`, `ref+vault://…`, `ref+aws://…`, `ref+gcp://…` or a named source's, outside every `material` allowlist (every source of its kind). |
 | `state.max_open_conns` | The connection pool; default 10. |
+| `state.mac` | SQL stores: check every row's MAC - who may use what cannot change without the KEK (spec 014). Default `false`; see [State](state.md#the-sql-stores-mac-statemac) to turn it on. |
 | `state.namespace` | Kubernetes: where the resources are. The pod's own by default; required outside a pod. |
 | `state.instance` | Kubernetes: the installation's id, in every MAC. The namespace by default; keep it stable. |
 

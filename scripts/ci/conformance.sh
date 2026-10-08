@@ -56,6 +56,7 @@ postgres | sqlserver)
 	db_run="$("$work/testdb" create "$kind" "$db_admin")"
 	trap '"$work/testdb" drop "$kind" "$db_admin" "$db_run" || true; rm -rf "$work"' EXIT
 	export TRESOR_STATE__DSN="$db_run" TRESOR_STATE__AUTH=password TRESOR_STATE__PASSWORD_ENV="$password_var"
+	export TRESOR_STATE__MAC=true # spec 014: every row's MAC checked
 	export TRESOR_KEYS__KIND=local TRESOR_KEYS__KEY_ENV=TRESOR_TEST_KEK
 	TRESOR_TEST_KEK="$(openssl rand -base64 32)"
 	export TRESOR_TEST_KEK
@@ -63,6 +64,7 @@ postgres | sqlserver)
 sqlite)
 	# a database of this run's, sealed under a local KEK made for it
 	export TRESOR_STATE__PATH="$work/tresor.db" TRESOR_KEYS__KIND=local TRESOR_KEYS__KEY_ENV=TRESOR_TEST_KEK
+	export TRESOR_STATE__MAC=true # spec 014: every row's MAC checked
 	TRESOR_TEST_KEK="$(openssl rand -base64 32)"
 	export TRESOR_TEST_KEK
 	;;

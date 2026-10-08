@@ -87,6 +87,33 @@ azure: {identity: managed}
 - Compared texts are `COLLATE Latin1_General_100_BIN2`: the default collation compares without case, and
   names are compared exactly.
 
+## The SQL stores' MAC (`state.mac`)
+
+The material is sealed, but the columns around it - a secret's type and scope, its **grants**, a delegation
+grant's actor and user, a minted token's failure - are plain. Whoever can write the database (a DBA, a stolen
+database credential) could add a grant row, and the service would serve the material to that role. With
+`state.mac: true` every such row carries a MAC under a data key, which only the KEK's holder can make (spec 014):
+
+```yaml
+state:
+  kind: postgres
+  mac: true
+```
+
+- **A row that does not verify** is refused: a read fails, a list leaves it out (`tresor.state.left_out`,
+  logged), only a delete passes. Never served, never trusted silently.
+- **The MAC is written always**, whatever the setting; the setting turns the checks on.
+- **Turning it on, at an upgrade**: rows written before have none. Once, right after the upgrade:
+
+  ```bash
+  tresor-server mac -config server.yaml     # the rows as they are now get a MAC: you vouch for the database
+  ```
+
+  then `state.mac: true`, and deploy. Minted tokens with none are dropped (they are minted again).
+- **What it does not stop**: deleting rows, or putting a whole old row back (a rollback) - as on the Kubernetes
+  store.
+- **Rotation**: `rewrap` and a move to another KEK keep the data keys, and so every MAC.
+
 ## Kubernetes
 
 ```yaml

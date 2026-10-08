@@ -31,7 +31,14 @@ func kek(t *testing.T, b byte) keys.KeyWrapper {
 
 func openAt(t *testing.T, path string, w keys.KeyWrapper) *Store {
 	t.Helper()
-	s, err := OpenSQLite(ctx, path, w, Options{})
+	return openWith(t, path, w, Options{MAC: true})
+}
+
+// openWith opens with options: Options{} for a store that checks no MAC (spec 014's setting off) - the AAD's own
+// tests, where a MAC would refuse the row before its sealed value is tried
+func openWith(t *testing.T, path string, w keys.KeyWrapper, opts Options) *Store {
+	t.Helper()
+	s, err := OpenSQLite(ctx, path, w, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +92,7 @@ func TestSealedAtRest(t *testing.T) {
 // that secret, never an empty value; the list still answers
 func TestSealedFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tresor.db")
-	s := openAt(t, path, kek(t, 1))
+	s := openWith(t, path, kek(t, 1), Options{})
 	put(t, s, "a", "one")
 	put(t, s, "b", "two")
 	// b's sealed params copied onto a: the AAD names another row and name
@@ -305,7 +312,7 @@ func TestRefLogin(t *testing.T) {
 
 // a secret's sealed params copied into a variable's row (spec 004) do not open: the namespace is in the AAD
 func TestNamespaceInAAD(t *testing.T) {
-	s := openAt(t, filepath.Join(t.TempDir(), "tresor.db"), kek(t, 1))
+	s := openWith(t, filepath.Join(t.TempDir(), "tresor.db"), kek(t, 1), Options{})
 	put(t, s, "lake", "material")
 	if _, err := s.db.Exec(`INSERT INTO variables SELECT * FROM secrets WHERE name = 'lake'`); err != nil {
 		t.Fatal(err)

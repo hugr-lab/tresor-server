@@ -69,6 +69,9 @@ type State struct {
 	// must be outside material's allowlists: an administrator must not be able to read it.
 	PasswordRef  string `yaml:"password_ref"`
 	MaxOpenConns int    `yaml:"max_open_conns"`
+	// MAC checks every row's MAC on a SQL store (spec 014): who may use what cannot change without the KEK. The
+	// MAC is written always; tresor-server mac fills the rows written before.
+	MAC bool `yaml:"mac"`
 	// Namespace is where the kubernetes store keeps its resources: the pod's own by default; outside a pod
 	// (KUBECONFIG) required.
 	Namespace string `yaml:"namespace"`
@@ -732,6 +735,10 @@ func (c *Config) validate() error {
 	}
 	if err := c.State.validateServer(c.Azure.Identity, c.AWS.Region != ""); err != nil {
 		return err
+	}
+	if c.State.MAC && c.State.Kind != "sqlite" && c.State.Kind != "postgres" && c.State.Kind != "sqlserver" {
+		return fmt.Errorf("state.mac is for the SQL stores: %s %s", c.State.Kind,
+			map[bool]string{true: "always has one (spec 003)", false: "keeps nothing at rest"}[c.State.Kind == "kubernetes"])
 	}
 	if c.State.Kind != "kubernetes" && (c.State.Namespace != "" || c.State.Instance != "") {
 		return fmt.Errorf("state: namespace and instance are for kubernetes, not %s", c.State.Kind)

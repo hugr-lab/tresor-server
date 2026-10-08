@@ -37,7 +37,10 @@ type Store struct {
 	migrated *atomic.Bool
 	closed   *atomic.Bool
 	ns       namespace
-	vars     *Store // spec 004: the variables' namespace, on the same database
+	vars     *Store        // spec 004: the variables' namespace, on the same database
+	inst     *installation // spec 014: the database's id, in every MAC (shared with the variables' store)
+	checkMAC bool          // spec 014: rows' MACs checked (state.mac); written always
+	readOnly bool
 
 	// beforeWrite, in tests, runs between fn and the compare-and-set: another writer's moment.
 	beforeWrite func()
@@ -50,6 +53,8 @@ type Options struct {
 	// ReadOnly opens for reading only (tresor-server refs, spec 009): no migration - a schema that is not this
 	// binary's is refused - and no lease, beside a replica that serves; SQLite's connection is query_only.
 	ReadOnly bool
+	// MAC checks every row's MAC (spec 014: state.mac): a row with none, or a wrong one, is refused.
+	MAC bool
 }
 
 // open wires a store over db: the envelope, the lease where the dialect needs one, the migrations. On a
@@ -59,7 +64,8 @@ func open(ctx context.Context, db *sql.DB, d Dialect, wrapper keys.KeyWrapper, o
 	if opts.Log == nil {
 		opts.Log = slog.New(slog.DiscardHandler)
 	}
-	s := &Store{db: db, d: d, log: opts.Log, migrated: &atomic.Bool{}, closed: &atomic.Bool{}, ns: secretsNS}
+	s := &Store{db: db, d: d, log: opts.Log, migrated: &atomic.Bool{}, closed: &atomic.Bool{}, ns: secretsNS,
+		inst: &installation{}, checkMAC: opts.MAC, readOnly: opts.ReadOnly}
 	s.envelope = keys.NewEnvelope(wrapper, dataKeys{s}, opts.Keys)
 	defer s.linkVariables() // after the lease: the variables' store shares it
 	if opts.ReadOnly {
@@ -142,20 +148,36 @@ func (s *Store) ready() error {
 // Envelope is the store's envelope: its Check is the KEK's readiness.
 func (s *Store) Envelope() *keys.Envelope { return s.envelope }
 
-// row is a secret as stored, its params still sealed.
+// row is a secret as stored, its params still sealed; the columns' text kept as stored, for its MAC.
 type row struct {
-	sec       state.Secret
-	rowID     string
-	dataKeyID string
-	sealed    []byte
+	sec                        state.Secret
+	rowID                      string
+	dataKeyID                  string
+	sealed                     []byte
+	scopeText, redactText      string
+	createdMicro, updatedMicro int64
+	grantRows                  []grantRow
+	mac                        []byte
+}
+
+type grantRow struct{ id, principal, verbs string }
+
+// canonical is the row's MAC's message (spec 014).
+func (s *Store) canonical(r *row) func(string) []byte {
+	return func(instance string) []byte { return rowCanon(s.ns, instance, r) }
+}
+
+// verified checks a row's MAC (when the store checks them): what does not verify is ErrSealed.
+func (s *Store) verified(ctx context.Context, r *row) error {
+	return s.verify(ctx, "secret "+r.sec.Name, r.dataKeyID, s.canonical(r), r.mac)
 }
 
 // selectSecrets reads secrets with their grants in one statement: one snapshot, the grants in their order.
 const selectSecrets = `SELECT s.name, s.row_id, s.type, s.provider, s.scope, s.redact_keys, s.comment, s.owner,
-	s.version, s.created_at, s.updated_at, s.data_key_id, s.sealed, g.id, g.principal, g.verbs
+	s.version, s.created_at, s.updated_at, s.data_key_id, s.sealed, s.mac, g.id, g.principal, g.verbs
 	FROM {entries} s LEFT JOIN {grants} g ON g.secret = s.name`
 
-const secretColumns = `name, row_id, type, provider, scope, redact_keys, comment, owner, version, created_at, updated_at, data_key_id, sealed`
+const secretColumns = `name, row_id, type, provider, scope, redact_keys, comment, owner, version, created_at, updated_at, data_key_id, sealed, mac`
 
 // query reads secrets (one, when name is set), in name order.
 func (s *Store) query(ctx context.Context, name string) ([]*row, error) {
@@ -171,22 +193,20 @@ func (s *Store) query(ctx context.Context, name string) ([]*row, error) {
 	var out []*row
 	for rows.Next() {
 		var r row
-		var scope, redact string
-		var created, updated int64
 		var gID, gPrincipal, gVerbs sql.NullString
-		if err := rows.Scan(&r.sec.Name, &r.rowID, &r.sec.Type, &r.sec.Provider, &scope, &redact, &r.sec.Comment,
-			&r.sec.Owner, &r.sec.Version, &created, &updated, &r.dataKeyID, &r.sealed,
+		if err := rows.Scan(&r.sec.Name, &r.rowID, &r.sec.Type, &r.sec.Provider, &r.scopeText, &r.redactText, &r.sec.Comment,
+			&r.sec.Owner, &r.sec.Version, &r.createdMicro, &r.updatedMicro, &r.dataKeyID, &r.sealed, &r.mac,
 			&gID, &gPrincipal, &gVerbs); err != nil {
 			return nil, err
 		}
 		if n := len(out); n == 0 || out[n-1].sec.Name != r.sec.Name {
-			if err := json.Unmarshal([]byte(scope), &r.sec.Scope); err != nil {
+			if err := json.Unmarshal([]byte(r.scopeText), &r.sec.Scope); err != nil {
 				return nil, fmt.Errorf("secret %s: scope: %w", r.sec.Name, err)
 			}
-			if err := json.Unmarshal([]byte(redact), &r.sec.RedactKeys); err != nil {
+			if err := json.Unmarshal([]byte(r.redactText), &r.sec.RedactKeys); err != nil {
 				return nil, fmt.Errorf("secret %s: redact_keys: %w", r.sec.Name, err)
 			}
-			r.sec.CreatedAt, r.sec.UpdatedAt = time.UnixMicro(created).UTC(), time.UnixMicro(updated).UTC()
+			r.sec.CreatedAt, r.sec.UpdatedAt = time.UnixMicro(r.createdMicro).UTC(), time.UnixMicro(r.updatedMicro).UTC()
 			out = append(out, &r)
 		}
 		if gID.Valid {
@@ -196,6 +216,7 @@ func (s *Store) query(ctx context.Context, name string) ([]*row, error) {
 			}
 			last := out[len(out)-1]
 			last.sec.Grants = append(last.sec.Grants, g)
+			last.grantRows = append(last.grantRows, grantRow{gID.String, gPrincipal.String, gVerbs.String})
 		}
 	}
 	return out, rows.Err()
@@ -218,6 +239,9 @@ func (s *Store) paramsAAD(rowID, name string, version int64) []byte {
 
 // opened is a row's secret with its params open.
 func (s *Store) opened(ctx context.Context, r *row) (*state.Secret, error) {
+	if err := s.verified(ctx, r); err != nil {
+		return nil, err
+	}
 	plain, err := s.envelope.Open(ctx, r.dataKeyID, s.paramsAAD(r.rowID, r.sec.Name, r.sec.Version), r.sealed)
 	if err != nil {
 		return nil, fmt.Errorf("secret %s: its params: %w", r.sec.Name, err)
@@ -239,10 +263,19 @@ func (s *Store) List(ctx context.Context) ([]*state.Secret, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*state.Secret, len(rows))
-	for i, r := range rows {
+	out := make([]*state.Secret, 0, len(rows))
+	for _, r := range rows {
+		if err := s.verified(ctx, r); errors.Is(err, keys.ErrSealed) {
+			// one bad row never fails a list (as the Kubernetes store): left out, and logged
+			telemetry.Add(ctx, telemetry.StateLeftOut, attribute.String("kind", s.ns.entries))
+			s.log.Error("a row was changed behind the store: left out", "table", s.ns.entries, "name", r.sec.Name,
+				"error", err.Error())
+			continue
+		} else if err != nil {
+			return nil, err
+		}
 		sec := r.sec // no params: a list opens no material
-		out[i] = &sec
+		out = append(out, &sec)
 	}
 	return out, nil
 }
@@ -257,6 +290,9 @@ func (s *Store) Describe(ctx context.Context, name string) (*state.Secret, error
 	}
 	if r == nil {
 		return nil, state.ErrNotFound
+	}
+	if err := s.verified(ctx, r); err != nil {
+		return nil, err
 	}
 	sec := r.sec
 	return &sec, nil
@@ -368,16 +404,27 @@ func (s *Store) write(ctx context.Context, r *row, next *state.Secret) (bool, er
 	}
 	scope, _ := json.Marshal(next.Scope)
 	redact, _ := json.Marshal(next.RedactKeys)
+	// the row as it will be stored, for its MAC (spec 014): under the data key its params are sealed with
+	written := &row{sec: *next, rowID: rowID, dataKeyID: dataKeyID, sealed: sealed, scopeText: string(scope),
+		redactText: string(redact), createdMicro: next.CreatedAt.UnixMicro(), updatedMicro: next.UpdatedAt.UnixMicro()}
+	for _, g := range next.Grants {
+		verbs, _ := json.Marshal(g.Verbs)
+		written.grantRows = append(written.grantRows, grantRow{g.ID, g.Principal, string(verbs)})
+	}
+	mac, err := s.macOf(ctx, dataKeyID, s.canonical(written))
+	if err != nil {
+		return false, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
 	args := []any{next.Type, next.Provider, string(scope), string(redact), next.Comment, next.Owner, next.Version,
-		next.CreatedAt.UnixMicro(), next.UpdatedAt.UnixMicro(), dataKeyID, sealed}
+		next.CreatedAt.UnixMicro(), next.UpdatedAt.UnixMicro(), dataKeyID, sealed, mac}
 	if r == nil {
 		_, err := tx.ExecContext(ctx, s.q(`INSERT INTO {entries} (`+secretColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), append([]any{next.Name, rowID}, args...)...)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), append([]any{next.Name, rowID}, args...)...)
 		if s.d.Unique(err) {
 			return false, nil // created by another writer meanwhile
 		}
@@ -386,7 +433,7 @@ func (s *Store) write(ctx context.Context, r *row, next *state.Secret) (bool, er
 		}
 	} else {
 		res, err := tx.ExecContext(ctx, s.q(`UPDATE {entries} SET type = ?, provider = ?, scope = ?, redact_keys = ?,
-			comment = ?, owner = ?, version = ?, created_at = ?, updated_at = ?, data_key_id = ?, sealed = ?
+			comment = ?, owner = ?, version = ?, created_at = ?, updated_at = ?, data_key_id = ?, sealed = ?, mac = ?
 			WHERE name = ? AND version = ? AND row_id = ?`), append(args, next.Name, r.sec.Version, r.rowID)...)
 		if err != nil {
 			return false, err
@@ -398,10 +445,9 @@ func (s *Store) write(ctx context.Context, r *row, next *state.Secret) (bool, er
 			return false, err
 		}
 	}
-	for i, g := range next.Grants {
-		verbs, _ := json.Marshal(g.Verbs)
+	for i, g := range written.grantRows {
 		if _, err := tx.ExecContext(ctx, s.q(`INSERT INTO {grants} (secret, id, position, principal, verbs)
-			VALUES (?, ?, ?, ?, ?)`), next.Name, g.ID, i, g.Principal, string(verbs)); err != nil {
+			VALUES (?, ?, ?, ?, ?)`), next.Name, g.id, i, g.principal, g.verbs); err != nil {
 			return false, err
 		}
 	}

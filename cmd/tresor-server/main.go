@@ -83,6 +83,8 @@ func main() {
 		run = func(configPath string, log *slog.Logger) error { return rewrap(configPath, inv.tagUntagged, log) }
 	case "refs":
 		run = func(configPath string, log *slog.Logger) error { return refs(configPath, inv.resolve, os.Stdout, log) }
+	case "mac":
+		run = fillMACs
 	}
 	if err := run(inv.configPath, log); err != nil {
 		if errors.Is(err, errFindings) {
@@ -103,7 +105,7 @@ type invocation struct {
 // parseArgs reads [rewrap | refs] and the flags; an error is a usage error (exit 2).
 func parseArgs(args []string) (invocation, error) {
 	inv := invocation{command: "serve"}
-	if len(args) > 0 && (args[0] == "rewrap" || args[0] == "refs") {
+	if len(args) > 0 && (args[0] == "rewrap" || args[0] == "refs" || args[0] == "mac") {
 		inv.command, args = args[0], args[1:]
 	}
 	flags := flag.NewFlagSet("tresor-server "+inv.command, flag.ContinueOnError)
@@ -162,6 +164,37 @@ func rewrap(configPath string, tagUntagged bool, log *slog.Logger) error {
 	return nil
 }
 
+// fillMACs gives every row of a SQL store with no MAC one (spec 014: tresor-server mac), once, after the
+// upgrade and before state.mac is turned on: the operator vouches for the database as it is.
+func fillMACs(configPath string, log *slog.Logger) error {
+	cfg, _, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	if cfg.State.Kind != "sqlite" && cfg.State.Kind != "postgres" && cfg.State.Kind != "sqlserver" {
+		return fmt.Errorf("state.kind %s: tresor-server mac is for the SQL stores", cfg.State.Kind)
+	}
+	if cfg.State.Kind == "sqlite" {
+		if _, err := os.Stat(cfg.State.Path); err != nil {
+			return fmt.Errorf("state.path: %w", err)
+		}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	cfg.State.MAC = false // the rows with none are read, to be filled
+	st, _, err := openState(ctx, cfg, log, false)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	n, err := st.(*sqlstore.Store).FillMACs(ctx)
+	if err != nil {
+		return err
+	}
+	log.Info("rows given a MAC: set state.mac: true now", "count", n)
+	return nil
+}
+
 // openState opens the configured store, and the readiness checks it brings (the KEK's). readOnly (refs, spec
 // 009): a SQL store neither migrated nor leased; the Kubernetes store writes nothing at its open anyway.
 func openState(ctx context.Context, cfg *config.Config, log *slog.Logger, readOnly bool) (state.Store, []health.Check, error) {
@@ -174,7 +207,7 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger, readOn
 			return nil, nil, err
 		}
 		st, err := sqlstore.OpenSQLite(ctx, cfg.State.Path, wrapper, sqlstore.Options{Log: log,
-			Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}, ReadOnly: readOnly})
+			Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}, ReadOnly: readOnly, MAC: cfg.State.MAC})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -193,7 +226,7 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger, readOn
 			return nil, nil, err
 		}
 		st, err := open(ctx, cfg.State.DSN, login, cfg.State.MaxOpenConns, wrapper, sqlstore.Options{
-			Log: log, Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}, ReadOnly: readOnly})
+			Log: log, Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}, ReadOnly: readOnly, MAC: cfg.State.MAC})
 		if err != nil {
 			return nil, nil, err
 		}

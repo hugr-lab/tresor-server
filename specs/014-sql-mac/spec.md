@@ -1,6 +1,6 @@
 # Spec 014: a MAC on the SQL stores - who may use what, authenticated
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-08
 - **Author**: hugr lab
 
@@ -40,15 +40,18 @@ state:
 
 ### What the MAC covers
 
-The Kubernetes store's canonical forms (`internal/state/kubestore/mac.go`), shared, so one encoding is reviewed
-once:
+The Kubernetes store's canonical encoding (`internal/state/canon`, moved there byte for byte, checked against the
+old one), over the columns **as stored** - a JSON column's text, a time's microseconds - so a write and a read
+encode the same bytes:
 
 | Row | Covered |
 | --- | --- |
 | a secret or a variable | its name, kind (secret or variable), row id, type, provider, scope, redact keys, comment, owner, version, times, **its grants (id, principal, verbs) in order**, the data key id, the sealed bytes |
 | a delegation grant | id hash, actor (owner, client, issuer), user (owner, JSON), expiries, data key id, the sealed subject |
-| a minted token | the grant's id hash, the key (audience, scope), version, failure, data key id, sealed bytes |
+| a minted token | the grant's id hash, the key's column (its hash: the AAD names the key itself), version, failure, data key id, sealed bytes |
 
+- **A row with nothing sealed** (a delegation grant with no subject token, a minted token that failed) gets the
+  active data key for its MAC, named in its key column.
 - **Under a data key** (HMAC-SHA-256 with a key derived from it, as spec 003): the data key's own tag authenticates
   it under the KEK's root, so a MAC proves the row was written by the service.
 - **The installation**: a random id made at the migration, in a `installation` row, is part of every MAC: a row
@@ -67,21 +70,20 @@ once:
 ### Turning it on
 
 1. The migration (`0006_mac`) adds a nullable `mac` column to `secrets`, `variables`, `delegations`,
-   `delegation_tokens`, and the `installation` row. It runs at the upgrade, whatever the setting.
+   `delegation_tokens`, and the `installation` table (its row made by the first store that needs it). From the
+   upgrade on, **every write carries a MAC, whatever the setting**: the setting turns the checks on.
 2. `tresor-server mac -config …` (like `rewrap -tag-untagged`): computes the MAC of every row that has none -
-   the operator vouches for the database as it is, once - and logs how many. It refuses to run with
-   `state.mac: false`.
-3. Set `state.mac: true`; deploy. From then on every write has a MAC and every read checks it; a row with no MAC
-   is refused like a wrong one.
+   the operator vouches for the database as it is, once - and logs how many. Minted tokens with none are dropped
+   instead: they are caches, minted again.
+3. Set `state.mac: true`; deploy. Every read checks; a row with no MAC is refused like a wrong one.
 
-Turning it off again (`false`) stops checking and writing MACs; the column stays. Back on, `tresor-server mac`
-fills the rows written meanwhile.
+Turning it off again stops the checks only; back on, nothing needs filling (writes kept their MACs).
 
 ### Rotation
 
-- **A row's MAC is under the row's own data key** - the one its material is sealed with (`data_key_id`). A grant's
-  change recomputes the MAC under that key, with no re-sealing; a row moves to the active data key only when its
-  material is written again (a replace).
+- **A row's MAC is under the row's own data key** - the one its material is sealed with (`data_key_id`). On the
+  SQL stores every write of a secret (a grant's change too) seals its material again under the active data key,
+  and the MAC follows it.
 - **The KEK's rotation and a move to another KEK** (`rewrap`, spec 011) rewrap the data keys and keep them: every
   MAC stays valid, nothing is recomputed (as on the Kubernetes store).
 - **A data key retired by age** keeps verifying its rows: it stays stored, as it must for their sealed values.
