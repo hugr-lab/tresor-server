@@ -36,6 +36,11 @@ Every way but `secret` needs no secret of the service's own (spec 006).
   - A new one is made for each request: an IdP may refuse a `jti` it has seen.
 - **No assertion, no request**: if the service cannot make one, the mint fails (`503`). It never falls back
   to a secret or to no authentication.
+- **The client refused**: when the IdP refuses the service's own client (`invalid_client`,
+  `unauthorized_client`: a secret wrong or expired, a federated credential that does not match, an app not found
+  or not allowed to exchange), the read answers `503`, and the log has an error with the IdP's code and
+  description. Nothing is kept in a delegation grant: once the configuration is fixed, the next read mints
+  (spec 017).
 - **Readiness** has a check `exchange <issuer>` per issuer: it makes an assertion. A failure there is
   *degraded*, not unready: only `token_exchange` secrets depend on it.
 

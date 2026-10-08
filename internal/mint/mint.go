@@ -108,6 +108,19 @@ func (e *Error) Error() string {
 	return e.Code + ": " + e.Description
 }
 
+// ClientRefused: the IdP does not accept the service's own client (spec 017) - a secret wrong or expired, a
+// federated credential that does not match, an app not found or not allowed to exchange. The operator's to fix:
+// it says nothing of the user.
+func (e *Error) ClientRefused() bool {
+	return e.Code == "invalid_client" || e.Code == "unauthorized_client"
+}
+
+// IsClientRefused: err is the IdP refusing the service's own client.
+func IsClientRefused(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.ClientRefused()
+}
+
 // IsInvalidGrant: the refresh token (or the subject token) is dead - the user's IdP session ended.
 func IsInvalidGrant(err error) bool {
 	var e *Error

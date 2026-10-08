@@ -183,6 +183,14 @@ func unavailableMint(detail string) *mintProblem {
 	return &mintProblem{http.StatusServiceUnavailable, "service_unavailable", detail}
 }
 
+// clientRefused is the IdP refusing the service's own client (spec 017): the service's problem, an error in its
+// log with the IdP's word (no token in it), and a 503 that names none of it - nothing is kept in a grant.
+func (s *Server) clientRefused(issuer string, err error) *mintProblem {
+	s.log.Error("the identity provider refused the service's own client: its exchange configuration", "issuer", issuer,
+		"reason", err.Error())
+	return unavailableMint("the identity provider does not accept the service's own client (its configuration)")
+}
+
 // storeMintProblem is a store failure under a grant: a token that does not open is 500 service_error (an
 // operator acts), anything else 503 (try later).
 func storeMintProblem(err error, detail string) *mintProblem {
@@ -288,6 +296,8 @@ func (s *Server) mintAtGrant(ctx context.Context, user *auth.Caller, subject str
 			switch {
 			case err == nil:
 				results[key] = mintResult{token: token}
+			case mint.IsClientRefused(err):
+				s.clientRefused(user.Issuer, err) // logged; minted lazily, as after an outage
 			case isRefusal(err):
 				results[key] = mintResult{failed: err.Error()} // the IdP's word, redacted; outages retried lazily
 				fallthrough
@@ -312,10 +322,11 @@ func exchangeForGrant(ctx context.Context, client *mint.Client, subject, audienc
 	return token, err
 }
 
-// isRefusal: the IdP answered no (a lasting refusal), as opposed to not answering (an outage).
+// isRefusal: the IdP answered no (a lasting refusal), as opposed to not answering (an outage) or refusing the
+// service's own client (its configuration, spec 017).
 func isRefusal(err error) bool {
 	var e *mint.Error
-	return errors.As(err, &e) && !e.Transient()
+	return errors.As(err, &e) && !e.Transient() && !e.ClientRefused()
 }
 
 // mintedToken is the token a minted secret's material carries for this request's caller, or the problem.
@@ -345,6 +356,9 @@ func (s *Server) mintedToken(r *http.Request, c *auth.Caller, sec *state.Secret)
 		err = s.checkMinted(token, audience)
 	}
 	s.auditMint(r.Context(), c, nil, audience, "minted", err)
+	if mint.IsClientRefused(err) {
+		return nil, s.clientRefused(c.Issuer, err)
+	}
 	if err != nil {
 		s.log.Warn("minting for the caller failed", "caller", c.Owner(), "audience", audience, "reason", err.Error())
 		if isRefusal(err) || strings.Contains(err.Error(), "minted a token") {
@@ -413,6 +427,9 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 				if _, _, now, rerr := s.loadMinted(ctx, gr.idHash, key); rerr == nil && now != version {
 					continue // another replica renewed it meanwhile (and spent the refresh token): take its
 				}
+				if mint.IsClientRefused(err) {
+					return nil, s.clientRefused(gr.user.Issuer, err) // the refresh token was not spent: kept
+				}
 				if mint.IsInvalidGrant(err) {
 					next = mintResult{failed: sessionEnded}
 					break
@@ -447,6 +464,9 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 				err = s.checkMinted(minted, audience)
 			}
 			s.auditMint(ctx, callerOf(r), nil, audience, "minted", err)
+			if mint.IsClientRefused(err) {
+				return nil, s.clientRefused(gr.user.Issuer, err)
+			}
 			if err != nil {
 				s.log.Warn("minting for the grant's user failed", "user", gr.user.Owner(), "audience", audience,
 					"reason", err.Error())

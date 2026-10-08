@@ -1,6 +1,6 @@
 # Spec 017: the service's own client refused by the IdP - the service's problem, not the caller's
 
-- **Status**: draft
+- **Status**: implemented
 - **Date**: 2026-10-08
 - **Author**: hugr lab
 

@@ -43,7 +43,10 @@ type IdP struct {
 	ClientKeys map[string]any
 	// NoRefreshByExchange: no refresh token by exchange, as ZITADEL (an access token only).
 	NoRefreshByExchange bool
-	seenJTI             map[string]bool
+	// UnauthorizedClient: the service's client is not allowed to exchange (Entra's app not found, Keycloak's
+	// token-exchange permission missing; spec 017)
+	UnauthorizedClient bool
+	seenJTI            map[string]bool
 }
 
 // The service's exchange client at this IdP (specs/010).
@@ -157,6 +160,10 @@ func (idp *IdP) token(w http.ResponseWriter, r *http.Request) {
 	idp.LastForm = r.PostForm
 	if !idp.clientAuthentic(r.PostForm) {
 		deny("invalid_client", "bad client")
+		return
+	}
+	if idp.UnauthorizedClient {
+		deny("unauthorized_client", "AADSTS700016: Application with identifier 'app-7f3a' was not found in the directory")
 		return
 	}
 	var claims Claims

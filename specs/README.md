@@ -29,4 +29,4 @@ Research lives in the local, gitignored `design/` folder.
 | [013](013-entra-on-behalf-of/spec.md) | Entra On-Behalf-Of for `token_exchange` secrets: `exchange.grant: on_behalf_of` | implemented |
 | [014](014-sql-mac/spec.md) | a MAC on the SQL stores: `state.mac`, who may use what authenticated | implemented |
 | [015](015-policy-package/spec.md) | `internal/policy`: the permission model in a package of its own (a refactor) | implemented |
-| [017](017-service-client-refused/spec.md) | the service's own client refused by the IdP: `503`, never stored in a grant | draft |
+| [017](017-service-client-refused/spec.md) | the service's own client refused by the IdP: `503`, never stored in a grant | implemented |
