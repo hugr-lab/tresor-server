@@ -1,6 +1,6 @@
 # Spec 014: a MAC on the SQL stores - who may use what, authenticated
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-08
 - **Author**: hugr lab
 
@@ -79,8 +79,16 @@ fills the rows written meanwhile.
 
 ### Rotation
 
-A MAC is under a data key: `rewrap` (and spec 011's move) keeps the data keys, so it keeps every MAC. A data key
-retired by age keeps verifying its rows (it stays stored, as for the sealed values).
+- **A row's MAC is under the row's own data key** - the one its material is sealed with (`data_key_id`). A grant's
+  change recomputes the MAC under that key, with no re-sealing; a row moves to the active data key only when its
+  material is written again (a replace).
+- **The KEK's rotation and a move to another KEK** (`rewrap`, spec 011) rewrap the data keys and keep them: every
+  MAC stays valid, nothing is recomputed (as on the Kubernetes store).
+- **A data key retired by age** keeps verifying its rows: it stays stored, as it must for their sealed values.
+- **Delegation grants and minted tokens** live hours: they are written under the active data key and purged.
+- **The installation's id** never rotates; a backup restored elsewhere carries it.
+- **A data key compromised** lets its holder read and forge the rows under it - MAC or not; rotation by age
+  protects new rows only. Re-sealing every row under the active data key is a follow-up (below).
 
 ## Enforcement & security
 
@@ -114,3 +122,5 @@ retired by age keeps verifying its rows (it stays stored, as for the sealed valu
 
 - `state.mac: true` by default in a major version.
 - Rollback detection (a monotonic counter under the KEK, or an append-only log) - for both stores.
+- Re-sealing: every row's material and MAC moved to the active data key (a command), so old data keys can be
+  retired - for both stores, encryption and MAC alike.
