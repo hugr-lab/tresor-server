@@ -170,6 +170,7 @@ The service's client at the issuer, for `token_exchange` secrets. See [Token exc
 | `key`, `key_file` | `keyvault`: a Key Vault key URL. `vault`: a Transit key, `<mount>/<key>` (needs `vault`). `key_file`: ZITADEL's key file or a PEM key. `awskms`: an asymmetric KMS key's ARN (needs `aws`). `gcpkms`: an asymmetric key's version. |
 | `kid`, `x5t` | What the JWT's header names the key by (`kid`; `x5t` for Entra's certificates). |
 | `assertion_audience` | `issuer` (default) or `token_endpoint` (Entra). |
+| `omit_client_id` | `file` only: leave `client_id` out of the request - Keycloak's federated client authentication refuses a `client_id` that is not the assertion's `sub`. `client_id` then names the client in the console only. |
 
 **Roles from an object**: a `roles_claim` or `groups_claim` that is an object gives its keys (ZITADEL's
 `urn:zitadel:iam:org:project:roles`). An issuer whose claim points at an object used to get nothing, and now

@@ -168,8 +168,10 @@ issuers:
 
 ## Open questions
 
-- Keycloak's federated client authentication for Kubernetes tokens: the Keycloak version where it is
-  supported (not a preview), and its realm set-up, are checked before (b) is built.
+- ~~Keycloak's federated client authentication for Kubernetes tokens: the version where it is supported~~:
+  Keycloak 26.6 (a preview before). Settled 2026-10-08: kind runs it in CI (`scripts/ci/kind.sh`) - an
+  identity provider of type `kubernetes`, the client's `federated-jwt` authenticator, a token minted by
+  exchange with the service's projected ServiceAccount token as its only credential.
 - Whether Entra accepts a managed identity as a federated credential in every cloud (sovereign clouds).
 
 ## Alternatives considered

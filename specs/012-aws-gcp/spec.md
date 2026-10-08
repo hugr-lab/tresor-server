@@ -101,7 +101,8 @@ keys:
 2. **(b) GCP**: `gcp:` identity, `gcpkms` KEK, `ref+gcp`, `state.auth: gcp`, `client_auth: gcpkms`; tests with
    fakes of the two APIs (no emulator exists for Cloud KMS or Secret Manager); CRC32C checked on every call; the
    chart's GKE annotation.
-3. **(c) Docs and live runs**: an AWS page (EKS, IRSA, RDS) and a GCP page (GKE, WI, Cloud SQL); one live run on
+3. **(c) Docs and live runs** (deferred by the owner, 2026-10-08, to the end of the remaining work: money
+   is spent last): an AWS page (EKS, IRSA, RDS) and a GCP page (GKE, WI, Cloud SQL); one live run on
    each cloud, by hand, with the owner's agreement on the resources and their deletion afterwards.
 
 ## Enforcement & security

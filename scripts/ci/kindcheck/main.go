@@ -4,6 +4,9 @@
 //	kindcheck smoke <dir> <issuer> <url> [<ref> <value>]
 //	kindcheck keep <dir> <issuer> <url>    # a secret written and granted, kept (spec 011: a KEK move)
 //	kindcheck kept <dir> <issuer> <url>    # that secret still read, its material whole
+//	kindcheck kc <ca> <keycloak> <url>     # a token minted by Keycloak's exchange, the service authenticated by
+//	                                       # its ServiceAccount token (federated client authentication); the
+//	                                       # clients' secrets in KC_ADMIN_SECRET, KC_CALLER_SECRET
 //	                                       through the protocol: an administrator writes a secret and grants
 //	                                       its use, a user reads it, the administrator deletes it - the service
 //	                                       is up on its store; with a reference, one that reads <value>
@@ -13,13 +16,16 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,8 +48,10 @@ func main() {
 		smoke(os.Args[2], os.Args[3], os.Args[4], os.Args[5], os.Args[6])
 	case len(os.Args) == 5 && (os.Args[1] == "keep" || os.Args[1] == "kept"):
 		keep(os.Args[1] == "keep", os.Args[2], os.Args[3], os.Args[4])
+	case len(os.Args) == 5 && os.Args[1] == "kc":
+		kc(os.Args[2], os.Args[3], os.Args[4])
 	default:
-		log.Fatal("usage: kindcheck issuer <dir> <issuer> | kindcheck smoke|keep|kept <dir> <issuer> <url>")
+		log.Fatal("usage: kindcheck issuer <dir> <issuer> | kindcheck smoke|keep|kept <dir> <issuer> <url> | kindcheck kc <ca> <keycloak> <url>")
 	}
 }
 
@@ -162,6 +170,78 @@ func keep(write bool, dir, iss, url string) {
 		log.Fatal("kindcheck: the kept secret's material did not read")
 	}
 	fmt.Println("kindcheck: the kept secret read, its material whole")
+}
+
+// kc: through the service, a token_exchange secret an administrator wrote and granted, read by a caller - minted
+// by Keycloak's token exchange for the caller, the service logged in at Keycloak with its projected
+// ServiceAccount token (spec 006: client_auth file; Keycloak's federated client authentication, a Kubernetes
+// identity provider). Tokens come from Keycloak itself (client credentials), reached by a port-forward: TLS of
+// the run's CA, the name keycloak.kc.svc.
+func kc(caFile, keycloak, url string) {
+	pemCA, err := os.ReadFile(caFile)
+	must(err)
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(pemCA)
+	kcHTTP := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "keycloak.kc.svc"}}}
+	token := func(client, secret string) string {
+		form := neturl.Values{"grant_type": {"client_credentials"}, "client_id": {client}, "client_secret": {secret}}
+		res, err := kcHTTP.PostForm(strings.TrimSuffix(keycloak, "/")+"/realms/tresor/protocol/openid-connect/token", form)
+		must(err)
+		defer res.Body.Close()
+		var out struct {
+			AccessToken string `json:"access_token"`
+		}
+		if res.StatusCode != 200 || json.NewDecoder(res.Body).Decode(&out) != nil || out.AccessToken == "" {
+			log.Fatalf("kindcheck: Keycloak gave %s no token: %d", client, res.StatusCode)
+		}
+		return out.AccessToken
+	}
+	admin, caller := token("ci-admin", os.Getenv("KC_ADMIN_SECRET")), token("ci-caller", os.Getenv("KC_CALLER_SECRET"))
+	call := func(method, path, tok, body string, want int) string {
+		req, err := http.NewRequest(method, strings.TrimSuffix(url, "/")+path, bytes.NewBufferString(body))
+		must(err)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		must(err)
+		defer res.Body.Close()
+		out, _ := io.ReadAll(res.Body)
+		if res.StatusCode != want {
+			log.Fatalf("kindcheck: %s %s: %d, want %d: %s", method, path, res.StatusCode, want, out)
+		}
+		return string(out)
+	}
+	call("PUT", "/v1/secrets/lake-api", admin, `{"type":"http","provider":"token_exchange","scope":["https://lake.example"],
+		"params":{"audience":"lake-api"},"redact_keys":[]}`, 201)
+	call("PUT", "/v1/secrets/lake-api/grants/analysts", admin, `{"principal":"role:analysts","verbs":["use"]}`, 200)
+	var got struct {
+		Params struct {
+			BearerToken string `json:"bearer_token"`
+		} `json:"params"`
+	}
+	must(json.Unmarshal([]byte(call("GET", "/v1/secrets/lake-api", caller, "", 200)), &got))
+	parts := strings.Split(got.Params.BearerToken, ".")
+	if len(parts) != 3 || got.Params.BearerToken == caller {
+		log.Fatal("kindcheck: no token minted for the caller")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	must(err)
+	type claims struct {
+		Aud any    `json:"aud"`
+		Azp string `json:"azp"`
+		Sub string `json:"sub"`
+	}
+	var minted, of claims
+	must(json.Unmarshal(payload, &minted))
+	callerPayload, err := base64.RawURLEncoding.DecodeString(strings.Split(caller, ".")[1])
+	must(err)
+	must(json.Unmarshal(callerPayload, &of))
+	// for the caller, by the service's client (no secret: federated), for the downstream API
+	if !strings.Contains(fmt.Sprint(minted.Aud), "lake-api") || minted.Azp != "duckdb-secrets" || minted.Sub == "" || minted.Sub != of.Sub {
+		log.Fatalf("kindcheck: the minted token: aud %v, azp %s, for the caller %v", minted.Aud, minted.Azp, minted.Sub == of.Sub)
+	}
+	call("DELETE", "/v1/secrets/lake-api", admin, "", 204)
+	fmt.Println("kindcheck: a token minted by Keycloak's exchange, the service logged in with its ServiceAccount token")
 }
 
 func must(err error) {

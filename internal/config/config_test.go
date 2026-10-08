@@ -689,3 +689,21 @@ func TestGCPConfig(t *testing.T) {
 		t.Error("client_auth: gcpkms with a key, not a version: accepted")
 	}
 }
+
+// omit_client_id is file's only: Entra and the signed assertions name the client by client_id
+func TestOmitClientID(t *testing.T) {
+	ok := strings.Replace(good, "audience: duckdb-secrets", "audience: duckdb-secrets\n    exchange: {client_id: c, client_auth: file, assertion_file: /t, omit_client_id: true}", 1)
+	if _, err := Parse([]byte(ok)); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TRESOR_TEST_EXCHANGE_SECRET", "s")
+	for name, ex := range map[string]string{
+		"secret": "{client_id: c, client_secret_env: TRESOR_TEST_EXCHANGE_SECRET, omit_client_id: true}",
+		"azure":  "{client_id: c, client_auth: azure, omit_client_id: true}",
+	} {
+		doc := strings.Replace(good, "audience: duckdb-secrets", "audience: duckdb-secrets\n    exchange: "+ex, 1) + "azure: {identity: managed}\n"
+		if _, err := Parse([]byte(doc)); err == nil || !strings.Contains(err.Error(), "omit_client_id") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

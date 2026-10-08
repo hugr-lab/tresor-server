@@ -86,17 +86,27 @@ config:
         client_id: duckdb-secrets
         client_auth: file
         assertion_file: /var/run/tresor/idp-token/token
+        omit_client_id: true    # Keycloak refuses a client_id that is not the assertion's sub
 ```
 
 The chart mounts a projected ServiceAccount token with the audience the IdP expects. The kubelet rotates it,
 and the service reads it at each request.
 
-On Keycloak's side (see its documentation on federated client authentication for Kubernetes service
-accounts):
-- an identity provider trusts the cluster's service-account issuer;
-- that issuer must be reachable from Keycloak, or its JWKS configured;
-- the `duckdb-secrets` client authenticates with it, for the subject
-  `system:serviceaccount:<namespace>:<serviceAccount>`.
+On Keycloak's side: Keycloak 26.6 or later, where federated client authentication with Kubernetes service
+accounts is supported (it was a preview before). CI runs this on kind with Keycloak 26.6.
+
+- **An identity provider** of type `kubernetes` whose `issuer` is the cluster's service-account issuer
+  (`https://kubernetes.default.svc.cluster.local` by default). Keycloak reads its discovery document and keys
+  with its own ServiceAccount token when it runs in the cluster: bind its ServiceAccount to the ClusterRole
+  `system:service-account-issuer-discovery`, and give Keycloak the cluster's CA
+  (`--truststore-paths=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`). Outside the cluster, Keycloak
+  reads the issuer's discovery document and keys with no token: a managed cluster's public issuer (AKS, EKS,
+  GKE publish one), or a self-managed API server whose discovery is open to anonymous reads.
+- **The `duckdb-secrets` client** with the authenticator *Signed JWT - Federated* (`federated-jwt`), the
+  attributes `jwt.credential.issuer` (the identity provider's alias) and `jwt.credential.sub`
+  (`system:serviceaccount:<namespace>:<serviceAccount>`), and standard token exchange enabled. No secret.
+- **The token's audience** is the realm's issuer URL (`exchangeToken.audience`); keep it short-lived
+  (`exchangeToken.expirationSeconds`, 600 at least by Kubernetes).
 
 ## ZITADEL, on a stack with no Azure
 
