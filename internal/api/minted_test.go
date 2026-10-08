@@ -8,13 +8,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/hugr-lab/tresor-server/internal/clientauth"
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/mint"
 	"github.com/hugr-lab/tresor-server/internal/testidp"
-	"strings"
-	"testing"
-	"time"
 )
 
 const mintedSecret = `{"type":"http","provider":"token_exchange","scope":["https://echo.example"],

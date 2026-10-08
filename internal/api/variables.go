@@ -53,7 +53,7 @@ func (s *Server) listVariables(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []map[string]any{}
 	for _, v := range vars {
-		if verbs := s.verbs(c, v); len(verbs) > 0 {
+		if verbs := s.policy.Verbs(c, v); len(verbs) > 0 {
 			out = append(out, variableDescriptor(v, verbs))
 		}
 	}

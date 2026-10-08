@@ -22,6 +22,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/audit"
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/material"
+	"github.com/hugr-lab/tresor-server/internal/policy"
 	"github.com/hugr-lab/tresor-server/internal/refscheck"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
@@ -62,7 +63,7 @@ func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 			problem(w, http.StatusForbidden, "actor_not_allowed", "the console's API is not for a server acting for a user")
 			return
 		}
-		if !s.isAdmin(c) {
+		if !s.policy.IsAdmin(c) {
 			problem(w, http.StatusForbidden, "no_verb", "the console is for administrators")
 			return
 		}
@@ -363,7 +364,7 @@ func (s *Server) adminParams(w http.ResponseWriter, r *http.Request) {
 	o := observed(r)
 	o.event.Version, o.event.Detail = saved.Version, "replaced"
 	w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(saved.Version, 10)))
-	writeJSON(w, http.StatusOK, descriptor(saved, s.verbs(callerOf(r), saved)))
+	writeJSON(w, http.StatusOK, descriptor(saved, s.policy.Verbs(callerOf(r), saved)))
 }
 
 // merged is current with body applied: kept, set (new or replacing), removed; any current parameter the body
@@ -427,7 +428,7 @@ func (s *Server) adminGrants(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, sec := range list {
 			for _, g := range sec.Grants {
-				if !roleOrGroup(g.Principal) || !slices.Contains(g.Verbs, "use") {
+				if !policy.RoleOrGroup(g.Principal) || !slices.Contains(g.Verbs, "use") {
 					continue // ignored since specs/009
 				}
 				counts[g.Principal]++
@@ -436,7 +437,7 @@ func (s *Server) adminGrants(w http.ResponseWriter, r *http.Request) {
 				}
 				others := []string{}
 				for _, o := range sec.Grants {
-					if o.Principal != principal && roleOrGroup(o.Principal) && !slices.Contains(others, o.Principal) {
+					if o.Principal != principal && policy.RoleOrGroup(o.Principal) && !slices.Contains(others, o.Principal) {
 						others = append(others, o.Principal)
 					}
 				}
