@@ -62,7 +62,8 @@ serviceAccount:
 
 # A projected ServiceAccount token for an issuer's exchange (client_auth: file, spec 006): mounted at
 # /var/run/tresor/idp-token/token, with the audience the identity provider expects (Keycloak's federated
-# client authentication). Set the issuer's exchange.assertion_file to that path.
+# client authentication). Set the issuer's exchange.assertion_file to that path (and, for Keycloak,
+# exchange.omit_client_id: true).
 exchangeToken:
   enabled: false
   audience: ""

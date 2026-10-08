@@ -99,8 +99,9 @@ accounts is supported (it was a preview before). CI runs this on kind with Keycl
   (`https://kubernetes.default.svc.cluster.local` by default). Keycloak reads its discovery document and keys
   with its own ServiceAccount token when it runs in the cluster: bind its ServiceAccount to the ClusterRole
   `system:service-account-issuer-discovery`, and give Keycloak the cluster's CA
-  (`--truststore-paths=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`). Outside the cluster, the issuer
-  must be reachable from Keycloak.
+  (`--truststore-paths=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`). Outside the cluster, Keycloak
+  reads the issuer's discovery document and keys with no token: a managed cluster's public issuer (AKS, EKS,
+  GKE publish one), or a self-managed API server whose discovery is open to anonymous reads.
 - **The `duckdb-secrets` client** with the authenticator *Signed JWT - Federated* (`federated-jwt`), the
   attributes `jwt.credential.issuer` (the identity provider's alias) and `jwt.credential.sub`
   (`system:serviceaccount:<namespace>:<serviceAccount>`), and standard token exchange enabled. No secret.

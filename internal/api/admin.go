@@ -81,7 +81,7 @@ func (s *Server) adminService(w http.ResponseWriter, r *http.Request) {
 			entry["client_id"] = is.ClientID
 		}
 		if ex := is.Exchange; ex != nil {
-			entry["exchange"] = map[string]any{"client_id": ex.ClientID, "client_auth": ex.ClientAuth}
+			entry["exchange"] = map[string]any{"client_id": ex.ClientID, "client_auth": ex.ClientAuth, "omit_client_id": ex.OmitClientID}
 		}
 		issuers = append(issuers, entry)
 	}

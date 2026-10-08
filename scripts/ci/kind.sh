@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The chart on a real cluster (spec 003): kind, the image built here, an OIDC issuer and a PostgreSQL behind a
-# CA of this run's. Three installs:
+# CA of this run's. Five installs:
 #   - the Kubernetes store, the admission policy refusing a hand write and letting the garbage collector
 #     delete;
 #   - PostgreSQL in the cluster, its password from a Kubernetes Secret (state.password_ref: ref+k8s).
@@ -377,7 +377,7 @@ realm = {
 }
 json.dump(realm, open(sys.argv[1], "w"))
 PY
-kubectl -n kc create configmap kc-realm --from-file=realm.json="$work/realm.json"
+kubectl -n kc create secret generic kc-realm --from-file=realm.json="$work/realm.json"
 rm -f "$work/realm.json"
 kubectl apply -f - <<'YAML'
 apiVersion: v1
@@ -406,7 +406,6 @@ spec:
           args: [start-dev, --import-realm, --https-port=8443, --https-certificate-file=/tls/tls.crt,
                  --https-certificate-key-file=/tls/tls.key, --hostname=https://keycloak.kc.svc:8443,
                  --truststore-paths=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt]
-          env: [{name: KC_BOOTSTRAP_ADMIN_USERNAME, value: admin}, {name: KC_BOOTSTRAP_ADMIN_PASSWORD, value: unused-here}]
           ports: [{containerPort: 8443}]
           readinessProbe: {httpGet: {path: /realms/tresor, port: 8443, scheme: HTTPS}, periodSeconds: 5, failureThreshold: 60}
           resources: {requests: {cpu: 100m, memory: 512Mi}}
@@ -415,7 +414,7 @@ spec:
             - {name: realm, mountPath: /opt/keycloak/data/import, readOnly: true}
       volumes:
         - {name: tls, secret: {secretName: kc-tls}}
-        - {name: realm, configMap: {name: kc-realm}}
+        - {name: realm, secret: {secretName: kc-realm}}
 ---
 apiVersion: v1
 kind: Service
@@ -436,9 +435,11 @@ pids+=($!)
 kc_port=""
 for _ in $(seq 30); do
 	kc_port="$(sed -n 's/^Forwarding from 127.0.0.1:\([0-9]*\) .*/\1/p' "$work/kc.forward" | head -1)"
-	[ -n "$kc_port" ] && break
+	[ -n "$kc_port" ] && curl -sf --cacert "$work/ca.crt" --resolve "keycloak.kc.svc:$kc_port:127.0.0.1" \
+		"https://keycloak.kc.svc:$kc_port/realms/tresor" >/dev/null && break
 	sleep 1
 done
+[ -n "$kc_port" ] || { echo "kind: Keycloak is not reachable behind a port-forward" >&2; cat "$work/kc.forward" >&2; exit 1; }
 if ! KC_ADMIN_SECRET="$kc_admin_secret" KC_CALLER_SECRET="$kc_caller_secret" \
 	"$work/kindcheck" kc "$work/ca.crt" "https://127.0.0.1:$kc_port" "http://127.0.0.1:$tresor_port"; then
 	kubectl -n kc logs deploy/keycloak --tail 60 | grep -iE "warn|error|client" || true

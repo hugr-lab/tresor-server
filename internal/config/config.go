@@ -1337,8 +1337,9 @@ func (ex *ExchangeClient) validate(identity string, vaultUsed, awsUsed bool) err
 		"awskms":   {"key", "kid", "x5t", "assertion_audience"},
 		"gcpkms":   {"key", "kid", "x5t", "assertion_audience"},
 	}[ex.ClientAuth]
-	if ex.OmitClientID && ex.ClientAuth == "secret" {
-		return errors.New("exchange.omit_client_id is for a client assertion, not client_auth: secret")
+	if ex.OmitClientID && ex.ClientAuth != "file" {
+		return errors.New("exchange.omit_client_id is for client_auth: file (Keycloak's federated client authentication); " +
+			"Entra and the signed assertions name the client by client_id")
 	}
 	for name, on := range set {
 		if on && !slices.Contains(allowed, name) {

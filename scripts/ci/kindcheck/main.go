@@ -226,13 +226,19 @@ func kc(caFile, keycloak, url string) {
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	must(err)
-	var claims struct {
+	type claims struct {
 		Aud any    `json:"aud"`
 		Azp string `json:"azp"`
+		Sub string `json:"sub"`
 	}
-	must(json.Unmarshal(payload, &claims))
-	if !strings.Contains(fmt.Sprint(claims.Aud), "lake-api") || claims.Azp != audience {
-		log.Fatalf("kindcheck: the minted token: aud %v, azp %s", claims.Aud, claims.Azp)
+	var minted, of claims
+	must(json.Unmarshal(payload, &minted))
+	callerPayload, err := base64.RawURLEncoding.DecodeString(strings.Split(caller, ".")[1])
+	must(err)
+	must(json.Unmarshal(callerPayload, &of))
+	// for the caller, by the service's client (no secret: federated), for the downstream API
+	if !strings.Contains(fmt.Sprint(minted.Aud), "lake-api") || minted.Azp != "duckdb-secrets" || minted.Sub == "" || minted.Sub != of.Sub {
+		log.Fatalf("kindcheck: the minted token: aud %v, azp %s, for the caller %v", minted.Aud, minted.Azp, minted.Sub == of.Sub)
 	}
 	call("DELETE", "/v1/secrets/lake-api", admin, "", 204)
 	fmt.Println("kindcheck: a token minted by Keycloak's exchange, the service logged in with its ServiceAccount token")
