@@ -61,3 +61,13 @@ func TestRefusalsNameNoToken(t *testing.T) {
 		t.Fatalf("unreachable, and the error names nothing: %v", err)
 	}
 }
+
+// an IdP's description quoting what was presented: the token goes, ordinary words stay
+func TestRedact(t *testing.T) {
+	if got := redact("the subject token eyJhbGciOi.x.y is not valid", "eyJhbGciOi.x.y"); got != "the subject token <redacted> is not valid" {
+		t.Fatal(got)
+	}
+	if got := redact("the token abc is not valid", "abc"); got != "the token abc is not valid" {
+		t.Fatal(got) // too short to be a credential: not cut out of words
+	}
+}

@@ -186,9 +186,13 @@ func unavailableMint(detail string) *mintProblem {
 // clientRefused is the IdP refusing the service's own client (spec 017): the service's problem, an error in its
 // log with the IdP's word (no token in it), and a 503 that names none of it - nothing is kept in a grant.
 func (s *Server) clientRefused(issuer string, err error) *mintProblem {
+	s.logClientRefused(issuer, err)
+	return unavailableMint("the identity provider does not accept the service's own client (its configuration)")
+}
+
+func (s *Server) logClientRefused(issuer string, err error) {
 	s.log.Error("the identity provider refused the service's own client: its exchange configuration", "issuer", issuer,
 		"reason", err.Error())
-	return unavailableMint("the identity provider does not accept the service's own client (its configuration)")
 }
 
 // storeMintProblem is a store failure under a grant: a token that does not open is 500 service_error (an
@@ -297,7 +301,7 @@ func (s *Server) mintAtGrant(ctx context.Context, user *auth.Caller, subject str
 			case err == nil:
 				results[key] = mintResult{token: token}
 			case mint.IsClientRefused(err):
-				s.clientRefused(user.Issuer, err) // logged; minted lazily, as after an outage
+				s.logClientRefused(user.Issuer, err) // minted lazily, as after an outage
 			case isRefusal(err):
 				results[key] = mintResult{failed: err.Error()} // the IdP's word, redacted; outages retried lazily
 				fallthrough

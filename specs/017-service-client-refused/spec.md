@@ -20,9 +20,11 @@ fixed the configuration. This makes it what it is: `503 service_unavailable`, ne
 
 - **Entra**: `invalid_client` for a client secret that is wrong or expired (AADSTS7000215, 7000222) and for a
   federated credential that does not match the managed identity (AADSTS70021); `unauthorized_client` for an app
-  that is not found or disabled in the tenant (AADSTS700016, 7000112).
+  that is not found or disabled in the tenant (AADSTS700016, 7000112). Also `invalid_client` for a resource not
+  in the app's requested permissions (AADSTS650057): one secret's audience, but the app registration's to fix -
+  503 and not stored, as the rest.
 - **Keycloak**: `invalid_client` for a wrong secret or a client assertion it does not accept; `unauthorized_client`
-  for a client that may not exchange tokens (the token-exchange permission).
+  for a client that may not exchange at all (standard token exchange not enabled for it, a public client).
 - **ZITADEL**: `invalid_client` for a key or an assertion it does not accept.
 
 Each says nothing about the user; each is fixed by the operator, after which every grant should work again.
@@ -63,5 +65,9 @@ outage: `client_auth`, 503.)
 
 - **`invalid_scope`, `invalid_target` too**: those name a secret's parameters (its audience, its scope) - an
   administrator's mistake in one secret, refused for that secret; they stay refusals (403).
+- **Keycloak's per-audience refusals** (`access_denied` "Client not allowed to exchange" from a fine-grained
+  permission, `invalid_request` "Requested audience not available"): the operator's too, but they share their
+  codes with refusals of the user or the request; told apart only by the description's text, which is fragile.
+  They stay refusals (403, kept in a grant): a new session mints once fixed.
 - **Keeping 403 with a better detail**: a client retries 503 and not 403, and the grant's stored refusal is the
   real harm.

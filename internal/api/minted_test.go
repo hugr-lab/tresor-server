@@ -168,6 +168,23 @@ func TestMintedUnderGrant(t *testing.T) {
 	}
 }
 
+// the IdP refuses the user: 403, the IdP's word with what was presented redacted - the user's token is never
+// quoted back
+func TestMintedRefused(t *testing.T) {
+	f := newFixture(t, "")
+	f.do("PUT", "/v1/secrets/echo", f.admin, strings.Replace(mintedSecret, "echo-api", "refused-api", 1))
+	f.do("PUT", "/v1/secrets/echo/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	_, _, r := f.mintedMaterial(f.alice)
+	detail, _ := r.json(t)["detail"].(string)
+	if r.status != 403 || r.problemType(t) != "mint_refused" || !strings.Contains(detail, "invalid_grant") ||
+		!strings.Contains(detail, "<redacted>") || strings.Contains(string(r.body), f.alice) {
+		t.Fatalf("refused: %d %s", r.status, r.body)
+	}
+	if strings.Contains(f.logs.String(), f.alice) {
+		t.Fatal("the user's token reached the log")
+	}
+}
+
 // the IdP refuses the service's own client (spec 017): the service's problem - 503, the IdP's word in the log
 // and not in the answer, nothing kept in a grant; once the operator fixes it, everything mints again
 func TestMintedClientRefused(t *testing.T) {
@@ -186,11 +203,15 @@ func TestMintedClientRefused(t *testing.T) {
 	}
 	good := f.srv.cfg.Issuers[0].Exchange.ClientSecret
 	trail := audited(f, audit.All)
+	t.Cleanup(func() { f.srv.now = time.Now })
 
 	// directly: a wrong secret, then an app the IdP does not know
 	f.srv.cfg.Issuers[0].Exchange.ClientSecret = "wrong"
 	_, _, r := f.mintedMaterial(f.alice)
 	unavailable("directly, a wrong secret", r)
+	if logs := f.logs.String(); !strings.Contains(logs, "level=ERROR") || !strings.Contains(logs, "invalid_client") {
+		t.Fatalf("the log, a wrong secret: %s", logs)
+	}
 	f.srv.cfg.Issuers[0].Exchange.ClientSecret = good
 	f.idp.UnauthorizedClient = true
 	_, _, r = f.mintedMaterial(f.alice)

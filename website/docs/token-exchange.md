@@ -39,8 +39,10 @@ Every way but `secret` needs no secret of the service's own (spec 006).
 - **The client refused**: when the IdP refuses the service's own client (`invalid_client`,
   `unauthorized_client`: a secret wrong or expired, a federated credential that does not match, an app not found
   or not allowed to exchange), the read answers `503`, and the log has an error with the IdP's code and
-  description. Nothing is kept in a delegation grant: once the configuration is fixed, the next read mints
-  (spec 017).
+  description. Nothing is kept in a delegation grant: once the configuration is fixed, the next read mints -
+  for a grant made meanwhile, while its user's token lives (spec 017). A refusal for one audience
+  (Keycloak's `access_denied` "Client not allowed to exchange", `invalid_request` "Requested audience not
+  available") is a refusal of that secret: `403`.
 - **Readiness** has a check `exchange <issuer>` per issuer: it makes an assertion. A failure there is
   *degraded*, not unready: only `token_exchange` secrets depend on it.
 

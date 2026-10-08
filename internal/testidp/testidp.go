@@ -177,6 +177,10 @@ func (idp *IdP) token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		aud := r.PostForm.Get("audience")
+		if aud == "refused-api" { // a lasting refusal of the user, quoting what was presented
+			deny("invalid_grant", "the subject token "+subject+" may not be exchanged for "+aud)
+			return
+		}
 		if aud == "ignored-api" { // an IdP that ignores the audience asked for
 			aud = "somewhere-else"
 		}
