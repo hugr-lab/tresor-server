@@ -50,7 +50,9 @@ h.unmount()
 - **`onUnauthorized()`**: called when the service answers 401 to a request, at most once per 30 seconds. The
   console first calls `getToken(audience, { renew: true })` once and retries the request; only if that is refused
   too is `onUnauthorized` called, and the screen shows "Your session ended" until a request succeeds again. On the
-  element: the `tresor-unauthorized` event.
+  element: the `tresor-unauthorized` event. Requests refused together share one renewal (a rotating refresh token
+  is used once); the 30 seconds are per element, across remounts; a request answered after the console is
+  unmounted tells nothing; refused at the first load, the console shows the same notice, with "Try again".
 - **`getToken(audience, { renew })`**: the second argument is new and optional; a host that ignores it keeps
   working (its token is used again, refused again, and `onUnauthorized` follows).
 - **`locale`**: reserved now, so adding languages later is not a contract change; `'en'` only.

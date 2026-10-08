@@ -20,6 +20,9 @@ export type Locale = (typeof locales)[number]
 
 /** how often onUnauthorized may be called, at most */
 const unauthorizedEvery = 30_000
+// when each element's host was last told: a remount (the element moved, the host signed in by a redirect) does not
+// tell it sooner
+const told = new WeakMap<HTMLElement, number>()
 
 export interface TresorOptions {
   /** the service's URL (its public_url): /v1 and /admin/v1 are below it */
@@ -109,7 +112,7 @@ interface Live {
 /** a host's locale, or the console's first */
 const localeOf = (l?: string): Locale => (locales as readonly string[]).includes(l ?? '') ? (l as Locale) : locales[0]
 
-function Embedded({ options, live, portal }: { options: TresorOptions; live: Live; portal: HTMLElement }) {
+function Embedded({ options, live, portal, element }: { options: TresorOptions; live: Live; portal: HTMLElement; element: HTMLElement }) {
   const navigate = useNavigate()
   const go = useRef(navigate) // useNavigate's function changes with the location: the host's path is applied once
   go.current = navigate
@@ -117,18 +120,28 @@ function Embedded({ options, live, portal }: { options: TresorOptions; live: Liv
   const location = useLocation()
   const [state, setState] = useState<{ me?: Whoami; service?: ServiceInfo; notAdmin?: boolean; error?: string }>({})
   const [ended, setEnded] = useState(false) // the session refused even renewed, until a request passes again
-  const lastTold = useRef(0)
+  const [attempt, setAttempt] = useState(0) // Try again: the first load once more
+  const alive = useRef(true) // unmounted: a request still on its way tells the host nothing
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
   const api = useMemo(() => new Api(options.apiBase, (renew) => (renew ? options.getToken(options.audience, { renew }) : options.getToken(options.audience)), {
     unauthorized: () => {
+      if (!alive.current) return
       setEnded(true)
       const now = Date.now()
-      if (now - lastTold.current >= unauthorizedEvery) {
-        lastTold.current = now
+      if (now - (told.get(element) ?? -Infinity) >= unauthorizedEvery) {
+        told.set(element, now)
         options.onUnauthorized?.()
       }
     },
-    authorized: () => setEnded(false),
-  }), [options])
+    authorized: () => {
+      if (alive.current) setEnded(false)
+    },
+  }), [options, element])
   const base = trim(options.basePath ?? '')
 
   // the host navigated (its back button): follow, without telling it again
@@ -163,11 +176,22 @@ function Embedded({ options, live, portal }: { options: TresorOptions; live: Liv
         if (e instanceof ApiError && e.status === 403) {
           const me = await api.get<Whoami>('/v1/whoami').catch(() => undefined)
           setState({ me: me?.data, notAdmin: true })
-        } else setState({ error: e instanceof ApiError && e.status === 401 ? "The host's token was refused: it needs tresor's audience." : (e as Error).message })
+        } else if (!(e instanceof ApiError && e.status === 401)) setState({ error: (e as Error).message }) // 401: the banner
       },
     )
-  }, [api])
+  }, [api, attempt])
 
+  const banner = ended && (
+    <div role="alert" className="mb-3 flex items-center gap-3 rounded-md bg-warning-soft px-3.5 py-2.5 text-warning">
+      <span>
+        Your session ended: sign in again. What you were editing is kept.
+        {!state.me && <span className="block text-[13px] opacity-80">If it stays, the host's token may lack tresor's audience.</span>}
+      </span>
+      <button type="button" className="btn border border-current bg-transparent py-1 text-current" onClick={() => setAttempt((n) => n + 1)}>
+        Try again
+      </button>
+    </div>
+  )
   if (state.error) return <div role="alert" className="rounded-md bg-danger-soft px-3.5 py-3 text-danger">{state.error}</div>
   if (state.notAdmin) {
     const roles = state.me?.roles ?? []
@@ -180,21 +204,13 @@ function Embedded({ options, live, portal }: { options: TresorOptions; live: Liv
       </div>
     )
   }
-  if (!state.me || !state.service) return <div className="p-6 text-muted" aria-busy="true">Loading…</div>
+  if (!state.me || !state.service) return banner || <div className="p-6 text-muted" aria-busy="true">Loading…</div>
   const config: ConsoleConfig = { api: options.apiBase, issuers: [], environment: state.service.environment }
   const app: AppState = { api, config, me: state.me, service: state.service, theme: live.theme, embedded: true, portal }
   return (
     <AppContext.Provider value={app}>
       <Toasts>
-        {ended && (
-          <div role="alert" className="mb-3 flex items-center gap-3 rounded-md bg-warning-soft px-3.5 py-2.5 text-warning">
-            Your session ended: sign in again. What you were editing is kept.
-            <button type="button" className="btn border border-current bg-transparent py-1 text-current"
-              onClick={() => { api.get('/v1/whoami').catch(() => undefined) }}>
-              Try again
-            </button>
-          </div>
-        )}
+        {banner}
         <App />
       </Toasts>
     </AppContext.Provider>
@@ -230,7 +246,7 @@ export function mountTresor(element: HTMLElement, options: TresorOptions): Treso
     root.render(
       <StrictMode>
         <MemoryRouter initialEntries={[{ pathname, search, state: { fromHost } }]} initialIndex={0}>
-          <Embedded options={options} live={live} portal={portal} />
+          <Embedded options={options} live={live} portal={portal} element={element} />
         </MemoryRouter>
       </StrictMode>,
     )

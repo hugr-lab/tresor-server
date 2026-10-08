@@ -5,6 +5,7 @@
 package console
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -16,6 +17,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // dist is the console's build; `go build` alone embeds a placeholder page.
@@ -113,12 +115,8 @@ func handler(cfg Config, files fs.FS) http.Handler {
 		// a route of the app: the page, which routes itself
 		h.Set("Content-Type", "text/html; charset=utf-8")
 		h.Set("Cache-Control", "no-cache")
-		h.Set("ETag", indexTag)
-		if inm := r.Header.Get("If-None-Match"); inm != "" && strings.Contains(inm, indexTag) {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		_, _ = w.Write(index)
+		h.Set("ETag", indexTag) // http.ServeContent answers If-None-Match with 304
+		http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
 	})
 }
 

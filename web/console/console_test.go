@@ -96,6 +96,12 @@ func TestRevalidation(t *testing.T) {
 		if again.Code != http.StatusNotModified || again.Body.Len() != 0 {
 			t.Fatalf("%s revalidated: %d", p, again.Code)
 		}
+		r.Header.Set("If-None-Match", `W/"stale", `+tag)
+		listed := httptest.NewRecorder()
+		h.ServeHTTP(listed, r)
+		if listed.Code != http.StatusNotModified {
+			t.Fatalf("%s revalidated in a list: %d", p, listed.Code)
+		}
 		r.Header.Set("If-None-Match", `"stale"`)
 		changed := httptest.NewRecorder()
 		h.ServeHTTP(changed, r)

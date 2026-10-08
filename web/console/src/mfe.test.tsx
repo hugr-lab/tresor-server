@@ -231,5 +231,59 @@ describe('the platform contract (spec 016)', () => {
     })
     await settle()
     expect(told).toBe(1)
+    expect(el.shadowRoot!.textContent).toMatch(/Your session ended/) // refused at the first load: the notice, not a dead end
+  })
+
+  it('renews once for requests refused together; a remount does not tell the host sooner', async () => {
+    let accepted = 'good'
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      if (new Headers(init.headers).get('Authorization') !== `Bearer ${accepted}`) return answer(401, { title: 'unauthenticated', status: 401 })
+      if (url.endsWith('/v1/whoami')) return answer(200, me)
+      if (url.endsWith('/admin/v1/service')) return answer(200, service)
+      return answer(200, [])
+    })
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    let renewals = 0
+    let cached = 'stale'
+    const getToken = async (_a?: string, how?: { renew?: boolean }) => {
+      if (how?.renew) {
+        renewals++
+        await new Promise((r) => setTimeout(r, 5))
+        cached = accepted === 'never' ? 'revoked' : accepted // the session over: nothing fresh is accepted
+      }
+      return cached
+    }
+    const told = vi.fn()
+    let h!: ReturnType<typeof mountTresor>
+    await act(async () => {
+      h = mountTresor(el, { apiBase: 'https://tresor.example', getToken, onUnauthorized: told })
+    })
+    await settle()
+    expect(el.shadowRoot!.querySelector('nav[aria-label="tresor"]')).not.toBeNull()
+    expect(renewals).toBe(1) // whoami and the service, refused together: one renewal (a refresh token is used once)
+
+    accepted = 'never'
+    await act(async () => h.unmount())
+    await act(async () => {
+      h = mountTresor(el, { apiBase: 'https://tresor.example', getToken, onUnauthorized: told })
+    })
+    await settle()
+    expect(told).toHaveBeenCalledTimes(1)
+    expect(el.shadowRoot!.textContent).toMatch(/Your session ended/)
+    await act(async () => h.unmount())
+    await act(async () => {
+      mountTresor(el, { apiBase: 'https://tresor.example', getToken, onUnauthorized: told })
+    })
+    await settle()
+    expect(told).toHaveBeenCalledTimes(1) // the same element, within 30 s
+
+    accepted = 'good'
+    cached = 'good'
+    const retry = [...el.shadowRoot!.querySelectorAll('button')].find((b) => b.textContent === 'Try again')!
+    await act(async () => retry.click())
+    await settle()
+    expect(el.shadowRoot!.querySelector('nav[aria-label="tresor"]')).not.toBeNull() // the first load, once more
+    expect(el.shadowRoot!.textContent).not.toMatch(/Your session ended/)
   })
 })

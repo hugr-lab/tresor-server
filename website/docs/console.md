@@ -95,8 +95,8 @@ callbacks are properties, or the events `tresor-navigate`, `tresor-title` and `t
   for an administrator. Hide the entry otherwise; mounted anyway, the console says it is for administrators.
 - **The token**: `getToken` is called before each request, so it should answer from the shell's library's cache
   (which renews it). When the service answers 401, the console calls `getToken(audience, { renew: true })` once
-  and retries; refused again, it calls `onUnauthorized` (at most once every 30 seconds) and shows "Your session
-  ended" until a request succeeds. The shell signs the user in again - by a popup, so an edit in progress stays.
+  and retries (requests refused together share one renewal); refused again, it calls `onUnauthorized` (at most
+  once every 30 seconds per element) and shows "Your session ended", with "Try again", until a request succeeds. The shell signs the user in again - by a popup, so an edit in progress stays.
   The console sends nothing on its own while the user is idle.
 - **The theme**: `theme` picks the light or dark defaults; the shell overrides any of them by setting the
   variables on the element - they win over the console's own in either theme:
