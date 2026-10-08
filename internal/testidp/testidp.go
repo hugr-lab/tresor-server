@@ -193,6 +193,14 @@ func (idp *IdP) token(w http.ResponseWriter, r *http.Request) {
 			deny("invalid_grant", "AADSTS50013: Assertion failed signature validation. Trace ID: t-1 Correlation ID: c-1")
 			return
 		}
+		if !audIncludes(payload["aud"], "duckdb-secrets") {
+			deny("invalid_grant", "AADSTS50013: Assertion audience does not match the client. Trace ID: t-3")
+			return
+		}
+		if sub, _ := payload["sub"].(string); strings.HasPrefix(sub, "sa-") { // an app's token: OBO is for users
+			deny("invalid_grant", "AADSTS50000: an application's token cannot be exchanged on behalf of a user. Trace ID: t-4")
+			return
+		}
 		if payload["sub"] == "no-consent" {
 			deny("invalid_grant", "AADSTS65001: The user or administrator has not consented to use the application "+
 				"with ID 'x' named 'tresor'. Trace ID: t-2 Correlation ID: c-2 Timestamp: now")
@@ -206,7 +214,7 @@ func (idp *IdP) token(w http.ResponseWriter, r *http.Request) {
 				aud = strings.TrimSuffix(sc, "/.default")
 			}
 		}
-		claims = Claims{"sub": payload["sub"], "aud": aud, "azp": ExchangeClient, "realm_access": payload["realm_access"]}
+		claims = Claims{"sub": payload["sub"], "aud": aud, "azp": ExchangeClient, "realm_access": payload["realm_access"], "obo": true}
 		idp.OBOs++
 		answer := map[string]any{"access_token": idp.Token(idp.t, claims), "token_type": "Bearer", "expires_in": 300}
 		if withRefresh {
@@ -224,6 +232,21 @@ func (idp *IdP) token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		claims, withRefresh = stored, true
+		if stored["obo"] == true {
+			// as Entra: an OBO refresh names its resource again; one for another resource, or none, is refused
+			// here (Entra could answer for another resource, which the service would refuse anyway)
+			scope := strings.Fields(r.PostForm.Get("scope"))
+			if len(scope) == 0 || strings.TrimSuffix(scope[0], "/.default") != stored["aud"] {
+				deny("invalid_grant", "AADSTS70000: the refresh's scope does not name the token's resource. Trace ID: t-5")
+				return
+			}
+			idp.Refreshed++
+			answer := map[string]any{"access_token": idp.Token(idp.t, claims), "token_type": "Bearer", "expires_in": 300,
+				"refresh_token": r.PostForm.Get("refresh_token")}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(answer)
+			return
+		}
 		idp.Refreshed++
 	default:
 		deny("unsupported_grant_type", "")
@@ -246,6 +269,21 @@ func (idp *IdP) Kill() {
 	idp.mu.Lock()
 	defer idp.mu.Unlock()
 	idp.refreshes = map[string]Claims{}
+}
+
+// audIncludes says whether a token's aud (a string or a list) names want.
+func audIncludes(aud any, want string) bool {
+	switch v := aud.(type) {
+	case string:
+		return v == want
+	case []any:
+		for _, a := range v {
+			if a == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func unverifiedClaims(raw string) (map[string]any, bool) {

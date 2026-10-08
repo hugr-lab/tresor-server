@@ -42,8 +42,8 @@ func TestMintedOnBehalfOf(t *testing.T) {
 	}
 	f.srv.now = func() time.Time { return time.Now().Add(290 * time.Second) }
 	if renewed, _, r := f.mintedMaterial(node, "Delegation", g); renewed == "" || f.idp.Refreshed != 1 ||
-		claimsOf(t, renewed)["sub"] != "alice-id" {
-		t.Fatalf("renewed: %d %s (refreshes %d)", r.status, r.body, f.idp.Refreshed)
+		claimsOf(t, renewed)["sub"] != "alice-id" || f.idp.LastForm.Get("scope") != "echo-api/.default offline_access" {
+		t.Fatalf("renewed with its scope: %d %s (refreshes %d, scope %q)", r.status, r.body, f.idp.Refreshed, f.idp.LastForm.Get("scope"))
 	}
 	f.srv.now = time.Now
 
@@ -54,9 +54,22 @@ func TestMintedOnBehalfOf(t *testing.T) {
 		t.Fatalf("the secret again: %d %s", r.status, r.body)
 	}
 	f.do("PUT", "/v1/secrets/echo/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	f.do("PUT", "/v1/secrets/echo/grants/n", f.admin, `{"principal":"role:nodes","verbs":["use"]}`)
 	f.srv.direct = directCache{}
 	if _, _, r := f.mintedMaterial(f.alice); f.idp.LastForm.Get("scope") != "echo-api/read" {
 		t.Fatalf("the secret's scope: %q (%d)", f.idp.LastForm.Get("scope"), r.status)
+	}
+
+	// the grant's refresh named its scope (Entra's refresh token covers every consented resource)
+	if f.idp.LastForm.Get("grant_type") != "refresh_token" {
+		f.srv.now = func() time.Time { return time.Now().Add(290 * time.Second) }
+		f.mintedMaterial(node, "Delegation", g)
+		f.srv.now = time.Now
+	}
+
+	// an app's token: OBO is for users - a refusal (403), not an outage
+	if r := f.do("GET", "/v1/secrets/echo", node, ""); r.status != 403 || !strings.Contains(string(r.body), "AADSTS50000") {
+		t.Fatalf("an app's token: %d %s", r.status, r.body)
 	}
 
 	// Entra's refusal: its code, never its message (names, trace ids); a 403 for the caller

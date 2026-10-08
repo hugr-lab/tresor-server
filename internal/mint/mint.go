@@ -159,12 +159,7 @@ func (c *Client) Exchange(ctx context.Context, subject, audience, scope string, 
 // onBehalfOf is Entra's exchange (spec 013): the caller's token as a JWT bearer assertion, for a scope - the
 // secret's, or the audience's .default; offline_access when a refresh token is wanted.
 func (c *Client) onBehalfOf(ctx context.Context, subject, audience, scope string, withRefresh bool) (*Token, error) {
-	if scope == "" {
-		scope = strings.TrimSuffix(audience, "/") + "/.default"
-	}
-	if withRefresh && !slices.Contains(strings.Fields(scope), "offline_access") {
-		scope += " offline_access"
-	}
+	scope = oboScope(audience, scope, withRefresh)
 	form := url.Values{
 		"grant_type":          {"urn:ietf:params:oauth:grant-type:jwt-bearer"},
 		"assertion":           {subject},
@@ -174,12 +169,29 @@ func (c *Client) onBehalfOf(ctx context.Context, subject, audience, scope string
 	return c.post(ctx, form, subject, withRefresh)
 }
 
+// oboScope is what an OBO request, and its refresh, ask for: the secret's scope or the audience's .default, with
+// offline_access for a refresh token.
+func oboScope(audience, scope string, withRefresh bool) string {
+	if scope == "" {
+		scope = strings.TrimSuffix(audience, "/") + "/.default"
+	}
+	if withRefresh && !slices.Contains(strings.Fields(scope), "offline_access") {
+		scope += " offline_access"
+	}
+	return scope
+}
+
 // aadsts is an Entra error's code, at the start of its description.
 var aadsts = regexp.MustCompile(`^AADSTS\d{4,8}`)
 
-// Refresh renews a token from its refresh token; a rotated refresh token comes back, or the old one stays.
-func (c *Client) Refresh(ctx context.Context, refresh string) (*Token, error) {
+// Refresh renews a token from its refresh token; a rotated refresh token comes back, or the old one stays. An
+// OBO token's refresh names its scope again (spec 013): an Entra refresh token covers every resource consented,
+// and the scope says which one the new token is for.
+func (c *Client) Refresh(ctx context.Context, refresh, audience, scope string) (*Token, error) {
 	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}}
+	if c.Grant == "on_behalf_of" {
+		form.Set("scope", oboScope(audience, scope, true))
+	}
 	token, err := c.post(ctx, form, refresh, true)
 	if err == nil && token.Refresh == "" {
 		token.Refresh = refresh // RFC 6749 §6: the IdP may keep the old one
@@ -241,6 +253,8 @@ func (c *Client) post(ctx context.Context, form url.Values, presented string, ke
 		desc := answer.ErrorDesc
 		if m := aadsts.FindString(desc); m != "" {
 			desc = m // Entra's code is what to look up; the rest of its message (trace ids, names) is not kept
+		} else if c.Grant == "on_behalf_of" {
+			desc = "" // from Entra with no code: its message may name a person or an app
 		}
 		return nil, &Error{Code: bounded(code, 64), Description: bounded(redact(desc, presented), 300),
 			Status: res.StatusCode}

@@ -51,8 +51,14 @@ azure: {identity: managed}         # Container Apps; workload on AKS
 
 - **The request**: the caller's token as a JWT bearer assertion, `requested_token_use=on_behalf_of`, and a scope:
   the secret's `scope`, or `<audience>/.default`. A delegation grant adds `offline_access` for a refresh token.
-- **The secret's `audience`** is the downstream API as its tokens name it: its client id (v2 tokens, the
-  default), or its application ID URI (v1). The service refuses a minted token whose `aud` is not it.
+- **The issuer is Entra's v2** (`https://login.microsoftonline.com/<tenant>/v2.0`): the service's app issues v2
+  tokens (`requestedAccessTokenVersion: 2` in its manifest). A v1 issuer (`sts.windows.net`) is refused with
+  `on_behalf_of`: its token endpoint takes no scope.
+- **The secret's `audience`** is the downstream API's client id (a GUID): a v2 token's `aud` is always that, and
+  `<audience>/.default` asks for it. An application ID URI works only for a v1 API, with a secret's own `scope`
+  naming the same URI. The service refuses a minted token whose `aud` is not the audience.
+- **Renewal**: under a delegation grant the refresh names the same scope again: an Entra refresh token covers
+  every resource consented.
 - **Consent**: the service's app is granted the downstream API's delegated permission, with admin consent;
   otherwise Entra refuses (`AADSTS65001`, kept in the refusal's description - the rest of Entra's message is
   not).

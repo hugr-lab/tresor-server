@@ -403,7 +403,7 @@ func (s *Server) mintedForGrant(r *http.Request, gr *grant, key, audience, scope
 		var next mintResult
 		switch {
 		case token != nil && token.Refresh != "":
-			renewed, err := client.Refresh(ctx, token.Refresh)
+			renewed, err := client.Refresh(ctx, token.Refresh, audience, scope)
 			if err == nil {
 				err = s.checkMinted(renewed, audience)
 			}

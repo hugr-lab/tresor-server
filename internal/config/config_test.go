@@ -723,4 +723,12 @@ func TestExchangeGrant(t *testing.T) {
 	if _, err := Parse([]byte(doc(", grant: jwt-bearer"))); err == nil {
 		t.Error("another grant: accepted")
 	}
+	v1 := strings.Replace(doc(", grant: on_behalf_of"), "http://127.0.0.1:18080/realms/tresor/", "https://sts.windows.net/00000000-0000-0000-0000-000000000000/", 1)
+	if _, err := Parse([]byte(v1)); err == nil || !strings.Contains(err.Error(), "v2 issuer") {
+		t.Errorf("OBO on a v1 issuer: %v", err)
+	}
+	file := strings.Replace(good, "audience: duckdb-secrets", "audience: duckdb-secrets\n    exchange: {client_id: c, client_auth: file, assertion_file: /t, omit_client_id: true, grant: on_behalf_of}", 1)
+	if _, err := Parse([]byte(file)); err == nil {
+		t.Error("OBO with omit_client_id: accepted")
+	}
 }

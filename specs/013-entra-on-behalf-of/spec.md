@@ -53,9 +53,13 @@ scope=<the secret's scope, or <audience>/.default>
   `<audience>/.default` (the downstream API's app ID URI or client id, all its delegated permissions consented).
 - **A refresh token**: with the secret's refresh (as for RFC 8693), `offline_access` is added to the scope; Entra
   answers with a refresh token, renewed by the refresh grant as today.
-- **The secret's `audience`** is checked against the minted token's `aud` (as for RFC 8693): the downstream API
-  as Entra names it in its tokens - its client id for v2 tokens, its application ID URI for v1. The default scope
-  `<audience>/.default` works with either.
+- **The secret's `audience`** is checked against the minted token's `aud` (as for RFC 8693): best the downstream
+  API's client id - a v2 token's `aud` is always it; an application ID URI only for a v1 API, with a secret's own
+  `scope` naming it.
+- **The refresh** names the same scope (with `offline_access`): an Entra refresh token covers every resource
+  consented, and only the scope says which the new token is for.
+- **Entra's v2 issuer only**: a v1 issuer's token endpoint takes `resource`, not `scope`; `on_behalf_of` on a
+  `sts.windows.net` issuer is refused at start.
 - **The caller's token** must be for this service (its `aud` the service's app): the same token the service
   verified; Entra checks it again.
 - **Errors**: Entra's codes map as the others' (`invalid_grant` - the caller's session or consent; `invalid_client`
@@ -101,4 +105,7 @@ gets Entra's refusal, mapped as `invalid_grant`: OBO is for users.
 
 ## Follow-ups
 
+- An IdP's `invalid_client` (the service's own credential: no matching federated credential, a wrong secret) is
+  reported to the caller as a refusal today, for every IdP; an operator's mistake should read as the service's
+  problem (`503`), not stay with a delegation grant.
 - Sovereign clouds: the federated credential's audience (`api://AzureADTokenExchangeUSGov`, …) as a setting.
