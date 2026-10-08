@@ -35,6 +35,7 @@ type IdP struct {
 	mu        sync.Mutex
 	refreshes map[string]Claims // refresh token -> the claims its tokens carry
 	Exchanges int               // exchanges answered
+	OBOs      int               // On-Behalf-Of exchanges answered (Entra's; spec 013)
 	Refreshed int               // refreshes answered
 	LastForm  url.Values        // the last token request (tests read the parameters)
 	// ClientKeys lets the exchange client log in with a signed assertion (spec 006): kid -> public key. An
@@ -180,6 +181,42 @@ func (idp *IdP) token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		idp.Exchanges++
+	case "urn:ietf:params:oauth:grant-type:jwt-bearer":
+		// Entra's On-Behalf-Of (spec 013): no issued_token_type in the answer; the audience from the scope
+		if r.PostForm.Get("requested_token_use") != "on_behalf_of" {
+			deny("invalid_request", "requested_token_use")
+			return
+		}
+		subject := r.PostForm.Get("assertion")
+		payload, ok := unverifiedClaims(subject)
+		if !ok {
+			deny("invalid_grant", "AADSTS50013: Assertion failed signature validation. Trace ID: t-1 Correlation ID: c-1")
+			return
+		}
+		if payload["sub"] == "no-consent" {
+			deny("invalid_grant", "AADSTS65001: The user or administrator has not consented to use the application "+
+				"with ID 'x' named 'tresor'. Trace ID: t-2 Correlation ID: c-2 Timestamp: now")
+			return
+		}
+		var aud string
+		for _, sc := range strings.Fields(r.PostForm.Get("scope")) {
+			if sc == "offline_access" {
+				withRefresh = true
+			} else if aud == "" {
+				aud = strings.TrimSuffix(sc, "/.default")
+			}
+		}
+		claims = Claims{"sub": payload["sub"], "aud": aud, "azp": ExchangeClient, "realm_access": payload["realm_access"]}
+		idp.OBOs++
+		answer := map[string]any{"access_token": idp.Token(idp.t, claims), "token_type": "Bearer", "expires_in": 300}
+		if withRefresh {
+			refresh := fmt.Sprintf("rt-%d-%d", time.Now().UnixNano(), len(idp.refreshes))
+			idp.refreshes[refresh] = claims
+			answer["refresh_token"] = refresh
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(answer)
+		return
 	case "refresh_token":
 		stored, ok := idp.refreshes[r.PostForm.Get("refresh_token")]
 		if !ok {

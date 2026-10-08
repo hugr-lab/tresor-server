@@ -14,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,9 +38,11 @@ const (
 // Client is the service's own confidential client at one issuer's token endpoint.
 type Client struct {
 	TokenURL string
-	Auth     ClientAuth   // how the client logs in: a secret, or an assertion (spec 006)
-	HTTP     *http.Client // nil: a client bounded by the timeout
-	Now      func() time.Time
+	Auth     ClientAuth // how the client logs in: a secret, or an assertion (spec 006)
+	// Grant is the exchange's grant: token_exchange (RFC 8693, the default) or on_behalf_of (Entra; spec 013)
+	Grant string
+	HTTP  *http.Client // nil: a client bounded by the timeout
+	Now   func() time.Time
 }
 
 // ClientAuth puts the client's authentication into a token request's form.
@@ -132,6 +136,9 @@ func (c *Client) Exchange(ctx context.Context, subject, audience, scope string, 
 	if subject == "" || audience == "" {
 		return nil, &Error{Code: "invalid_request", Description: "a subject token and an audience are required"}
 	}
+	if c.Grant == "on_behalf_of" {
+		return c.onBehalfOf(ctx, subject, audience, scope, withRefresh)
+	}
 	requested := accessTokenType
 	if withRefresh {
 		requested = refreshTokenType
@@ -148,6 +155,27 @@ func (c *Client) Exchange(ctx context.Context, subject, audience, scope string, 
 	}
 	return c.post(ctx, form, subject, withRefresh)
 }
+
+// onBehalfOf is Entra's exchange (spec 013): the caller's token as a JWT bearer assertion, for a scope - the
+// secret's, or the audience's .default; offline_access when a refresh token is wanted.
+func (c *Client) onBehalfOf(ctx context.Context, subject, audience, scope string, withRefresh bool) (*Token, error) {
+	if scope == "" {
+		scope = strings.TrimSuffix(audience, "/") + "/.default"
+	}
+	if withRefresh && !slices.Contains(strings.Fields(scope), "offline_access") {
+		scope += " offline_access"
+	}
+	form := url.Values{
+		"grant_type":          {"urn:ietf:params:oauth:grant-type:jwt-bearer"},
+		"assertion":           {subject},
+		"requested_token_use": {"on_behalf_of"},
+		"scope":               {scope},
+	}
+	return c.post(ctx, form, subject, withRefresh)
+}
+
+// aadsts is an Entra error's code, at the start of its description.
+var aadsts = regexp.MustCompile(`^AADSTS\d{4,8}`)
 
 // Refresh renews a token from its refresh token; a rotated refresh token comes back, or the old one stays.
 func (c *Client) Refresh(ctx context.Context, refresh string) (*Token, error) {
@@ -210,7 +238,11 @@ func (c *Client) post(ctx context.Context, form url.Values, presented string, ke
 			code = fmt.Sprintf("http_%d", res.StatusCode)
 		}
 		// redacted before it is cut: a cut must not leave part of the token behind
-		return nil, &Error{Code: bounded(code, 64), Description: bounded(redact(answer.ErrorDesc, presented), 300),
+		desc := answer.ErrorDesc
+		if m := aadsts.FindString(desc); m != "" {
+			desc = m // Entra's code is what to look up; the rest of its message (trace ids, names) is not kept
+		}
+		return nil, &Error{Code: bounded(code, 64), Description: bounded(redact(desc, presented), 300),
 			Status: res.StatusCode}
 	}
 	// only an access token is taken for one: RFC 8693's strict shape (a refresh token in access_token,

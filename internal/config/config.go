@@ -638,6 +638,8 @@ type ExchangeClient struct {
 	// OmitClientID leaves client_id out of the token request (a client assertion names the client): Keycloak's
 	// federated client authentication refuses a client_id that is not the assertion's sub.
 	OmitClientID bool `yaml:"omit_client_id"`
+	// Grant is the exchange's grant: token_exchange (RFC 8693; the default) or on_behalf_of (Entra; spec 013).
+	Grant string `yaml:"grant"`
 }
 
 // ClientAuthKinds are the ways the service logs in at a token endpoint.
@@ -1337,6 +1339,13 @@ func (ex *ExchangeClient) validate(identity string, vaultUsed, awsUsed bool) err
 		"awskms":   {"key", "kid", "x5t", "assertion_audience"},
 		"gcpkms":   {"key", "kid", "x5t", "assertion_audience"},
 	}[ex.ClientAuth]
+	switch ex.Grant {
+	case "":
+		ex.Grant = "token_exchange"
+	case "token_exchange", "on_behalf_of":
+	default:
+		return errors.New("exchange.grant is token_exchange (RFC 8693) or on_behalf_of (Entra)")
+	}
 	if ex.OmitClientID && ex.ClientAuth != "file" {
 		return errors.New("exchange.omit_client_id is for client_auth: file (Keycloak's federated client authentication); " +
 			"Entra and the signed assertions name the client by client_id")

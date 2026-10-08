@@ -707,3 +707,20 @@ func TestOmitClientID(t *testing.T) {
 		}
 	}
 }
+
+// exchange.grant (spec 013): token_exchange by default, on_behalf_of for Entra, nothing else
+func TestExchangeGrant(t *testing.T) {
+	t.Setenv("TRESOR_TEST_EXCHANGE_SECRET", "s")
+	doc := func(grant string) string {
+		return strings.Replace(good, "audience: duckdb-secrets", "audience: duckdb-secrets\n    exchange: {client_id: c, client_secret_env: TRESOR_TEST_EXCHANGE_SECRET"+grant+"}", 1)
+	}
+	for grant, want := range map[string]string{"": "token_exchange", ", grant: token_exchange": "token_exchange", ", grant: on_behalf_of": "on_behalf_of"} {
+		cfg, err := Parse([]byte(doc(grant)))
+		if err != nil || cfg.Issuers[0].Exchange.Grant != want {
+			t.Errorf("%q: %v", grant, err)
+		}
+	}
+	if _, err := Parse([]byte(doc(", grant: jwt-bearer"))); err == nil {
+		t.Error("another grant: accepted")
+	}
+}

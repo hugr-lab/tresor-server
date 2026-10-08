@@ -1,6 +1,6 @@
 # Spec 013: Entra On-Behalf-Of for `token_exchange` secrets
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-08
 - **Author**: hugr lab
 
@@ -53,6 +53,9 @@ scope=<the secret's scope, or <audience>/.default>
   `<audience>/.default` (the downstream API's app ID URI or client id, all its delegated permissions consented).
 - **A refresh token**: with the secret's refresh (as for RFC 8693), `offline_access` is added to the scope; Entra
   answers with a refresh token, renewed by the refresh grant as today.
+- **The secret's `audience`** is checked against the minted token's `aud` (as for RFC 8693): the downstream API
+  as Entra names it in its tokens - its client id for v2 tokens, its application ID URI for v1. The default scope
+  `<audience>/.default` works with either.
 - **The caller's token** must be for this service (its `aud` the service's app): the same token the service
   verified; Entra checks it again.
 - **Errors**: Entra's codes map as the others' (`invalid_grant` - the caller's session or consent; `invalid_client`
