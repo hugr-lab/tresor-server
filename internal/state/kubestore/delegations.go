@@ -279,10 +279,12 @@ func (d delegations) Purge(ctx context.Context, now time.Time) (int, error) {
 		return 0, err
 	}
 	live := map[string]bool{}
+	liveActors := map[string]bool{}
 	n := 0
 	for _, o := range grants {
 		if o.Spec.ExpiresAt > now.UnixNano() && o.Metadata.DeletionTimestamp == nil {
 			live[o.Metadata.Name] = true
+			liveActors[actorName(o.Spec.ActorOwner)] = true
 			continue
 		}
 		found, err := d.drop(ctx, o.Metadata.Name, o.Spec.IDHash)
@@ -300,7 +302,26 @@ func (d delegations) Purge(ctx context.Context, now time.Time) (int, error) {
 			}
 		}
 	}
-	return n, nil
+	return n, d.dropIdleActors(ctx, liveActors)
+}
+
+// dropIdleActors deletes the counters of actors with no live grant (spec 003's follow-up: one per actor ever
+// seen otherwise). Compare-and-set on the counter read: a put that moved it meanwhile keeps it (Conflict, left
+// for the next purge); a put that reads it before and moves it after finds it gone, and runs again.
+func (d delegations) dropIdleActors(ctx context.Context, liveActors map[string]bool) error {
+	actors, err := d.s.actors.list(ctx, "")
+	if err != nil {
+		return err
+	}
+	for _, a := range actors {
+		if liveActors[a.Metadata.Name] {
+			continue
+		}
+		if _, err := d.s.actors.remove(ctx, a.Metadata.Name, a); err != nil && !apierrors.IsConflict(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d delegations) checkToken(ctx context.Context, o *object[tokenSpec], idHash []byte, key string) error {

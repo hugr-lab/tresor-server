@@ -305,6 +305,40 @@ func TestPurgeOrphanTokens(t *testing.T) {
 	}
 }
 
+// an actor with no live grant left loses its counter at the purge; one with a live grant keeps it; a put after
+// the purge makes a new one (spec 003's follow-up: no counter per actor ever seen)
+func TestPurgeIdleActors(t *testing.T) {
+	ns := namespace(t)
+	s := openIn(t, ns, kek(t, 1), "")
+	d := s.Delegations()
+	now := time.Now()
+	grant := func(id, actor string, expires time.Time) state.Delegation {
+		return state.Delegation{IDHash: []byte(id), ActorOwner: actor, ActorClient: "client:node",
+			UserOwner: "subject:iss|alice", User: []byte(`{}`), ExpiresAt: expires}
+	}
+	for _, g := range []state.Delegation{grant("h-1", "subject:iss|gone", now.Add(time.Minute)),
+		grant("h-2", "subject:iss|busy", now.Add(time.Hour))} {
+		if err := d.Put(ctx, g, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := d.Purge(ctx, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := s.actors.get(ctx, actorName("subject:iss|gone")); a != nil {
+		t.Fatal("an idle actor's counter outlives its grants")
+	}
+	if a, _ := s.actors.get(ctx, actorName("subject:iss|busy")); a == nil {
+		t.Fatal("a busy actor's counter was dropped")
+	}
+	if err := d.Put(ctx, grant("h-3", "subject:iss|gone", now.Add(time.Hour)), 10); err != nil {
+		t.Fatalf("a put after the purge: %v", err)
+	}
+	if n, err := d.Count(ctx, "subject:iss|gone", now); err != nil || n != 1 {
+		t.Fatalf("counted: %d %v", n, err)
+	}
+}
+
 // the zero time is kept as none: a grant with no subject token reads back with no subject expiry
 func TestZeroTime(t *testing.T) {
 	d := openIn(t, namespace(t), kek(t, 1), "").Delegations()
