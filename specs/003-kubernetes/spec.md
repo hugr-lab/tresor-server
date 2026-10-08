@@ -443,5 +443,8 @@ development).
 - An operator for GitOps (resources applied by hand, checked as the protocol checks a write).
 - AWS IRSA and GCP Workload Identity (phase 4).
 - The MAC on the SQL stores, as a setting.
-- Metrics: a count of the resources a list left out.
-- `TresorActor` counters are never deleted: one per actor ever seen.
+- Metrics: a count of the resources a list left out. Done: `tresor.state.left_out` (spec 005).
+- `TresorActor` counters are never deleted: one per actor ever seen. Done (2026-10-08): the purge reads the
+  counters, then the grants, and deletes the counter of an actor with no live grant, compare-and-set on the
+  version read first: a put that moved it since keeps it, one that moves it after finds it gone and runs again,
+  and a counter created since the read is never deleted - so a put from no counter cannot pass the limit.
