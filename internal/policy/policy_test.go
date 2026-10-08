@@ -19,6 +19,8 @@ func TestVerbs(t *testing.T) {
 		{Principal: "role:analysts", Verbs: []string{"use"}},
 		{Principal: "subject:iss|alice", Verbs: []string{"use"}}, // before specs/009: gives nothing
 		{Principal: "role:nodes", Verbs: []string{"use"}},
+		{Principal: "group:lake", Verbs: []string{"use"}},
+		{Principal: "role:editors", Verbs: []string{"update"}}, // a grant gives use only
 	}}
 	admin := &auth.Caller{Principals: []string{"role:secrets_admin"}}
 	analyst := &auth.Caller{Principals: []string{"role:analysts", "subject:iss|bob"}}
@@ -36,6 +38,13 @@ func TestVerbs(t *testing.T) {
 			ActorPrincipals: []string{"role:nodes"}}, []string{"use"}},
 		"an admin through the node": {&auth.Caller{Principals: []string{"role:secrets_admin"}, Actor: "client:node",
 			ActorPrincipals: []string{"role:nodes"}}, []string{"use", "update"}},
+		"a group granted: use":    {&auth.Caller{Principals: []string{"group:lake"}}, []string{"use"}},
+		"a grant of another verb": {&auth.Caller{Principals: []string{"role:editors"}}, []string{}},
+		// use is the actor's: a user holding the granted role gets none through a node that does not
+		"a user's role, not the node's": {&auth.Caller{Principals: []string{"role:analysts"}, Actor: "client:node",
+			ActorPrincipals: []string{"role:other"}}, []string{}},
+		"through a server from another issuer": {&auth.Caller{Principals: []string{"role:secrets_admin"}, Actor: "client:creator",
+			ActorIssuer: "https://elsewhere.example", ActorPrincipals: []string{"role:nodes"}}, []string{}},
 		"through a server not in the policy": {&auth.Caller{Principals: []string{"role:secrets_admin"}, Actor: "client:other",
 			ActorPrincipals: []string{"role:nodes"}}, []string{}},
 	} {
@@ -62,8 +71,8 @@ func TestPrincipals(t *testing.T) {
 		"role:a": {true, true}, "group:g": {true, true}, "subject:iss|x": {false, true}, "client:c": {false, true},
 		"role:": {false, false}, "user:x": {false, false}, "": {false, false},
 	} {
-		if RoleOrGroup(p) != want[0] || ValidPrincipal(p) != want[1] {
-			t.Errorf("%q: role or group %v, valid %v", p, RoleOrGroup(p), ValidPrincipal(p))
+		if RoleOrGroup(p) != want[0] {
+			t.Errorf("%q: role or group %v", p, RoleOrGroup(p))
 		}
 	}
 }

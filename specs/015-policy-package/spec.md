@@ -13,17 +13,17 @@ changes, the protocol and the configuration are untouched.
 ## Problem
 
 The rules lived as `Server` methods and helpers spread over `internal/api` (`isAdmin`, `verbs`, `mayCreate`,
-`usable`, `roleOrGroup`, `validPrincipal` in `api.go`; `actorVerbs`, `actorAllowed` in `delegation.go`), next to
+`usable`, `roleOrGroup` in `api.go`; `actorVerbs`, `actorAllowed` in `delegation.go`), next to
 HTTP handling. They could only be tested through HTTP requests, and the console's views (`admin.go`) reached
 into the same helpers.
 
 ## Design
 
 - `internal/policy`: `New(config.Policy) *Policy` with `IsAdmin`, `Verbs`, `MayCreate`, `ActorVerbs`,
-  `ActorAllowed`; the functions `Usable`, `RoleOrGroup`, `ValidPrincipal`; `ManageVerbs`. It depends on `auth`,
+  `ActorAllowed`; the functions `Usable`, `RoleOrGroup`; `ManageVerbs`. It depends on `auth`,
   `config` and `state` only - no HTTP, no store.
 - `internal/api` holds a `*policy.Policy` and calls it; the code moved as it was (`mayCreate`'s unused name
-  parameter dropped).
+  parameter dropped; `validPrincipal`, which nothing called, removed).
 
 ## Enforcement & security
 

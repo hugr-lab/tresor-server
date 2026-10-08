@@ -104,13 +104,3 @@ func RoleOrGroup(p string) bool {
 	group, isGroup := strings.CutPrefix(p, "group:")
 	return (isRole && role != "") || (isGroup && group != "")
 }
-
-// ValidPrincipal says whether p is a principal at all (role:, group:, subject:, client:, with a name).
-func ValidPrincipal(p string) bool {
-	for _, prefix := range []string{"role:", "group:", "subject:", "client:"} {
-		if strings.HasPrefix(p, prefix) && len(p) > len(prefix) {
-			return true
-		}
-	}
-	return false
-}
