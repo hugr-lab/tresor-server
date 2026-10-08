@@ -61,6 +61,9 @@ func (a SecretAuth) Apply(_ context.Context, form url.Values, _ string) error {
 type AssertionAuth struct {
 	ID        string
 	Assertion func(ctx context.Context, tokenURL string) (string, error)
+	// OmitID leaves client_id out of the request (RFC 7523 makes it optional): Keycloak's federated client
+	// authentication refuses one that is not the assertion's sub, a ServiceAccount's name
+	OmitID bool
 }
 
 func (a AssertionAuth) Apply(ctx context.Context, form url.Values, tokenURL string) error {
@@ -68,7 +71,9 @@ func (a AssertionAuth) Apply(ctx context.Context, form url.Values, tokenURL stri
 	if err != nil {
 		return err
 	}
-	form.Set("client_id", a.ID)
+	if !a.OmitID {
+		form.Set("client_id", a.ID)
+	}
 	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
 	form.Set("client_assertion", assertion)
 	return nil

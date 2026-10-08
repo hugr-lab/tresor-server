@@ -86,6 +86,7 @@ config:
         client_id: duckdb-secrets
         client_auth: file
         assertion_file: /var/run/tresor/idp-token/token
+        omit_client_id: true    # Keycloak refuses a client_id that is not the assertion's sub
 ```
 
 The chart mounts a projected ServiceAccount token with the audience the IdP expects. The kubelet rotates it,

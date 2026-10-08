@@ -14,11 +14,11 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"

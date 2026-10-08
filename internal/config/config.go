@@ -635,6 +635,9 @@ type ExchangeClient struct {
 	X5T string `yaml:"x5t"`
 	// AssertionAudience is a signed JWT's aud: issuer (the default; ZITADEL, Keycloak) or token_endpoint (Entra).
 	AssertionAudience string `yaml:"assertion_audience"`
+	// OmitClientID leaves client_id out of the token request (a client assertion names the client): Keycloak's
+	// federated client authentication refuses a client_id that is not the assertion's sub.
+	OmitClientID bool `yaml:"omit_client_id"`
 }
 
 // ClientAuthKinds are the ways the service logs in at a token endpoint.
@@ -1334,6 +1337,9 @@ func (ex *ExchangeClient) validate(identity string, vaultUsed, awsUsed bool) err
 		"awskms":   {"key", "kid", "x5t", "assertion_audience"},
 		"gcpkms":   {"key", "kid", "x5t", "assertion_audience"},
 	}[ex.ClientAuth]
+	if ex.OmitClientID && ex.ClientAuth == "secret" {
+		return errors.New("exchange.omit_client_id is for a client assertion, not client_auth: secret")
+	}
 	for name, on := range set {
 		if on && !slices.Contains(allowed, name) {
 			return fmt.Errorf("exchange.%s is not for client_auth: %s", name, ex.ClientAuth)

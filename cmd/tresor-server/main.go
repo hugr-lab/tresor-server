@@ -766,7 +766,7 @@ func exchangeAuth(ctx context.Context, cfg *config.Config) (map[string]mint.Clie
 			}
 			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
 		}
-		out[config.IssuerKey(is.Issuer)] = mint.AssertionAuth{ID: clientID, Assertion: source}
+		out[config.IssuerKey(is.Issuer)] = mint.AssertionAuth{ID: clientID, Assertion: source, OmitID: ex.OmitClientID}
 		checks = append(checks, health.Check{
 			Name: "exchange " + is.Issuer,
 			Run: func(ctx context.Context) error {

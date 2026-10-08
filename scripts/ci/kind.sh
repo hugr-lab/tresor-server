@@ -428,7 +428,7 @@ if ! kubectl -n kc rollout status deploy/keycloak --timeout 300s; then
 fi
 install k tresor-kc --set config.state.kind=kubernetes \
 	--set exchangeToken.enabled=true --set exchangeToken.audience="$kc_issuer" --set exchangeToken.expirationSeconds=600 \
-	--set-json 'config.issuers=[{"issuer":"'"$kc_issuer"'","audience":"duckdb-secrets","roles_claim":"realm_access.roles","exchange":{"client_id":"duckdb-secrets","client_auth":"file","assertion_file":"/var/run/tresor/idp-token/token"}}]'
+	--set-json 'config.issuers=[{"issuer":"'"$kc_issuer"'","audience":"duckdb-secrets","roles_claim":"realm_access.roles","exchange":{"client_id":"duckdb-secrets","client_auth":"file","assertion_file":"/var/run/tresor/idp-token/token","omit_client_id":true}}]'
 forward tresor-kc k-tresor-server
 tresor_port="$port"
 kubectl -n kc port-forward svc/keycloak :8443 >"$work/kc.forward" &
