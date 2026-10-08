@@ -1,6 +1,6 @@
 # Spec 016: the console in the hugr platform - the microfrontend's contract, version 1
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-08
 - **Author**: hugr lab
 
@@ -93,9 +93,21 @@ gives it the height it has; the console scrolls within.
   (`/tresor/...` to the service): no CORS, the platform's CSP allows itself.
 - **Another origin**: `ui.allowed_origins` names the platform; its CSP allows tresor-server's origin in
   `script-src`, `font-src`, `connect-src`.
-- **The token's audience**: the platform's IdP puts `duckdb-secrets` (the service's `audience`) into its tokens -
-  with Keycloak an audience mapper on the platform's client - or the platform asks for one per audience
-  (`getToken(audience)`).
+- **The token**: a person signs in to the platform, whose tokens carry the platform's audience. tresor-server
+  accepts its own (`duckdb-secrets`), so the platform gets a second token for it from the same session -
+  `getToken(audience)` - with no second sign-in:
+  - **Entra** (first): MSAL's `acquireTokenSilent({ scopes: ['api://duckdb-secrets/.default'] })`. The platform's
+    app registration has a delegated permission on the duckdb-secrets API, admin-consented; the administrators'
+    app role (`secrets_admin`) is assigned on the duckdb-secrets app, and comes in that token's `roles`.
+  - **ZITADEL** (later): the platform's sign-in asks for `urn:zitadel:iam:org:project:id:<tresor's project>:aud`
+    too; ZITADEL puts both projects in one token's `aud`, and one token serves both.
+- **Renewal**: the console keeps no token - `getToken` is called before each request, and the host's library
+  renews (MSAL silently by its refresh token, about an hour per access token, 24 hours per SPA refresh token;
+  ZITADEL by `offline_access`). A token that expires between the host's answer and the service's check: the 401
+  path above (`renew: true`, one retry). A session over (the refresh token expired, the user disabled, a
+  Conditional Access policy): `onUnauthorized`, and the host signs the user in again - by a popup, so the page and
+  an edit in progress stay. The console polls nothing in the background: no request goes out on its own while
+  the user is idle. The host's `getToken` answers from its library's cache: it is called often.
 
 ### The bundle
 
@@ -127,9 +139,11 @@ One ES module with its own React (~400 KB, ~100 KB gzipped): independent of the 
 
 ## Open questions
 
-- The platform's IdP (Keycloak assumed) and whether it proxies tresor-server under its own origin - both settled
-  when the platform's own spec is.
+- Whether the platform proxies tresor-server under its own origin - settled in the platform's own spec. The IdP:
+  Entra first, ZITADEL later (the owner, 2026-10-08).
 
 ## Follow-ups
 
 - Languages: the console's text through a catalogue, `locale` honoured (when the platform switches languages).
+- tresor-server accepting the platform's audience too (several audiences per issuer), should the platform keep one
+  token: any platform service holding a user's token could then call tresor-server's admin API as the user.

@@ -29,4 +29,4 @@ Research lives in the local, gitignored `design/` folder.
 | [013](013-entra-on-behalf-of/spec.md) | Entra On-Behalf-Of for `token_exchange` secrets: `exchange.grant: on_behalf_of` | implemented |
 | [014](014-sql-mac/spec.md) | a MAC on the SQL stores: `state.mac`, who may use what authenticated | implemented |
 | [015](015-policy-package/spec.md) | `internal/policy`: the permission model in a package of its own (a refactor) | implemented |
-| [016](016-platform-contract/spec.md) | the console in the hugr platform: the microfrontend's contract, version 1 | draft |
+| [016](016-platform-contract/spec.md) | the console in the hugr platform: the microfrontend's contract, version 1 | accepted |
