@@ -213,6 +213,7 @@ func TestParseArgs(t *testing.T) {
 		"refs -config x":                 {command: "refs", configPath: "x"},
 		"refs -config x -resolve":        {command: "refs", configPath: "x", resolve: true},
 		"rewrap -tag-untagged -config x": {command: "rewrap", configPath: "x", tagUntagged: true},
+		"mac -config x":                  {command: "mac", configPath: "x"},
 	} {
 		if got, err := parseArgs(strings.Fields(line)); err != nil || got != want {
 			t.Errorf("%s: %+v %v", line, got, err)

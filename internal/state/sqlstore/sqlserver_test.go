@@ -53,7 +53,7 @@ func sqlserverDB(t *testing.T) string {
 
 func openSQLServer(t *testing.T, dsn string) *Store {
 	t.Helper()
-	s, err := OpenSQLServer(ctx, dsn, PasswordLogin{Env: "TRESOR_TEST_SQLSERVER_PASSWORD"}, 8, kek(t, 1), Options{})
+	s, err := OpenSQLServer(ctx, dsn, PasswordLogin{Env: "TRESOR_TEST_SQLSERVER_PASSWORD"}, 8, kek(t, 1), Options{MAC: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -732,3 +732,18 @@ func TestExchangeGrant(t *testing.T) {
 		t.Error("OBO with omit_client_id: accepted")
 	}
 }
+
+// state.mac (spec 014) is the SQL stores'
+func TestStateMAC(t *testing.T) {
+	sqlite := strings.Replace(good, "state: {kind: memory}", "state: {kind: sqlite, path: /data/tresor.db, mac: true}", 1) +
+		"keys: {kind: local, key_file: /k}\n"
+	if cfg, err := Parse([]byte(sqlite)); err != nil || !cfg.State.MAC {
+		t.Fatalf("sqlite: %v", err)
+	}
+	for _, kind := range []string{"memory", "kubernetes, namespace: tresor"} {
+		doc := strings.Replace(good, "state: {kind: memory}", "state: {kind: "+kind+", mac: true}", 1) + "keys: {kind: local, key_file: /k}\n"
+		if _, err := Parse([]byte(doc)); err == nil {
+			t.Errorf("%s with mac: accepted", kind)
+		}
+	}
+}

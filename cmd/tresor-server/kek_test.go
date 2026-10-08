@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -97,5 +98,63 @@ func TestMoveToAnotherKEK(t *testing.T) {
 			st.Close()
 		}
 		t.Fatalf("the same KEK twice: %v", err)
+	}
+}
+
+// tresor-server mac (spec 014): rows written before get a MAC; then state.mac: true reads them, and refuses one
+// changed behind the store
+func TestMACCommand(t *testing.T) {
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "kek")
+	if err := os.WriteFile(keyFile, []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "t.db")
+	path := filepath.Join(dir, "server.yaml")
+	write := func(mac bool) *config.Config {
+		t.Helper()
+		doc := "listen: 127.0.0.1:8443\npublic_url: http://127.0.0.1:8443\nstate: {kind: sqlite, path: " + db +
+			", mac: " + map[bool]string{true: "true", false: "false"}[mac] + "}\nkeys: {kind: local, key_file: " + keyFile + "}\n" +
+			"issuers: [{issuer: 'http://127.0.0.1:18080/realms/t', audience: duckdb-secrets}]\npolicy: {admins: [role:secrets_admin]}\n"
+		if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, _, err := config.Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx := context.Background()
+	cfg := write(false)
+	st, _, err := openState(ctx, cfg, log, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put(t, st, "pg", `{"password":"hunter2"}`)
+	st.Close()
+	// as an upgrade finds it: no MAC on the row
+	raw, err := sql.Open("sqlite", db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`UPDATE secrets SET mac = NULL`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+	if err := fillMACs(path, log); err != nil {
+		t.Fatal(err)
+	}
+	st, _, err = openState(ctx, write(true), log, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Get(ctx, "pg"); err != nil {
+		t.Fatalf("after tresor-server mac, checked: %v", err)
+	}
+	if err := fillMACs(filepath.Join(dir, "none.yaml"), log); err == nil {
+		t.Fatal("a missing configuration: no error")
 	}
 }

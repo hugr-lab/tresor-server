@@ -46,6 +46,8 @@ Never logged: material, tokens, data keys, a grant's id, a configuration value.
 - Migrations run at start, one replica at a time (a lock in the database).
 - An upgrade may ask for a step of its own. To the version that authenticates data keys (spec 003): the
   KEK's `sign`, and `tresor-server rewrap -tag-untagged` once - see [Encryption](encryption.md#the-root).
+- To the version with the SQL stores' MAC (spec 014): once every replica runs it, `tresor-server mac` (on SQLite
+  with the service stopped), then `state.mac: true` - see [State](state.md#the-sql-stores-mac-statemac).
 - An older binary refuses a database migrated by a newer one: roll forward, or restore the database.
 
 ## Checking references

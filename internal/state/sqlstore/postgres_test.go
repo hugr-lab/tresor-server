@@ -49,7 +49,7 @@ func postgresDB(t *testing.T) string {
 
 func openPostgres(t *testing.T, dsn string, db *sql.DB) *Store {
 	t.Helper()
-	s, err := OpenPostgres(ctx, dsn, PasswordLogin{Env: "TRESOR_TEST_POSTGRES_PASSWORD"}, 8, kek(t, 1), Options{})
+	s, err := OpenPostgres(ctx, dsn, PasswordLogin{Env: "TRESOR_TEST_POSTGRES_PASSWORD"}, 8, kek(t, 1), Options{MAC: true})
 	if err != nil {
 		t.Fatal(err)
 	}

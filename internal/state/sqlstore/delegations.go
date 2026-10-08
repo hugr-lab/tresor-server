@@ -49,11 +49,20 @@ func (d delegations) put(ctx context.Context, g state.Delegation, maxPerActor in
 	}
 	id := hex.EncodeToString(g.IDHash)
 	keyID, sealed := "", []byte(nil)
+	var err error
 	if g.Subject != nil {
-		var err error
 		if keyID, sealed, err = s.envelope.Seal(ctx, subjectAAD(id), g.Subject); err != nil {
 			return err
 		}
+	} else if keyID, err = s.envelope.ActiveID(ctx); err != nil { // the MAC's key (spec 014), no subject sealed
+		return err
+	}
+	stored := &delegationRow{id: id, actorOwner: g.ActorOwner, actorClient: g.ActorClient, actorIssuer: g.ActorIssuer,
+		userOwner: g.UserOwner, user: string(g.User), expires: g.ExpiresAt.UnixMicro(),
+		subjectExpires: g.SubjectExpiresAt.UnixMicro(), keyID: keyID, sealed: sealed}
+	mac, err := s.macOf(ctx, keyID, stored.canonical)
+	if err != nil {
+		return err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -74,9 +83,9 @@ func (d delegations) put(ctx context.Context, g state.Delegation, maxPerActor in
 		return state.ErrTooMany
 	}
 	if _, err := tx.ExecContext(ctx, s.q(`INSERT INTO delegations (id_hash, actor_owner, actor_client, actor_issuer,
-		user_owner, user_json, expires_at, subject_expires_at, subject_key_id, subject_sealed)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), id, g.ActorOwner, g.ActorClient, g.ActorIssuer, g.UserOwner,
-		string(g.User), g.ExpiresAt.UnixMicro(), g.SubjectExpiresAt.UnixMicro(), keyID, sealed); err != nil {
+		user_owner, user_json, expires_at, subject_expires_at, subject_key_id, subject_sealed, mac)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), id, g.ActorOwner, g.ActorClient, g.ActorIssuer, g.UserOwner,
+		string(g.User), stored.expires, stored.subjectExpires, keyID, sealed, mac); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -92,26 +101,37 @@ func (d delegations) Count(ctx context.Context, actorOwner string, now time.Time
 	return n, err
 }
 
-func (d delegations) Get(ctx context.Context, idHash []byte, now time.Time) (*state.Delegation, error) {
-	if err := d.s.ready(); err != nil {
-		return nil, err
-	}
-	g := state.Delegation{IDHash: idHash}
-	var user string
-	var expires, subjectExpires int64
-	var hasSubject int
+// row reads a live delegation grant as stored, its MAC checked (spec 014); ErrNotFound when there is none.
+func (d delegations) row(ctx context.Context, id string, now time.Time) (*delegationRow, error) {
+	r := delegationRow{id: id}
 	err := d.s.db.QueryRowContext(ctx, d.s.q(`SELECT actor_owner, actor_client, actor_issuer, user_owner, user_json,
-		expires_at, subject_expires_at, CASE WHEN subject_sealed IS NULL THEN 0 ELSE 1 END
-		FROM delegations WHERE id_hash = ? AND expires_at > ?`), hex.EncodeToString(idHash), now.UnixMicro()).
-		Scan(&g.ActorOwner, &g.ActorClient, &g.ActorIssuer, &g.UserOwner, &user, &expires, &subjectExpires, &hasSubject)
+		expires_at, subject_expires_at, subject_key_id, subject_sealed, mac
+		FROM delegations WHERE id_hash = ? AND expires_at > ?`), id, now.UnixMicro()).
+		Scan(&r.actorOwner, &r.actorClient, &r.actorIssuer, &r.userOwner, &r.user, &r.expires, &r.subjectExpires,
+			&r.keyID, &r.sealed, &r.mac)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, state.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	g.User, g.HasSubject = []byte(user), hasSubject == 1
-	g.ExpiresAt, g.SubjectExpiresAt = time.UnixMicro(expires).UTC(), time.UnixMicro(subjectExpires).UTC()
+	if err := d.s.verify(ctx, "a delegation grant", r.keyID, r.canonical, r.mac); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (d delegations) Get(ctx context.Context, idHash []byte, now time.Time) (*state.Delegation, error) {
+	if err := d.s.ready(); err != nil {
+		return nil, err
+	}
+	r, err := d.row(ctx, hex.EncodeToString(idHash), now)
+	if err != nil {
+		return nil, err
+	}
+	g := state.Delegation{IDHash: idHash, ActorOwner: r.actorOwner, ActorClient: r.actorClient, ActorIssuer: r.actorIssuer,
+		UserOwner: r.userOwner, User: []byte(r.user), HasSubject: r.sealed != nil,
+		ExpiresAt: time.UnixMicro(r.expires).UTC(), SubjectExpiresAt: time.UnixMicro(r.subjectExpires).UTC()}
 	return &g, nil
 }
 
@@ -120,18 +140,14 @@ func (d delegations) SubjectToken(ctx context.Context, idHash []byte, now time.T
 		return nil, err
 	}
 	id := hex.EncodeToString(idHash)
-	var keyID string
-	var sealed []byte
-	err := d.s.db.QueryRowContext(ctx, d.s.q(`SELECT subject_key_id, subject_sealed FROM delegations
-		WHERE id_hash = ? AND expires_at > ? AND subject_expires_at > ?`), id, now.UnixMicro(), now.UnixMicro()).
-		Scan(&keyID, &sealed)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && sealed == nil) {
-		return nil, state.ErrNotFound
-	}
+	r, err := d.row(ctx, id, now)
 	if err != nil {
 		return nil, err
 	}
-	return d.s.envelope.Open(ctx, keyID, subjectAAD(id), sealed)
+	if r.sealed == nil || r.subjectExpires <= now.UnixMicro() {
+		return nil, state.ErrNotFound
+	}
+	return d.s.envelope.Open(ctx, r.keyID, subjectAAD(id), r.sealed)
 }
 
 func (d delegations) Purge(ctx context.Context, now time.Time) (int, error) {
@@ -185,19 +201,21 @@ func (d delegations) Token(ctx context.Context, idHash []byte, key string) (*sta
 		return nil, err
 	}
 	id := hex.EncodeToString(idHash)
-	t := state.MintedToken{Key: key}
-	var keyID string
-	var sealed []byte
-	err := d.s.db.QueryRowContext(ctx, d.s.q(`SELECT version, failed, data_key_id, sealed FROM delegation_tokens
-		WHERE id_hash = ? AND mint_key = ?`), id, mintKeyColumn(key)).Scan(&t.Version, &t.Failed, &keyID, &sealed)
+	r := tokenRow{id: id, key: key}
+	err := d.s.db.QueryRowContext(ctx, d.s.q(`SELECT version, failed, data_key_id, sealed, mac FROM delegation_tokens
+		WHERE id_hash = ? AND mint_key = ?`), id, mintKeyColumn(key)).Scan(&r.version, &r.failed, &r.keyID, &r.sealed, &r.mac)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, state.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	if sealed != nil {
-		if t.Token, err = d.s.envelope.Open(ctx, keyID, tokenAAD(id, key, t.Version), sealed); err != nil {
+	if err := d.s.verify(ctx, "a minted token", r.keyID, r.canonical, r.mac); err != nil {
+		return nil, err
+	}
+	t := state.MintedToken{Key: key, Version: r.version, Failed: r.failed}
+	if r.sealed != nil {
+		if t.Token, err = d.s.envelope.Open(ctx, r.keyID, tokenAAD(id, key, t.Version), r.sealed); err != nil {
 			return nil, err
 		}
 	}
@@ -214,15 +232,22 @@ func (d delegations) PutToken(ctx context.Context, idHash []byte, t state.Minted
 	}
 	id := hex.EncodeToString(idHash)
 	keyID, sealed := "", []byte(nil)
+	var err error
 	if t.Token != nil {
-		var err error
 		if keyID, sealed, err = s.envelope.Seal(ctx, tokenAAD(id, t.Key, t.Version), t.Token); err != nil {
 			return err
 		}
+	} else if keyID, err = s.envelope.ActiveID(ctx); err != nil { // the MAC's key (spec 014), nothing sealed
+		return err
+	}
+	stored := &tokenRow{id: id, key: t.Key, version: t.Version, failed: t.Failed, keyID: keyID, sealed: sealed}
+	mac, err := s.macOf(ctx, keyID, stored.canonical)
+	if err != nil {
+		return err
 	}
 	if t.Version == 1 {
 		_, err := s.db.ExecContext(ctx, s.q(`INSERT INTO delegation_tokens (id_hash, mint_key, version, failed,
-			data_key_id, sealed) VALUES (?, ?, 1, ?, ?, ?)`), id, mintKeyColumn(t.Key), t.Failed, keyID, sealed)
+			data_key_id, sealed, mac) VALUES (?, ?, 1, ?, ?, ?, ?)`), id, mintKeyColumn(t.Key), t.Failed, keyID, sealed, mac)
 		switch {
 		case s.d.Unique(err) || s.d.Retryable(err):
 			return state.ErrConflict
@@ -232,7 +257,7 @@ func (d delegations) PutToken(ctx context.Context, idHash []byte, t state.Minted
 		return err
 	}
 	res, err := s.db.ExecContext(ctx, s.q(`UPDATE delegation_tokens SET version = ?, failed = ?, data_key_id = ?,
-		sealed = ? WHERE id_hash = ? AND mint_key = ? AND version = ?`), t.Version, t.Failed, keyID, sealed, id,
+		sealed = ?, mac = ? WHERE id_hash = ? AND mint_key = ? AND version = ?`), t.Version, t.Failed, keyID, sealed, mac, id,
 		mintKeyColumn(t.Key), t.Version-1)
 	if s.d.Retryable(err) {
 		return state.ErrConflict // nothing written: the caller reads what is there, and tries again
