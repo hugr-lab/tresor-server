@@ -75,3 +75,35 @@ func TestMissingAssets(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// the microfrontend's module and the page are revalidated at each load by their content's ETag (spec 016)
+func TestRevalidation(t *testing.T) {
+	h := handler(Config{}, fstest.MapFS{
+		"index.html":            {Data: []byte(`<!doctype html><base href="/ui/"><p>console</p>`)},
+		"mfe/tresor.js":         {Data: []byte(`export const contract = 1`)},
+		"mfe/assets/chunk-1.js": {Data: []byte(`x`)},
+	})
+	for _, p := range []string{"/ui/mfe/tresor.js", "/ui/"} {
+		w := get(t, h, p)
+		tag := w.Header().Get("ETag")
+		if w.Code != 200 || w.Header().Get("Cache-Control") != "no-cache" || len(tag) != 66 || tag[0] != '"' {
+			t.Fatalf("%s: %d %v", p, w.Code, w.Header())
+		}
+		again := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, p, nil)
+		r.Header.Set("If-None-Match", tag)
+		h.ServeHTTP(again, r)
+		if again.Code != http.StatusNotModified || again.Body.Len() != 0 {
+			t.Fatalf("%s revalidated: %d", p, again.Code)
+		}
+		r.Header.Set("If-None-Match", `"stale"`)
+		changed := httptest.NewRecorder()
+		h.ServeHTTP(changed, r)
+		if changed.Code != 200 {
+			t.Fatalf("%s with an old tag: %d", p, changed.Code)
+		}
+	}
+	if w := get(t, h, "/ui/mfe/assets/chunk-1.js"); !strings.Contains(w.Header().Get("Cache-Control"), "immutable") || w.Header().Get("ETag") != "" {
+		t.Fatalf("a hashed asset: %v", w.Header())
+	}
+}

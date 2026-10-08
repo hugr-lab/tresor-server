@@ -66,22 +66,63 @@ origins for the sign-in). An IdP whose token or user-info endpoint is on another
 A platform's shell can mount the console in its own pages: the shell signs in, navigates and sets the theme.
 
 ```js
-const { mountTresor } = await import('https://secrets.corp.example/ui/mfe/tresor.js')
-const tresor = mountTresor(element, {
+const tresor = await import('https://secrets.corp.example/ui/mfe/tresor.js')
+tresor.contract                          // 1: the contract below
+const mounted = tresor.mountTresor(element, {
   apiBase: 'https://secrets.corp.example',
-  getToken: async (audience) => token,   // an access token with the service's audience, before each request
+  getToken: async (audience, { renew } = {}) => token, // an access token with the service's audience, before each request
   audience: 'duckdb-secrets',            // optional: handed to getToken when the shell's tokens lack it
   basePath: '/platform/secrets',         // the shell's path the console lives under
   theme: 'dark',
+  locale: 'en',                          // the only one now; another falls back to 'en'
   onNavigate: (path, { replace }) => history[replace ? 'replaceState' : 'pushState'](null, '', path),
   onTitle: (title) => setBreadcrumb(title),
+  onUnauthorized: () => signInAgain(),   // the service refused the token, renewed too
 })
-tresor.update({ theme: 'light' })          // or { path } when the shell navigates
-tresor.unmount()
+mounted.update({ theme: 'light' })         // or { path } when the shell navigates, { locale }
+mounted.unmount()
 ```
 
-Or the element: `<tresor-console api-base="…" base-path="…" audience="…" theme="dark">`, mounted once its `getToken`
-property is set (a token is never an attribute).
+Or the element: `<tresor-console api-base="…" base-path="…" audience="…" theme="dark" locale="en">`, mounted once its
+`getToken` property is set (a token is never an attribute); its `data-contract` names the contract; the shell's
+callbacks are properties, or the events `tresor-navigate`, `tresor-title` and `tresor-unauthorized`.
+
+### The contract, version 1
+
+- **The version**: `contract` (and `data-contract` on the element) is `1`. An addition (an option, an event) keeps
+  it; a change that breaks a shell makes it `2`, announced in the release notes.
+- **Whether to show the entry**: `GET <apiBase>/v1/whoami` with the user's token; `permissions.create` is `true`
+  for an administrator. Hide the entry otherwise; mounted anyway, the console says it is for administrators.
+- **The token**: `getToken` is called before each request, so it should answer from the shell's library's cache
+  (which renews it). When the service answers 401, the console calls `getToken(audience, { renew: true })` once
+  and retries; refused again, it calls `onUnauthorized` (at most once every 30 seconds) and shows "Your session
+  ended" until a request succeeds. The shell signs the user in again - by a popup, so an edit in progress stays.
+  The console sends nothing on its own while the user is idle.
+- **The theme**: `theme` picks the light or dark defaults; the shell overrides any of them by setting the
+  variables on the element - they win over the console's own in either theme:
+
+  ```css
+  .tresor-slot { --brand: #3a7bd5; --brand-strong: #2c5fa8; --surface: #fff; --ink: #111; }
+  ```
+
+  The variables: `--surface`, `--surface-soft`, `--ink`, `--ink-muted`, `--border`, `--brand`, `--brand-strong`,
+  `--on-brand`, `--focus`, `--success`, `--success-soft`, `--warning`, `--warning-soft`, `--danger`,
+  `--danger-soft`, `--row`. The console sets `data-tresor-theme` on the element while mounted.
+- **The layout**: the content needs 960 px; narrower, it scrolls inside the element. The shell gives it its height.
+- **Caching**: `tresor.js` has a fixed name, `Cache-Control: no-cache` and an `ETag`: each load revalidates (a 304)
+  and an upgrade is picked up at once; its chunks have hashed names and are cached for good.
+
+### A token for the console
+
+People sign in to the platform, whose tokens carry the platform's audience; the service accepts its own
+(`duckdb-secrets`). The shell gets a second token from the same session, with no second sign-in:
+
+- **Entra ID**: MSAL's `acquireTokenSilent({ scopes: ['api://duckdb-secrets/.default'] })`. The platform's app
+  registration has a delegated permission on the duckdb-secrets API, admin-consented; the administrators' app
+  role is assigned on the duckdb-secrets app and comes in that token's `roles`. MSAL renews it by its refresh
+  token; `renew: true` maps to `forceRefresh: true`.
+- **ZITADEL**: the platform's sign-in also asks for the scope `urn:zitadel:iam:org:project:id:<tresor's
+  project>:aud`; one token then carries both audiences.
 
 ```yaml
 ui:
@@ -92,7 +133,7 @@ ui:
   it needs no `'unsafe-inline'`. The shell's CSP allows the service's origin in `script-src`, `font-src` and
   `connect-src`.
 - No cookie is sent or honoured: the token is the only credential.
-- A shell that proxies the service under its own origin needs no `allowed_origins`.
+- A shell that proxies the service under its own origin (recommended) needs no `allowed_origins`.
 
 ## Turning it off
 

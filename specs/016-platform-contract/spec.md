@@ -1,6 +1,6 @@
 # Spec 016: the console in the hugr platform - the microfrontend's contract, version 1
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-08
 - **Author**: hugr lab
 
@@ -79,7 +79,8 @@ tresor-console, .tresor-mount { --brand: #3a7bd5; --surface: #fff; --ink: #111; 
 
 The contract lists them: `--surface`, `--surface-soft`, `--ink`, `--ink-muted`, `--border`, `--brand`,
 `--brand-strong`, `--on-brand`, `--focus`, `--success(-soft)`, `--warning(-soft)`, `--danger(-soft)`, `--row`;
-`theme` picks the light or dark defaults under them. Fonts: Manrope and JetBrains Mono are added to the document
+`theme` picks the light or dark defaults under them - both on `:host` (the dark ones by `data-tresor-theme`, set on
+the element while mounted), since a rule on an element inside the shadow root would win over the host's. Fonts: Manrope and JetBrains Mono are added to the document
 once (a host using the same families gets these files).
 
 ### Layout
@@ -125,8 +126,8 @@ One ES module with its own React (~400 KB, ~100 KB gzipped): independent of the 
   `onUnauthorized` once (and not again within 30 s); `locale` other than `en` falls back; the element's
   `data-contract` and `tresor-unauthorized` event.
 - Go: `/ui/mfe/tresor.js` has `no-cache` and a strong ETag; `If-None-Match` answers 304.
-- Playwright (the test host): theming by a variable set on the element; the token expired in the host → renewed
-  through `getToken`; refused again → the host told.
+- Playwright (the test host): theming by a variable set on the element, in both themes; the token expired in the
+  host → renewed through `getToken`; refused again → the host told, once; restored → "Try again" clears the banner.
 
 ## Alternatives considered
 

@@ -12,6 +12,8 @@
       header a { color: #e4e4e7; }
       main { padding: 20px; }
       #status { font-size: 13px; opacity: 0.8; }
+      /* the platform's colours, set on the element: they win over the console's own (spec 016) */
+      #slot.branded { --brand: rgb(200, 30, 90); --brand-strong: rgb(200, 30, 90); }
     </style>
   </head>
   <body>
@@ -21,6 +23,10 @@
       <span id="status"></span>
       <button id="theme" type="button">Theme</button>
       <button id="signin" type="button">Sign in</button>
+      <button id="brand" type="button">Brand</button>
+      <button id="expire" type="button">Expire token</button>
+      <button id="revoke" type="button">Revoke token</button>
+      <button id="restore" type="button">Restore token</button>
     </header>
     <main><h1 id="title"></h1><div id="slot"></div></main>
     <script type="module" src="./host.ts"></script>

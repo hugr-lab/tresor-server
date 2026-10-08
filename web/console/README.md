@@ -31,16 +31,19 @@ hugr platform. The host owns sign-in, navigation and the theme; the console draw
 with its own styles (constructed style sheets: the host's CSP needs no `'unsafe-inline'`) and its section tabs.
 
 ```js
-const { mountTresor } = await import('https://tresor.example/ui/mfe/tresor.js')
+const { mountTresor, contract } = await import('https://tresor.example/ui/mfe/tresor.js') // contract: 1 (spec 016)
 const tresor = mountTresor(element, {
   apiBase: 'https://tresor.example',          // the service's public_url
-  getToken: async (audience) => token,         // called before each request: an access token for tresor
+  getToken: async (audience, how) => token,    // called before each request: an access token for tresor;
+                                               // how?.renew after a 401: a fresh one (one retry)
   audience: 'duckdb-secrets',                  // optional: passed to getToken when the host asks per audience
   theme: 'dark',
   basePath: '/platform/tresor',                // the host's path the console lives under
   onNavigate: (path, { replace }) => history[replace ? 'replaceState' : 'pushState'](null, '', path), // optional:
                                                // else the console keeps the browser's history itself
   onTitle: (title) => setBreadcrumb(title),
+  onUnauthorized: () => signInAgain(),         // optional: refused renewed too (at most every 30 s)
+  locale: 'en',                                // the only one now
 })
 tresor.update({ theme: 'light' })              // the host's theme changed
 tresor.update({ path: location.pathname })     // the host navigated (its back button)
@@ -48,8 +51,10 @@ tresor.unmount()
 ```
 
 Or as an element: `<tresor-console api-base="…" base-path="…" audience="…" theme="dark">`, mounted once its
-`getToken` **property** is set (a token is never an attribute); `tresor-navigate` and `tresor-title` events, or
-`onNavigate` and `onTitle` properties; `navigate(path)` for the host's own navigation.
+`getToken` **property** is set (a token is never an attribute); `tresor-navigate`, `tresor-title` and
+`tresor-unauthorized` events, or `onNavigate`, `onTitle` and `onUnauthorized` properties; `navigate(path)` for the
+host's own navigation; `data-contract` names the contract. The contract, the theming variables and the platform's
+token: [the Console page](../../website/docs/console.md#the-contract-version-1) and spec 016.
 
 The service sends CORS headers for `ui.allowed_origins` on `/ui/mfe/`, `/v1/` and `/admin/v1/`. The host's CSP
 allows the service's origin in `script-src`, `font-src` and `connect-src`. One element holds one console.
@@ -60,7 +65,8 @@ allows the service's origin in `script-src`, `font-src` and `connect-src`. One e
 the IdP adds it to the host's tokens (a Keycloak audience mapper, a ZITADEL project) or the host asks for one.
 
 **The test host** (`mfe-host/`, not shipped): another origin with its own sign-in, loading the module from a
-running service. Set in `.env.local` (gitignored):
+running service; its buttons set the platform's colours on the element and expire, revoke and restore the token
+(spec 016). Set in `.env.local` (gitignored):
 
 ```sh
 VITE_TRESOR_URL=http://127.0.0.1:18443        # the service, with ui.allowed_origins: [http://127.0.0.1:18444]

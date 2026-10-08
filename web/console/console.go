@@ -5,7 +5,9 @@
 package console
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"html"
 	"io/fs"
@@ -43,6 +45,11 @@ type Config struct {
 // Handler serves GET /ui/... (the caller has stripped public_url's path).
 func Handler(cfg Config) http.Handler {
 	files, _ := fs.Sub(dist, "dist")
+	return handler(cfg, files)
+}
+
+// handler serves files: the build.
+func handler(cfg Config, files fs.FS) http.Handler {
 	index, _ := fs.ReadFile(files, "index.html")
 	if missing := missingAssets(files, index); missing != "" {
 		// a page whose files are not here (a local build's index.html committed alone) would load nothing
@@ -57,6 +64,13 @@ func Handler(cfg Config) http.Handler {
 	}
 	config, _ := json.Marshal(map[string]any{"api": cfg.API, "issuers": cfg.Issuers, "environment": cfg.Environment})
 	csp := policy(cfg)
+	indexTag := etag(index)
+	// the microfrontend's module has a fixed name (spec 016): revalidated at each load by its content's ETag, so
+	// an upgrade is picked up at once and a load that changed nothing costs a 304
+	var moduleTag string
+	if module, err := fs.ReadFile(files, "mfe/tresor.js"); err == nil {
+		moduleTag = etag(module)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", csp)
@@ -84,6 +98,10 @@ func Handler(cfg Config) http.Handler {
 				if strings.HasPrefix(name, "assets/") || strings.HasPrefix(name, "mfe/assets/") {
 					h.Set("Cache-Control", "public, max-age=31536000, immutable") // hashed names
 				}
+				if name == "mfe/tresor.js" && moduleTag != "" {
+					h.Set("Cache-Control", "no-cache")
+					h.Set("ETag", moduleTag) // http.ServeContent answers If-None-Match with 304
+				}
 				http.ServeFileFS(w, r, files, name)
 				return
 			}
@@ -95,8 +113,19 @@ func Handler(cfg Config) http.Handler {
 		// a route of the app: the page, which routes itself
 		h.Set("Content-Type", "text/html; charset=utf-8")
 		h.Set("Cache-Control", "no-cache")
+		h.Set("ETag", indexTag)
+		if inm := r.Header.Get("If-None-Match"); inm != "" && strings.Contains(inm, indexTag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		_, _ = w.Write(index)
 	})
+}
+
+// etag is a strong ETag of content: its SHA-256, hex.
+func etag(content []byte) string {
+	sum := sha256.Sum256(content)
+	return `"` + hex.EncodeToString(sum[:]) + `"`
 }
 
 // assetRef is a file the page names: ./assets/<file>

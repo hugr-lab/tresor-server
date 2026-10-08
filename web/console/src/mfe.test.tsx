@@ -57,6 +57,7 @@ describe('mountTresor', () => {
     expect(getToken).toHaveBeenCalledWith('duckdb-secrets')
     const frame = el.shadowRoot!.querySelector<HTMLElement>('.mfe-root')!
     expect(frame.dataset.theme).toBe('dark')
+    expect(el.dataset.tresorTheme).toBe('dark') // the variables' dark defaults are on :host, under the host's own
     expect(el.shadowRoot!.querySelector('nav[aria-label="tresor"]')).not.toBeNull() // its own section tabs, no sidebar
     expect(titles.at(-1)).toBe('Variables')
     expect(navigated).toEqual([]) // where the host already is: nothing to tell
@@ -73,6 +74,7 @@ describe('mountTresor', () => {
     expect(() => mountTresor(el, { apiBase: 'https://tresor.example', getToken })).toThrow(/already/)
     await act(async () => h.unmount())
     expect(el.shadowRoot!.childElementCount).toBe(0)
+    expect(el.dataset.tresorTheme).toBeUndefined()
     expect(() => h.update({ theme: 'dark' })).not.toThrow() // after unmount: nothing
     await act(async () => {
       h = mountTresor(el, { apiBase: 'https://tresor.example', getToken })
@@ -156,5 +158,78 @@ describe('<tresor-console>', () => {
     expect(seen.at(-1)).toBe('Secrets')
     await act(async () => el.remove())
     expect(el.shadowRoot!.childElementCount).toBe(0)
+  })
+})
+
+// spec 016: the contract's version; a refused token renewed once; a session over told to the host (at most once
+// per 30 s) and shown; the console works again once a request passes
+describe('the platform contract (spec 016)', () => {
+  it('exports its version and names it on the element', async () => {
+    const mod = await import('./mfe')
+    expect(mod.contract).toBe(1)
+    stub()
+    const el = document.createElement('tresor-console') as TresorConsole
+    document.body.appendChild(el)
+    expect(el.dataset.contract).toBe('1')
+  })
+
+  it('renews a refused token once, then tells the host', async () => {
+    // the service accepts only tokens named "good"
+    let accepted = 'good'
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      if (new Headers(init.headers).get('Authorization') !== `Bearer ${accepted}`) return answer(401, { title: 'unauthenticated', status: 401 })
+      if (url.endsWith('/v1/whoami')) return answer(200, me)
+      if (url.endsWith('/admin/v1/service')) return answer(200, service)
+      return answer(200, [])
+    })
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    let cached = 'stale'
+    const asked: (boolean | undefined)[] = []
+    const getToken = vi.fn(async (_a?: string, how?: { renew?: boolean }) => {
+      asked.push(how?.renew)
+      if (how?.renew) cached = 'good'
+      return cached
+    })
+    const told = vi.fn()
+    await act(async () => {
+      mountTresor(el, { apiBase: 'https://tresor.example', getToken, onUnauthorized: told })
+    })
+    await settle()
+    expect(el.shadowRoot!.querySelector('nav[aria-label="tresor"]')).not.toBeNull() // renewed once, then served
+    expect(asked).toContain(true)
+    expect(told).not.toHaveBeenCalled()
+
+    // the session over: even renewed, refused - the host told once, the console says so
+    accepted = 'never'
+    const access = [...el.shadowRoot!.querySelectorAll('a')].find((a) => a.textContent === 'Access')!
+    await act(async () => access.click())
+    await settle()
+    await act(async () => [...el.shadowRoot!.querySelectorAll('a')].find((a) => a.textContent === 'Variables')!.click())
+    await settle()
+    expect(told).toHaveBeenCalledTimes(1) // at most once per 30 s
+    expect(el.shadowRoot!.textContent).toMatch(/Your session ended/)
+
+    // signed in again: the next request passes, the notice goes
+    accepted = 'good'
+    const retry = [...el.shadowRoot!.querySelectorAll('button')].find((b) => b.textContent === 'Try again')!
+    await act(async () => retry.click())
+    await settle()
+    expect(el.shadowRoot!.textContent).not.toMatch(/Your session ended/)
+  })
+
+  it('tells an element host by an event', async () => {
+    vi.stubGlobal('fetch', () => answer(401, { title: 'unauthenticated', status: 401 }))
+    const el = document.createElement('tresor-console') as TresorConsole
+    el.setAttribute('api-base', 'https://tresor.example')
+    el.setAttribute('locale', 'de') // not spoken yet: English
+    let told = 0
+    el.addEventListener('tresor-unauthorized', () => told++)
+    document.body.appendChild(el)
+    await act(async () => {
+      el.getToken = async () => 'refused'
+    })
+    await settle()
+    expect(told).toBe(1)
   })
 })
