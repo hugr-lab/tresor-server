@@ -172,7 +172,8 @@ issuers:
   Keycloak 26.6 (a preview before). Settled 2026-10-08: kind runs it in CI (`scripts/ci/kind.sh`) - an
   identity provider of type `kubernetes`, the client's `federated-jwt` authenticator, a token minted by
   exchange with the service's projected ServiceAccount token as its only credential.
-- Whether Entra accepts a managed identity as a federated credential in every cloud (sovereign clouds).
+- ~~Whether Entra accepts a managed identity as a federated credential~~: checked live in the public cloud on
+  2026-10-08, with On-Behalf-Of (spec 013). Sovereign clouds remain unchecked (their audience differs).
 
 ## Alternatives considered
 
