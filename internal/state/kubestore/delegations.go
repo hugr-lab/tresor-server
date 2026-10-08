@@ -270,6 +270,19 @@ func (d delegations) DeleteWhere(ctx context.Context, actorClient, userOwner str
 // would leave them otherwise). The tokens are listed first: one minted after the grants are listed has a grant
 // listed.
 func (d delegations) Purge(ctx context.Context, now time.Time) (int, error) {
+	// the actors' counters are read before the grants: a counter a put moves after this read has a newer
+	// version (the delete is refused), and a put that moved it before created its grant before - the grant
+	// list below sees it. Read after the grants, a counter created meanwhile would look idle, and a put from
+	// no counter could then create it again past the limit.
+	actors, err := d.s.actors.list(ctx, "")
+	if err != nil {
+		return 0, err
+	}
+	return d.purge(ctx, now, actors)
+}
+
+// purge is Purge with the actors' counters as read first.
+func (d delegations) purge(ctx context.Context, now time.Time, actors []*object[actorSpec]) (int, error) {
 	tokens, err := d.s.tokens.list(ctx, "")
 	if err != nil {
 		return 0, err
@@ -302,17 +315,15 @@ func (d delegations) Purge(ctx context.Context, now time.Time) (int, error) {
 			}
 		}
 	}
-	return n, d.dropIdleActors(ctx, liveActors)
+	return n, d.dropIdleActors(ctx, actors, liveActors)
 }
 
 // dropIdleActors deletes the counters of actors with no live grant (spec 003's follow-up: one per actor ever
-// seen otherwise). Compare-and-set on the counter read: a put that moved it meanwhile keeps it (Conflict, left
-// for the next purge); a put that reads it before and moves it after finds it gone, and runs again.
-func (d delegations) dropIdleActors(ctx context.Context, liveActors map[string]bool) error {
-	actors, err := d.s.actors.list(ctx, "")
-	if err != nil {
-		return err
-	}
+// seen otherwise), each compare-and-set on the version read before the grants were:
+//   - a put that moved it after that read keeps it (Conflict; the next purge tries again);
+//   - a put that read it before and moves it after finds it gone (NotFound), drops its grant and runs again;
+//   - a put that found none creates one: a counter that did not exist when read is never deleted here.
+func (d delegations) dropIdleActors(ctx context.Context, actors []*object[actorSpec], liveActors map[string]bool) error {
 	for _, a := range actors {
 		if liveActors[a.Metadata.Name] {
 			continue

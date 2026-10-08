@@ -339,6 +339,46 @@ func TestPurgeIdleActors(t *testing.T) {
 	}
 }
 
+// the race the purge's order closes: the counters read, then a put from no live grant moves one and creates its
+// grant, then the grants read - the counter is kept, and a second put from no counter cannot pass the limit
+func TestPurgeRacingPut(t *testing.T) {
+	ns := namespace(t)
+	s := openIn(t, ns, kek(t, 1), "")
+	d := s.Delegations().(delegations)
+	now := time.Now()
+	actor := "subject:iss|racer"
+	grant := func(id string) state.Delegation {
+		return state.Delegation{IDHash: []byte(id), ActorOwner: actor, ActorClient: "client:node",
+			UserOwner: "subject:iss|alice", User: []byte(`{}`), ExpiresAt: now.Add(time.Hour)}
+	}
+	// an expired grant leaves the actor a counter and no live grant
+	old := grant("r-0")
+	old.ExpiresAt = now.Add(time.Minute)
+	if err := d.Put(ctx, old, 1); err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(2 * time.Minute)
+	actors, err := s.actors.list(ctx, "") // the purge's first read
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Put(ctx, grant("r-1"), 2); err != nil { // a put between the reads (the old grant still lives by the clock)
+		t.Fatal(err)
+	}
+	if _, err := d.purge(ctx, later, actors); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := s.actors.get(ctx, actorName(actor)); a == nil {
+		t.Fatal("a counter a put moved after the purge's read was deleted")
+	}
+	if err := d.Put(ctx, grant("r-2"), 1); err != state.ErrTooMany {
+		t.Fatalf("past the limit: %v", err)
+	}
+	if n, _ := d.Count(ctx, actor, later); n != 1 {
+		t.Fatalf("%d live grants under a limit of 1", n)
+	}
+}
+
 // the zero time is kept as none: a grant with no subject token reads back with no subject expiry
 func TestZeroTime(t *testing.T) {
 	d := openIn(t, namespace(t), kek(t, 1), "").Delegations()
