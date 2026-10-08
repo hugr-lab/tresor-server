@@ -102,14 +102,21 @@ state:
 
 - **A row that does not verify** is refused: a read fails, a list leaves it out (`tresor.state.left_out`,
   logged), only a delete passes. Never served, never trusted silently.
-- **The MAC is written always**, whatever the setting; the setting turns the checks on.
-- **Turning it on, at an upgrade**: rows written before have none. Once, right after the upgrade:
+- **The MAC is written always**, whatever the setting; the setting turns the checks on. With it off, a row
+  whose MAC does not verify is still served, but logged and counted - and the service's next write of it gives
+  it a valid MAC again: until the checks are on, the database is trusted as it is.
+- **Turning it on, at an upgrade**: rows written before have none, and a replica still on the older binary
+  writes without one. Once every replica runs the new version (on SQLite: with the service stopped):
 
   ```bash
-  tresor-server mac -config server.yaml     # the rows as they are now get a MAC: you vouch for the database
+  tresor-server mac -config server.yaml     # rows with no MAC, or a stale one, get one: you vouch for the database
   ```
 
-  then `state.mac: true`, and deploy. Minted tokens with none are dropped (they are minted again).
+  then `state.mac: true`, and deploy. Minted tokens with none are dropped (they are minted again); a row that
+  cannot be given one (its data key gone) is named, and the command fails.
+- **The installation's id** (in every MAC, so a row copied from another database does not verify) is made by the
+  migration, in the `installation` table. Keep it with the backups: if it is lost, every row is refused, and the
+  service never makes a new one.
 - **What it does not stop**: deleting rows, or putting a whole old row back (a rollback) - as on the Kubernetes
   store.
 - **Rotation**: `rewrap` and a move to another KEK keep the data keys, and so every MAC.

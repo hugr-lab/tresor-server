@@ -9,3 +9,5 @@ CREATE TABLE installation (
     id       INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
     instance TEXT    NOT NULL
 );
+-- the installation's id: made once, here; a store never makes it again (a missing row is an error, not a new id)
+INSERT INTO installation (id, instance) VALUES (1, lower(hex(randomblob(16))));

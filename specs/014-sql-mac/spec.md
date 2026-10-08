@@ -54,8 +54,11 @@ encode the same bytes:
   active data key for its MAC, named in its key column.
 - **Under a data key** (HMAC-SHA-256 with a key derived from it, as spec 003): the data key's own tag authenticates
   it under the KEK's root, so a MAC proves the row was written by the service.
-- **The installation**: a random id made at the migration, in a `installation` row, is part of every MAC: a row
-  copied from another database under the same KEK does not verify.
+- **The installation**: a random id made by the migration (0006), in the `installation` row, is part of every
+  MAC: a row copied from another database under the same KEK does not verify. A store never makes another - a
+  missing row is an error (a new id would refuse every row). It lives in the database a writer can change: a
+  whole other database swapped in (its rows, keys and id) verifies, as a restored backup would; the Kubernetes
+  store pins its id in configuration instead.
 - **Grants live in their own table**: the secret's row carries the MAC over its grants too, so a grant's write
   rewrites the secret's MAC in the same transaction - a grant row added or changed behind the store no longer
   matches its secret's MAC.
@@ -70,11 +73,15 @@ encode the same bytes:
 ### Turning it on
 
 1. The migration (`0006_mac`) adds a nullable `mac` column to `secrets`, `variables`, `delegations`,
-   `delegation_tokens`, and the `installation` table (its row made by the first store that needs it). From the
-   upgrade on, **every write carries a MAC, whatever the setting**: the setting turns the checks on.
-2. `tresor-server mac -config …` (like `rewrap -tag-untagged`): computes the MAC of every row that has none -
-   the operator vouches for the database as it is, once - and logs how many. Minted tokens with none are dropped
-   instead: they are caches, minted again.
+   `delegation_tokens`, and the `installation` table with its row. From the upgrade on, **every write carries a
+   MAC, whatever the setting**: the setting turns the checks on. With the checks off, a MAC that does not verify
+   is logged and counted, not refused - and the next write of the row gives it a valid one: the database is
+   trusted as it is until the checks are on.
+2. Once **every replica runs the new binary** (an older one rewrites rows and leaves their MAC stale; on SQLite,
+   with the service stopped), `tresor-server mac -config …` (like `rewrap -tag-untagged`): gives every row with
+   no MAC, or one that does not verify, a MAC - the operator vouches for the database as it is, once - and logs
+   how many. A row it cannot (its data key gone) is named and skipped, and the command fails. Minted tokens with
+   none are dropped instead: they are caches, minted again.
 3. Set `state.mac: true`; deploy. Every read checks; a row with no MAC is refused like a wrong one.
 
 Turning it off again stops the checks only; back on, nothing needs filling (writes kept their MACs).

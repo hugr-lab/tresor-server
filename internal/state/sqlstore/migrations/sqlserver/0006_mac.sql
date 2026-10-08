@@ -9,3 +9,5 @@ CREATE TABLE installation (
     id       INT          NOT NULL PRIMARY KEY CHECK (id = 1),
     instance NVARCHAR(64) NOT NULL
 );
+-- the installation's id: made once, here; a store never makes it again (a missing row is an error, not a new id)
+INSERT INTO installation (id, instance) VALUES (1, LOWER(REPLACE(CONVERT(NVARCHAR(36), NEWID()), '-', '')));

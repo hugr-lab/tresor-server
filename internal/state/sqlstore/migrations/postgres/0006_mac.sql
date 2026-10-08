@@ -9,3 +9,5 @@ CREATE TABLE installation (
     id       BIGINT NOT NULL PRIMARY KEY CHECK (id = 1),
     instance TEXT   NOT NULL
 );
+-- the installation's id: made once, here; a store never makes it again (a missing row is an error, not a new id)
+INSERT INTO installation (id, instance) VALUES (1, replace(gen_random_uuid()::text, '-', ''));

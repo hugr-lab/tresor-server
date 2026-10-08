@@ -102,7 +102,7 @@ type invocation struct {
 	tagUntagged, resolve bool
 }
 
-// parseArgs reads [rewrap | refs] and the flags; an error is a usage error (exit 2).
+// parseArgs reads [rewrap | refs | mac] and the flags; an error is a usage error (exit 2).
 func parseArgs(args []string) (invocation, error) {
 	inv := invocation{command: "serve"}
 	if len(args) > 0 && (args[0] == "rewrap" || args[0] == "refs" || args[0] == "mac") {
@@ -124,7 +124,7 @@ func parseArgs(args []string) (invocation, error) {
 	}
 	if flags.NArg() > 0 {
 		// `tresor-server -config x rewrap` must not start the service: the command comes first
-		return inv, fmt.Errorf("unexpected arguments %q (usage: tresor-server [rewrap | refs] -config <file>)", flags.Args())
+		return inv, fmt.Errorf("unexpected arguments %q (usage: tresor-server [rewrap | refs | mac] -config <file>)", flags.Args())
 	}
 	return inv, nil
 }
@@ -187,11 +187,18 @@ func fillMACs(configPath string, log *slog.Logger) error {
 		return err
 	}
 	defer st.Close()
-	n, err := st.(*sqlstore.Store).FillMACs(ctx)
+	filled, skipped, err := st.(*sqlstore.Store).FillMACs(ctx)
+	if errors.Is(err, state.ErrUnavailable) && cfg.State.Kind == "sqlite" {
+		return errors.New("the SQLite database is held by a serving replica: stop the service, run tresor-server mac, start it")
+	}
 	if err != nil {
 		return err
 	}
-	log.Info("rows given a MAC: set state.mac: true now", "count", n)
+	log.Info("rows given a MAC", "filled", filled, "skipped", skipped)
+	if skipped > 0 {
+		return fmt.Errorf("%d rows could not be given a MAC (named above): they are refused with state.mac: true", skipped)
+	}
+	log.Info("set state.mac: true now")
 	return nil
 }
 

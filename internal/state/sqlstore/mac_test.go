@@ -1,7 +1,9 @@
 package sqlstore
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"path/filepath"
 	"testing"
 	"time"
@@ -171,8 +173,8 @@ func TestMACUpgrade(t *testing.T) {
 	if _, err := checked.Get(ctx, "lake"); !errors.Is(err, keys.ErrSealed) {
 		t.Fatalf("checks on, no MAC: %v", err)
 	}
-	if n, err := checked.FillMACs(ctx); err != nil || n != 2 {
-		t.Fatalf("filled: %d %v", n, err)
+	if n, skipped, err := checked.FillMACs(ctx); err != nil || n != 2 || skipped != 0 {
+		t.Fatalf("filled: %d (%d skipped) %v", n, skipped, err)
 	}
 	if _, err := checked.Get(ctx, "lake"); err != nil {
 		t.Fatalf("after FillMACs: %v", err)
@@ -180,7 +182,88 @@ func TestMACUpgrade(t *testing.T) {
 	if _, err := checked.Delegations().Get(ctx, []byte("h"), time.Now()); err != nil {
 		t.Fatalf("a grant after FillMACs: %v", err)
 	}
-	if n, _ := checked.FillMACs(ctx); n != 0 {
+	if n, _, _ := checked.FillMACs(ctx); n != 0 {
 		t.Fatalf("filled again: %d", n)
+	}
+}
+
+// the review's cases: a grant moved to another secret, a grant's verbs changed, a variable changed - refused
+func TestMACMoreChanges(t *testing.T) {
+	s := openAt(t, filepath.Join(t.TempDir(), "tresor.db"), kek(t, 1))
+	for _, name := range []string{"a", "b"} {
+		if _, err := s.Update(ctx, name, func(*state.Secret) (*state.Secret, error) {
+			return &state.Secret{Type: "s3", Version: 1, Grants: []state.Grant{{ID: "g-" + name, Principal: "role:" + name, Verbs: []string{"use"}}},
+				Params: map[string]json.RawMessage{"secret": json.RawMessage(`"x"`)}}, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec := func(q string) {
+		t.Helper()
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`UPDATE grants SET secret = 'b' WHERE secret = 'a'`)
+	for _, name := range []string{"a", "b"} {
+		if _, err := s.Get(ctx, name); !errors.Is(err, keys.ErrSealed) {
+			t.Fatalf("a grant moved: %s: %v", name, err)
+		}
+	}
+	exec(`UPDATE grants SET secret = 'a' WHERE id = 'g-a'`)
+	exec(`UPDATE grants SET verbs = '["use","delete"]' WHERE id = 'g-a'`)
+	if _, err := s.Get(ctx, "a"); !errors.Is(err, keys.ErrSealed) {
+		t.Fatalf("a grant's verbs changed: %v", err)
+	}
+	put(t, s.Variables().(*Store), "region", "eu")
+	exec(`UPDATE variables SET comment = 'changed'`)
+	if _, err := s.Variables().Get(ctx, "region"); !errors.Is(err, keys.ErrSealed) {
+		t.Fatalf("a variable changed: %v", err)
+	}
+}
+
+// a MAC left stale (an older replica's write during a rolling upgrade) is refreshed by FillMACs, the operator
+// vouching; minted tokens with none are dropped; a missing installation row is an error, never a new id
+func TestMACFillStaleAndInstallation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tresor.db")
+	s := openAt(t, path, kek(t, 1))
+	put(t, s, "lake", "material")
+	if _, err := s.db.Exec(`UPDATE secrets SET comment = 'written by an older replica'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Get(ctx, "lake"); !errors.Is(err, keys.ErrSealed) {
+		t.Fatalf("stale: %v", err)
+	}
+	d := s.Delegations()
+	g := state.Delegation{IDHash: []byte("h"), ActorOwner: "a", ActorClient: "c", UserOwner: "u", User: []byte(`{}`),
+		ExpiresAt: time.Now().Add(time.Hour)}
+	if err := d.Put(ctx, g, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutToken(ctx, g.IDHash, state.MintedToken{Key: "k", Version: 1, Failed: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE delegation_tokens SET mac = NULL`); err != nil {
+		t.Fatal(err)
+	}
+	if n, skipped, err := s.FillMACs(ctx); err != nil || n != 1 || skipped != 0 {
+		t.Fatalf("filled: %d (%d skipped) %v", n, skipped, err)
+	}
+	if _, err := s.Get(ctx, "lake"); err != nil {
+		t.Fatalf("refreshed: %v", err)
+	}
+	if _, err := d.Token(ctx, g.IDHash, "k"); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("a token with no MAC dropped: %v", err)
+	}
+	// the installation row gone: an error, not a new id
+	s.Close()
+	raw := openWith(t, path, kek(t, 1), Options{})
+	if _, err := raw.db.Exec(`DELETE FROM installation`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+	again := openAt(t, path, kek(t, 1))
+	if _, err := again.Get(ctx, "lake"); err == nil || !strings.Contains(err.Error(), "installation id is missing") {
+		t.Fatalf("no installation row: %v", err)
 	}
 }
