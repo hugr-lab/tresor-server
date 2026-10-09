@@ -1,6 +1,6 @@
 # Spec 019: administration - who runs what, how: the commands as jobs, the runbooks, the keys in view
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-09
 - **Author**: hugr lab
 
