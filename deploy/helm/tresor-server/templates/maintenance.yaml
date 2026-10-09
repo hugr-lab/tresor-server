@@ -7,16 +7,21 @@
 {{- range $name, $args := $commands }}
 {{- $schedule := ternary $.Values.maintenance.reseal.schedule "" (eq $name "reseal") }}
 ---
-# tresor-server {{ join " " $args }} (spec 019): kubectl -n {{ $.Release.Namespace }} create job --from=cronjob/{{ include "tresor.fullname" $ }}-{{ $name }} <job>
+{{- $cron := include "tresor.jobName" (dict "root" $ "name" $name) }}
+# tresor-server {{ join " " $args }} (spec 019): kubectl -n {{ $.Release.Namespace }} create job --from=cronjob/{{ $cron }} <job>
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ include "tresor.fullname" $ }}-{{ $name }}
+  name: {{ $cron }}
   labels:
     {{- include "tresor.labels" $ | nindent 4 }}
     app.kubernetes.io/component: maintenance
 spec:
-  schedule: {{ $schedule | default "0 0 31 2 *" | quote }}   # unscheduled: 31 February, and suspended
+  {{- if $schedule }}
+  schedule: {{ $schedule | quote }}
+  {{- else }}
+  schedule: "0 0 31 2 *"   # unscheduled: 31 February, and suspended
+  {{- end }}
   suspend: {{ not $schedule }}
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3

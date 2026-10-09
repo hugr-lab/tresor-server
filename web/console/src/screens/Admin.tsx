@@ -5,7 +5,7 @@ import { Check, CheckCircle2, CircleAlert, Search, Users } from 'lucide-react'
 import { useApp, useLoad } from '../context'
 import { useLists } from '../lists'
 import { route, seg } from '../lib/api'
-import type { Finding, Grant, ServiceInfo } from '../lib/types'
+import type { DataKeysInfo, Finding, Grant } from '../lib/types'
 import { idFor } from '../lib/grants'
 import { Empty, ErrorState, PageTitle, Skeleton, useToast } from '../components/ui'
 
@@ -224,16 +224,23 @@ const days = (seconds: number) => {
   return d === 1 ? '1 day' : `${d} days`
 }
 
-/** the data keys' state (spec 019): how many, how old, and whether a command is due */
-function DataKeys({ keys }: { keys: ServiceInfo['data_keys'] }) {
-  if (!keys) return null
-  if ('error' in keys) return <span className="text-[12px] text-warning">Data keys: {keys.error}</span>
+/** the data keys' state (spec 019), asked here only: how many, how old, and whether a command is due */
+function DataKeys() {
+  const { api } = useApp()
+  const state = useLoad(() => api.get<DataKeysInfo>('/admin/v1/data-keys').then((r) => r.data), [api])
+  if (state.loading) return <Skeleton rows={2} />
+  const keys = state.data
+  if (!keys) return <span className="text-[12px] text-warning">Data keys: they could not be read.</span>
   return (
     <>
       <dl className="m-0 grid grid-cols-[160px_1fr] gap-x-4 gap-y-2 text-[13px]" aria-label="Data keys">
         <dt className="text-muted">Data keys</dt><dd className="m-0 font-mono">{keys.stored}</dd>
-        <dt className="text-muted">Active one's age</dt><dd className="m-0 font-mono">{days(keys.active_age)}</dd>
-        <dt className="text-muted">Oldest one's age</dt><dd className="m-0 font-mono">{days(keys.oldest_age)}</dd>
+        {keys.stored > 0 && (
+          <>
+            <dt className="text-muted">Active one's age</dt><dd className="m-0 font-mono">{days(keys.active_age)}</dd>
+            <dt className="text-muted">Oldest one's age</dt><dd className="m-0 font-mono">{days(keys.oldest_age)}</dd>
+          </>
+        )}
       </dl>
       {keys.rows_behind > 0 && (
         <span className="rounded-sm bg-soft px-3 py-2 text-[12px]">
@@ -288,7 +295,7 @@ export function Service() {
               A move to another KEK is under way: data keys under a previous KEK still open. Run <span className="font-mono">tresor-server rewrap</span>, then remove <span className="font-mono">keys.previous</span>.
             </span>
           )}
-          <DataKeys keys={s.data_keys} />
+          {s.data_keys && <DataKeys />}
           <span className="text-[12px] text-muted">The KEK stays in its store (a file, Key Vault, Transit): shown here is only its kind and the version data keys are wrapped with now.</span>
         </section>
         <section className="card flex flex-col gap-3">

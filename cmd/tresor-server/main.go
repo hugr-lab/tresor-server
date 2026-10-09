@@ -784,7 +784,7 @@ func serve(configPath string, log *slog.Logger) error {
 				}
 				return telemetry.KeysSample{Stored: v.Stored, RowsBehind: v.RowsBehind,
 					OldestAge: time.Duration(v.OldestAge) * time.Second}, nil
-			}); err != nil {
+			}, func(err error) { log.Warn("the data keys' gauges: not read", "error", err.Error()) }); err != nil {
 				return err
 			}
 		}

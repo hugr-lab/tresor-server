@@ -110,8 +110,14 @@ EOF
 # runjob <namespace> <release> <command>: a maintenance command as the chart's job (spec 019), to its end
 runjob() {
 	local job="$3-$(date +%s)"
+	local state=""
 	kubectl -n "$1" create job --from="cronjob/$2-tresor-server-$3" "$job"
-	if ! kubectl -n "$1" wait --for=condition=complete "job/$job" --timeout 180s; then
+	for _ in $(seq 90); do # complete or failed, whichever comes first
+		state="$(kubectl -n "$1" get "job/$job" -o jsonpath='{.status.conditions[?(@.status=="True")].type}')"
+		[[ "$state" == *Complete* || "$state" == *Failed* ]] && break
+		sleep 2
+	done
+	if [[ "$state" != *Complete* ]]; then
 		kubectl -n "$1" describe "job/$job" | tail -20 || true
 		kubectl -n "$1" logs "job/$job" --tail 50 || true
 		exit 1
@@ -353,7 +359,9 @@ echo "kind: the KEK moved: read under the old KEK as previous, rewrapped, read u
 # spec 018 by the chart's job (spec 019): every resource onto a new data key, and still read
 runjob tresor-move m reseal-rotate
 active="$(kubectl -n tresor-move get tresorkeyring active -o jsonpath='{.spec.dataKeyID}')"
-behind="$(kubectl -n tresor-move get tresorsecrets -o jsonpath='{range .items[*]}{.spec.dataKeyID}{"\n"}{end}' | grep -vx "$active" || true)"
+keyids="$(kubectl -n tresor-move get tresorsecrets -o jsonpath='{range .items[*]}{.spec.dataKeyID}{"\n"}{end}')"
+[ -n "$active" ] && [ -n "$keyids" ] || { echo "kind: no active data key, or no secret, to check the reseal against" >&2; exit 1; }
+behind="$(grep -vx "$active" <<<"$keyids" || true)"
 [ -z "$behind" ] || { echo "kind: secrets not under the active data key after reseal: $behind" >&2; exit 1; }
 "$work/kindcheck" kept "$work/idp" "$issuer" "http://127.0.0.1:$port"
 echo "kind: resealed by the chart's job: every secret under the new data key, and read"

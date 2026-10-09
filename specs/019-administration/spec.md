@@ -43,12 +43,12 @@ the API: a secrets administrator manages secrets, not keys (tresor specs/009: ad
 
 ### The commands as jobs
 
-- **Kubernetes (the chart)**: a suspended CronJob per command, `<release>-reseal`, `-reseal-rotate`, `-rewrap`,
-  `-refs`, `-mac` - the service's image, ServiceAccount, configuration, volumes and environment, `restartPolicy:
+- **Kubernetes (the chart)**: a suspended CronJob per command, `<fullname>-reseal`, `-reseal-rotate`, `-rewrap`,
+  `-refs`, `-mac` (a long fullname cut to fit 52 characters) - the service's image, ServiceAccount, configuration, volumes and environment, `restartPolicy:
   Never`, no retries, a deadline. Run one:
 
   ```sh
-  kubectl -n tresor create job --from=cronjob/<release>-reseal reseal-$(date +%Y%m%d%H%M)
+  kubectl -n tresor create job --from=cronjob/<fullname>-reseal reseal-$(date +%Y%m%d%H%M)
   kubectl -n tresor logs -f job/reseal-…
   ```
 
@@ -57,14 +57,16 @@ the API: a secrets administrator manages secrets, not keys (tresor specs/009: ad
   - `maintenance.reseal.schedule` (off by default): `reseal -retire` on a schedule, e.g. monthly - the rows
     follow the data keys' rotation by age, and old data keys go.
   - `maintenance.refsBeforeUpgrade` (off by default): `refs` with the new configuration as a `pre-upgrade` hook;
-    a finding (exit 3) stops the upgrade before a reference is stranded.
-  - SQLite: the chart's NOTES warn that it is not recommended on a cluster; `mac` and `reseal` there need
-    `replicas: 0` first (a runbook).
-- **Azure Container Apps (the Bicep recipe)**: a Container Apps job, manual trigger, the app's image, managed
-  identity and environment; its command and arguments chosen at the start:
+    a finding (exit 3) stops the upgrade before a reference is stranded. Only when the image stays (found by
+    `lookup`): a new image may need a migration its pods have not run, which the running database lacks.
+  - SQLite: the chart's NOTES warn that it is not recommended on a cluster; every command there needs
+    `replicas: 0` first (a runbook), and a schedule is refused.
+- **Azure Container Apps (the Bicep recipe)**: a Container Apps job per command, manual trigger, the app's
+  image, managed identity and environment (a start's own arguments would replace the container's template,
+  its settings with it):
 
   ```sh
-  az containerapp job start -g <rg> -n <prefix>-maint --command /tresor-server --args reseal -retire
+  az containerapp job start -g <rg> -n <prefix>-reseal
   ```
 
   Its logs go to the environment's Log Analytics.
@@ -74,7 +76,8 @@ the API: a secrets administrator manages secrets, not keys (tresor specs/009: ad
 
 ### The keys in view
 
-`/admin/v1/service` (the console's own API, not the protocol) and the Service screen gain the data keys: how
+`/admin/v1/data-keys` (the console's own API, not the protocol; asked by the Service screen only, bounded to 15
+seconds) and the Service screen show the data keys: how
 many are stored, the active one's age, the oldest one's age, and how many rows are under another one than the
 active. Counted when the screen asks (a count, or on Kubernetes a list - no row is opened) and, for the
 metrics, every 10 minutes: `tresor.keys.data_keys`, `tresor.keys.oldest_age`, `tresor.keys.rows_behind` (the

@@ -48,6 +48,10 @@ jobs:
               >"rendered-$kind.yaml"
             kubeconform -strict -summary -kubernetes-version 1.30.0 "rendered-$kind.yaml"
           done
+          # a long release name: the maintenance jobs' names cut to fit (spec 019)
+          helm template acme-secrets-production-eu-long deploy/helm/tresor-server -n tresor \
+            -f deploy/helm/tresor-server/ci/test-values.yaml --set config.state.kind=postgres >rendered-long.yaml
+          kubeconform -strict -summary -kubernetes-version 1.30.0 rendered-long.yaml
           # OpenBao: the projected token for the Vault login (spec 007)
           helm template t deploy/helm/tresor-server -n tresor -f deploy/helm/tresor-server/ci/test-values.yaml \
             --set vaultToken.enabled=true --set-json 'config.vault={"address":"https://bao:8200","auth":{"method":"jwt","role":"r"}}' \

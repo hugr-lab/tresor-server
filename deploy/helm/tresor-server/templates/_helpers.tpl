@@ -94,6 +94,9 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- if not .Values.config.issuers -}}
 {{- fail "config.issuers: at least one issuer is required" -}}
 {{- end -}}
+{{- if and (eq $kind "sqlite") .Values.maintenance.enabled .Values.maintenance.reseal.schedule -}}
+{{- fail "maintenance.reseal.schedule: not on sqlite - its commands need the service scaled to 0 first" -}}
+{{- end -}}
 {{- $state := .Values.config.state | default dict -}}
 {{- if and $state.namespace (ne $state.namespace .Release.Namespace) -}}
 {{- fail "config.state.namespace: the chart's RBAC and admission policy are the release's namespace - leave it unset" -}}
@@ -298,17 +301,24 @@ topologySpreadConstraints: {{- toYaml . | nindent 2 }}
 {{- end }}
 {{- end -}}
 
+{{/* A maintenance resource's name (spec 019): the fullname cut so that a CronJob's name stays within 52
+characters and a Job's within 63 (its pods' job-name label). */}}
+{{- define "tresor.jobName" -}}
+{{- printf "%s-%s" (include "tresor.fullname" .root | trunc (int (sub 52 (add1 (len .name))))) .name | replace "--" "-" -}}
+{{- end -}}
+
 {{/* A maintenance job's spec (spec 019): one command, the service's pod - its identity, configuration and
 volumes - with no port, no probe, no retry. Not the service's selector labels: the Service never routes to it. */}}
 {{- define "tresor.maintenanceJob" -}}
 {{- $ := .root -}}
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: {{ $.Values.maintenance.activeDeadlineSeconds }}
+  activeDeadlineSeconds: {{ .deadline | default $.Values.maintenance.activeDeadlineSeconds }}
   ttlSecondsAfterFinished: 604800
   template:
     metadata:
       labels:
+        {{- with $.Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
         app.kubernetes.io/instance: {{ $.Release.Name }}
         app.kubernetes.io/component: maintenance
         tresor.hugr-lab.io/command: {{ .name }}
@@ -317,12 +327,13 @@ spec:
         {{- end }}
       annotations:
         checksum/config: {{ include "tresor.config" $ | sha256sum }}
+        {{- with $.Values.maintenance.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
     spec:
       restartPolicy: Never
       {{- include "tresor.podSecurity" $ | trim | nindent 6 }}
       containers:
         - name: tresor-server
-          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag | default $.Chart.AppVersion }}"
+          image: {{ .image | default (printf "%s:%s" $.Values.image.repository ($.Values.image.tag | default $.Chart.AppVersion)) | quote }}
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           args: {{ concat .args (list "-config" (.config | default "/etc/tresor/server.yaml")) | toJson }}
           {{- with include "tresor.env" $ | trim }}{{ . | nindent 10 }}{{ end }}

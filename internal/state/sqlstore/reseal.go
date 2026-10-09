@@ -178,7 +178,8 @@ func (s *Store) RowsBehind(ctx context.Context, active string) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, s.q(`SELECT
 		(SELECT COUNT(*) FROM secrets WHERE data_key_id <> ?) + (SELECT COUNT(*) FROM variables WHERE data_key_id <> ?) +
-		(SELECT COUNT(*) FROM delegations WHERE subject_key_id <> ?) + (SELECT COUNT(*) FROM delegation_tokens WHERE data_key_id <> ?)`),
+		(SELECT COUNT(*) FROM delegations WHERE subject_key_id <> ? AND subject_key_id <> '') +
+		(SELECT COUNT(*) FROM delegation_tokens WHERE data_key_id <> ?)`),
 		active, active, active, active).Scan(&n)
 	return n, err
 }

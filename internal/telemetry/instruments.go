@@ -53,14 +53,20 @@ type KeysSample struct {
 
 // ObserveKeys reports the data keys' state as gauges - tresor.keys.data_keys, tresor.keys.oldest_age,
 // tresor.keys.rows_behind - read by read every `every` (a count of rows: not at each collection), until ctx ends.
-func ObserveKeys(ctx context.Context, every time.Duration, read func(context.Context) (KeysSample, error)) error {
+// A read that fails reports nothing (no stale value) and calls failed.
+func ObserveKeys(ctx context.Context, every time.Duration, read func(context.Context) (KeysSample, error), failed func(error)) error {
 	var mu sync.Mutex
 	var last *KeysSample
 	refresh := func() {
-		if s, err := read(ctx); err == nil {
-			mu.Lock()
+		s, err := read(ctx)
+		mu.Lock()
+		last = nil
+		if err == nil {
 			last = &s
-			mu.Unlock()
+		}
+		mu.Unlock()
+		if err != nil && ctx.Err() == nil {
+			failed(err)
 		}
 	}
 	stored, err := meter.Int64ObservableGauge("tresor.keys.data_keys", metric.WithDescription("data keys stored"))

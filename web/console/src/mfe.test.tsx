@@ -293,7 +293,8 @@ describe('the Service screen (spec 019)', () => {
     const keys = { stored: 3, active_age: 2 * 86400, oldest_age: 61 * 86400, rows_behind: 12, unused: 1 }
     vi.stubGlobal('fetch', (url: string) => {
       if (url.endsWith('/v1/whoami')) return answer(200, me)
-      if (url.endsWith('/admin/v1/service')) return answer(200, { ...service, data_keys: keys })
+      if (url.endsWith('/admin/v1/service')) return answer(200, { ...service, data_keys: true })
+      if (url.endsWith('/admin/v1/data-keys')) return answer(200, keys)
       return answer(200, [])
     })
     window.history.replaceState(null, '', '/platform/tresor/service')

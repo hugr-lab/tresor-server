@@ -226,7 +226,7 @@ func (s *Store) DataKeysInUse(ctx context.Context) (map[string]bool, error) {
 func (s *Store) RowsBehind(ctx context.Context, active string) (int, error) {
 	n := 0
 	err := s.eachDataKeyID(ctx, func(id string) {
-		if id != active {
+		if id != "" && id != active {
 			n++
 		}
 	})

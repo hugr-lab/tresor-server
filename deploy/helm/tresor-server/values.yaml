@@ -152,10 +152,15 @@ maintenance:
   enabled: true
   activeDeadlineSeconds: 3600
   resources: {}
+  # the jobs' pods carry podLabels (a policy admitting the service admits them), not podAnnotations: a mesh's
+  # sidecar would keep a Job from completing - their own here
+  podAnnotations: {}
   reseal:
     # reseal -retire on a schedule (cron, e.g. "0 3 1 * *"): the rows follow the data keys' rotation by age,
     # and data keys nothing uses go. Empty: run by hand only.
     schedule: ""
   # refs with the new configuration before an upgrade (a pre-upgrade hook): a reference the new configuration
-  # would strand stops the upgrade. Not on sqlite (its volume is the serving pod's).
+  # would strand stops the upgrade. It runs only when the image stays (a configuration change: the running
+  # version reads the database as it is); an upgrade of the image runs none. Helm only: Argo CD and helm
+  # template render no hook (lookup). Not on sqlite (its volume is the serving pod's).
   refsBeforeUpgrade: false

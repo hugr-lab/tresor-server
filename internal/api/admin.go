@@ -59,6 +59,7 @@ func (s *Server) consoleRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /ui/", s.console.UI)
 	mux.Handle("GET /ui", s.console.UI)
 	mux.HandleFunc("GET /admin/v1/service", s.authed(s.admin(s.adminService)))
+	mux.HandleFunc("GET /admin/v1/data-keys", s.authed(s.admin(s.adminDataKeys)))
 	mux.HandleFunc("GET /admin/v1/secrets/{name}/shape", s.authed(s.admin(s.adminShape)))
 	mux.HandleFunc("GET /admin/v1/variables/{name}/shape", s.authed(s.admin(s.adminShape)))
 	mux.HandleFunc("PATCH /admin/v1/secrets/{name}/params", s.authed(s.admin(s.adminParams)))
@@ -127,17 +128,8 @@ func (s *Server) adminService(w http.ResponseWriter, r *http.Request) {
 	if auditLevel == "" {
 		auditLevel = "all"
 	}
-	var dataKeys any
-	if s.console.Keys != nil {
-		if v, err := s.console.Keys(r.Context()); err == nil {
-			dataKeys = v
-		} else {
-			dataKeys = map[string]string{"error": "the data keys could not be read"} // the reason is in the log
-			s.log.Warn("the data keys' state", "error", err.Error())
-		}
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"data_keys": dataKeys,
+		"data_keys": s.console.Keys != nil, // their state: /admin/v1/data-keys
 		"version":   s.console.Version, "protocol": Protocol, "environment": cfg.UI.Environment,
 		"capabilities": []string{"write", "annotate", "delegation", "variables", "token_exchange"},
 		"state":        cfg.State.Kind, "kek": kek, "issuers": issuers, "sources": sources,
@@ -145,6 +137,27 @@ func (s *Server) adminService(w http.ResponseWriter, r *http.Request) {
 		"audit":  auditLevel,
 		"ready":  map[string]any{"ready": ready, "checks": checks},
 	})
+}
+
+// dataKeysTime bounds the data keys' count: a store's every row (on Kubernetes, a list of each kind).
+const dataKeysTime = 15 * time.Second
+
+// adminDataKeys is the data keys' state (spec 019), asked by the Service screen only: counting rows is not for
+// every page.
+func (s *Server) adminDataKeys(w http.ResponseWriter, r *http.Request) {
+	if s.console.Keys == nil {
+		problem(w, http.StatusNotFound, "not_found", "this store keeps no data keys")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), dataKeysTime)
+	defer cancel()
+	v, err := s.console.Keys(ctx)
+	if err != nil {
+		s.log.Warn("the data keys' state", "error", err.Error())
+		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the data keys could not be read")
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 // connection is where a source reads, as an administrator may see it: an address and a login method, never a
