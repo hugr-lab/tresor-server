@@ -1,6 +1,6 @@
 # Spec 018: `tresor-server reseal` - every row moved to the active data key, old data keys retired
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-09
 - **Author**: hugr lab
 
