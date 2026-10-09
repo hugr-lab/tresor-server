@@ -1,0 +1,46 @@
+{{- if and .Values.maintenance.enabled .Values.maintenance.refsBeforeUpgrade (not (has (include "tresor.stateKind" .) (list "memory" "sqlite"))) }}
+{{- $image := printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) }}
+{{- $deployed := lookup "apps/v1" "Deployment" .Release.Namespace (include "tresor.fullname" .) }}
+{{- $running := "" }}
+{{- with $deployed }}{{ range .spec.template.spec.containers }}{{ if eq .name "tresor-server" }}{{ $running = .image }}{{ end }}{{ end }}{{ end }}
+{{- /* a configuration change only: the running version reads its database as it is; a new image may need a
+migration its pods have not run yet. No lookup (helm template, Argo CD): no hook */}}
+{{- if eq $running $image }}
+{{- $next := include "tresor.jobName" (dict "root" . "name" "next") }}
+# refs with the new configuration before an upgrade (spec 019): the running ConfigMap still holds the old one
+# at pre-upgrade, so the hook brings its own. A finding (exit 3) or an error fails the hook: the upgrade stops
+# before a reference is stranded.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $next }}
+  labels:
+    {{- include "tresor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: maintenance
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+data:
+  server.yaml: |
+    {{- include "tresor.config" . | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "tresor.jobName" (dict "root" . "name" "refs-before-upgrade") }}
+  labels:
+    {{- include "tresor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: maintenance
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+{{- $job := include "tresor.maintenanceJob" (dict "root" . "name" "refs-before-upgrade" "args" (list "refs" "-resolve") "config" "/etc/tresor-next/server.yaml" "deadline" 240 "image" $running) | fromYaml }}
+{{- $pod := $job.spec.template.spec }}
+{{- $_ := set (index $pod.containers 0) "volumeMounts" (append (index $pod.containers 0).volumeMounts (dict "name" "config-next" "mountPath" "/etc/tresor-next" "readOnly" true)) }}
+{{- $_ := set $pod "volumes" (append $pod.volumes (dict "name" "config-next" "configMap" (dict "name" $next))) }}
+{{- $_ := unset $job.spec "ttlSecondsAfterFinished" }}
+{{ toYaml $job }}
+{{- end }}
+{{- end }}

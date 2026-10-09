@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -215,6 +216,30 @@ func TestRefsCheckAndService(t *testing.T) {
 	}
 	if strings.Contains(string(r.body), "TRESOR_TEST_EXCHANGE") {
 		t.Fatal("a secret's variable name in the service page")
+	}
+	if svc["data_keys"] != false {
+		t.Fatalf("no data keys on a store with none: %v", svc["data_keys"])
+	}
+	if r := f.do("GET", "/admin/v1/data-keys", f.admin, ""); r.status != 404 {
+		t.Fatalf("data keys on a store with none: %d", r.status)
+	}
+	// spec 019: the data keys' state, when the store has one, on their own route; a failure named, its reason not
+	f.srv.console.Keys = func(context.Context) (*KeysView, error) {
+		return &KeysView{Stored: 3, ActiveAge: 86400, OldestAge: 90 * 86400, RowsBehind: 12, Unused: 1}, nil
+	}
+	if f.do("GET", "/admin/v1/service", f.admin, "").json(t)["data_keys"] != true {
+		t.Fatal("the service says it has data keys")
+	}
+	if keys := f.do("GET", "/admin/v1/data-keys", f.admin, "").json(t); keys["stored"] != 3.0 ||
+		keys["rows_behind"] != 12.0 || keys["unused"] != 1.0 || keys["oldest_age"] != 90*86400.0 {
+		t.Fatalf("data keys: %v", keys)
+	}
+	if r := f.do("GET", "/admin/v1/data-keys", f.alice, ""); r.status != 403 {
+		t.Fatalf("data keys for a non-administrator: %d", r.status)
+	}
+	f.srv.console.Keys = func(context.Context) (*KeysView, error) { return nil, errors.New("the store said x") }
+	if r := f.do("GET", "/admin/v1/data-keys", f.admin, ""); r.status != 503 || strings.Contains(string(r.body), "said x") {
+		t.Fatalf("data keys unread: %d %s", r.status, r.body)
 	}
 }
 

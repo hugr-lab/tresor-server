@@ -57,6 +57,8 @@ type Resealer interface {
 	Reseal(ctx context.Context) (moved, skipped int, err error)
 	// DataKeysInUse names every data key a row is sealed or authenticated under.
 	DataKeysInUse(ctx context.Context) (map[string]bool, error)
+	// RowsBehind counts the rows under another data key than active (spec 019: when reseal is due).
+	RowsBehind(ctx context.Context, active string) (int, error)
 }
 
 // Store keeps the secrets. Implementations are safe for concurrent use, across replicas where the store

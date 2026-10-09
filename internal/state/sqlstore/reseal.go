@@ -169,3 +169,17 @@ func (s *Store) DataKeysInUse(ctx context.Context) (map[string]bool, error) {
 	}
 	return used, rows.Err()
 }
+
+// RowsBehind counts the rows under another data key than active (spec 019), minted tokens included.
+func (s *Store) RowsBehind(ctx context.Context, active string) (int, error) {
+	if err := s.ready(); err != nil {
+		return 0, err
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, s.q(`SELECT
+		(SELECT COUNT(*) FROM secrets WHERE data_key_id <> ?) + (SELECT COUNT(*) FROM variables WHERE data_key_id <> ?) +
+		(SELECT COUNT(*) FROM delegations WHERE subject_key_id <> ? AND subject_key_id <> '') +
+		(SELECT COUNT(*) FROM delegation_tokens WHERE data_key_id <> ?)`),
+		active, active, active, active).Scan(&n)
+	return n, err
+}

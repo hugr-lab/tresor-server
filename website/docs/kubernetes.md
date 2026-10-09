@@ -117,11 +117,44 @@ The KEK in Transit, `ref+vault` and the exchange's key in Vault, with the chart'
   - The password can come from a Secret: `state.password_ref: ref+k8s://db/tresor-pg/password`. The chart
     grants `get` on that one Secret.
   - Or from workload identity, with `auth: entra`.
-- **SQLite**: one replica on a PersistentVolumeClaim. Use block storage.
+- **SQLite**: not recommended on a cluster - one replica on a ReadWriteOnce claim, and every command needs the
+  service scaled to 0 first (`kubectl scale deploy/<fullname> --replicas=0`; its volume is the serving pod's,
+  and `mac`, `rewrap` and `reseal` take its lease). A cluster can run PostgreSQL or SQL Server: use one.
+
+## The commands as jobs
+
+The image has no shell, and nobody logs into the pod. Each command runs as a Job with the service's own
+ServiceAccount, configuration, volumes and environment (spec 019). The chart makes a suspended CronJob per
+command (`<fullname>` is the release's name and the chart's, as the chart's NOTES print it); start one by hand:
+
+```sh
+kubectl -n tresor create job --from=cronjob/<fullname>-reseal reseal-$(date +%Y%m%d%H%M)
+kubectl -n tresor logs -f job/reseal-…        # its log: counts and names, never a value
+```
+
+| CronJob | Runs |
+| --- | --- |
+| `<fullname>-reseal` | `reseal -retire` |
+| `<fullname>-reseal-rotate` | `reseal -rotate -retire` (a data key leaked) |
+| `<fullname>-rewrap` | `rewrap` |
+| `<fullname>-refs` | `refs -resolve` |
+| `<fullname>-mac` | `mac` (the SQL stores) |
+
+- A long fullname is cut so that a CronJob's name stays within 52 characters.
+- `maintenance.reseal.schedule` (a cron, e.g. `0 3 1 * *`) runs `reseal -retire` on that schedule (not on
+  SQLite). A job started by hand may overlap it: every change is compare-and-set, so both finish correctly.
+- `maintenance.refsBeforeUpgrade: true` runs `refs -resolve` with the new configuration before an upgrade (a
+  pre-upgrade hook), when the image stays - a configuration change; a reference it would strand stops the
+  upgrade. An upgrade of the image runs none (the new version's database is migrated by its pods): change the
+  configuration in an upgrade of its own. Helm only - `helm template` and Argo CD render no hook. The hook runs
+  with the release's current ServiceAccount and RBAC: change those in an upgrade of their own too.
+- The jobs' pods carry `podLabels` (a policy that admits the service admits them) and
+  `maintenance.podAnnotations`, not `podAnnotations` - a mesh's sidecar would keep a Job from completing.
+- The right to create Jobs in the namespace is the KEK's: whoever has it acts as the service.
 
 ## Hardening
 
 - With `tls.offload` the pod serves plain HTTP. Set `networkPolicy.from` to the ingress controller.
-- Whoever can create pods in the service's namespace, mint a token for its ServiceAccount or impersonate it
+- Whoever can create pods or Jobs in the service's namespace, mint a token for its ServiceAccount or impersonate it
   can act as the service. Keep these rights to the platform's operators.
 - A restore (Velero) writes as another account. Remove the admission policy's binding for its duration.

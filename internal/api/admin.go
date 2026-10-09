@@ -35,6 +35,18 @@ type Console struct {
 	// PreviousKEKs are keys.previous (spec 011): kind and where, never material
 	PreviousKEKs []map[string]string
 	Ready        func() (bool, map[string]string) // readiness, each check's state
+	// Keys is the data keys' state (spec 019); nil: none (memory)
+	Keys func(ctx context.Context) (*KeysView, error)
+}
+
+// KeysView is the data keys' state as the Service screen shows it (spec 019): when reseal is due. Counts and
+// ages only - no id, nothing opened.
+type KeysView struct {
+	Stored     int   `json:"stored"`      // data keys stored
+	ActiveAge  int64 `json:"active_age"`  // seconds since the active one was made
+	OldestAge  int64 `json:"oldest_age"`  // seconds since the oldest one was made
+	RowsBehind int   `json:"rows_behind"` // rows under another data key than the active one: reseal
+	Unused     int   `json:"unused"`      // data keys no row uses, beside the active one: reseal -retire
 }
 
 // WithConsole serves the console (spec 010): /ui/ and /admin/v1.
@@ -47,6 +59,7 @@ func (s *Server) consoleRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /ui/", s.console.UI)
 	mux.Handle("GET /ui", s.console.UI)
 	mux.HandleFunc("GET /admin/v1/service", s.authed(s.admin(s.adminService)))
+	mux.HandleFunc("GET /admin/v1/data-keys", s.authed(s.admin(s.adminDataKeys)))
 	mux.HandleFunc("GET /admin/v1/secrets/{name}/shape", s.authed(s.admin(s.adminShape)))
 	mux.HandleFunc("GET /admin/v1/variables/{name}/shape", s.authed(s.admin(s.adminShape)))
 	mux.HandleFunc("PATCH /admin/v1/secrets/{name}/params", s.authed(s.admin(s.adminParams)))
@@ -116,13 +129,35 @@ func (s *Server) adminService(w http.ResponseWriter, r *http.Request) {
 		auditLevel = "all"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version": s.console.Version, "protocol": Protocol, "environment": cfg.UI.Environment,
+		"data_keys": s.console.Keys != nil, // their state: /admin/v1/data-keys
+		"version":   s.console.Version, "protocol": Protocol, "environment": cfg.UI.Environment,
 		"capabilities": []string{"write", "annotate", "delegation", "variables", "token_exchange"},
 		"state":        cfg.State.Kind, "kek": kek, "issuers": issuers, "sources": sources,
 		"policy": map[string]any{"admins": cfg.Policy.Admins, "actors": actors},
 		"audit":  auditLevel,
 		"ready":  map[string]any{"ready": ready, "checks": checks},
 	})
+}
+
+// dataKeysTime bounds the data keys' count: a store's every row (on Kubernetes, a list of each kind).
+const dataKeysTime = 15 * time.Second
+
+// adminDataKeys is the data keys' state (spec 019), asked by the Service screen only: counting rows is not for
+// every page.
+func (s *Server) adminDataKeys(w http.ResponseWriter, r *http.Request) {
+	if s.console.Keys == nil {
+		problem(w, http.StatusNotFound, "not_found", "this store keeps no data keys")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), dataKeysTime)
+	defer cancel()
+	v, err := s.console.Keys(ctx)
+	if err != nil {
+		s.log.Warn("the data keys' state", "error", err.Error())
+		problem(w, http.StatusServiceUnavailable, "service_unavailable", "the data keys could not be read")
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 // connection is where a source reads, as an administrator may see it: an address and a login method, never a

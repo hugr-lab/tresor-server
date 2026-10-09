@@ -86,3 +86,32 @@ func (e *Envelope) SetClock(now func() time.Time) {
 	defer e.mu.Unlock()
 	e.now = now
 }
+
+// Status is the data keys as stored (spec 019: the keys in view): their ids, the active one's and the oldest
+// one's creation. Nothing is unwrapped.
+type Status struct {
+	IDs            []string
+	ActiveID       string
+	Active, Oldest time.Time
+}
+
+// Status reads the data keys' state; with none yet, an empty one.
+func (e *Envelope) Status(ctx context.Context) (Status, error) {
+	var st Status
+	active, _, err := e.keys.Active(ctx)
+	if err != nil && !errors.Is(err, ErrNoDataKey) {
+		return st, err
+	}
+	st.ActiveID, st.Active = active.ID, active.CreatedAt
+	all, err := e.keys.List(ctx)
+	if err != nil {
+		return st, err
+	}
+	for _, dk := range all {
+		st.IDs = append(st.IDs, dk.ID)
+		if st.Oldest.IsZero() || dk.CreatedAt.Before(st.Oldest) {
+			st.Oldest = dk.CreatedAt
+		}
+	}
+	return st, nil
+}

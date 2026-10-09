@@ -105,3 +105,9 @@ func wanted(signal string) bool {
 	}
 	return os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" || os.Getenv("OTEL_EXPORTER_OTLP_"+signal+"_ENDPOINT") != ""
 }
+
+// MetricsOn says whether metrics are exported (an endpoint for them, the SDK not disabled): what is costly to
+// measure is measured only then.
+func MetricsOn() bool {
+	return !strings.EqualFold(os.Getenv("OTEL_SDK_DISABLED"), "true") && wanted("METRICS")
+}

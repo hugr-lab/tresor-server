@@ -71,6 +71,16 @@ export interface ServiceInfo {
   policy: { admins: string[]; actors: { principal: string; verbs: string[] }[] }
   audit: string
   ready: { ready: boolean; checks: Record<string, string> }
+  data_keys?: boolean // spec 019: the store keeps data keys - their state at /admin/v1/data-keys
+}
+
+/** the data keys' state (spec 019): when reseal is due; ages in seconds */
+export interface DataKeysInfo {
+  stored: number
+  active_age: number
+  oldest_age: number
+  rows_behind: number
+  unused: number
 }
 
 export interface Whoami {

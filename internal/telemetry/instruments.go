@@ -2,6 +2,8 @@ package telemetry
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -41,4 +43,70 @@ func Outcome(err error) string {
 		return "error"
 	}
 	return "ok"
+}
+
+// KeysSample is the data keys' state for the gauges (spec 019).
+type KeysSample struct {
+	Stored, RowsBehind int
+	OldestAge          time.Duration
+}
+
+// ObserveKeys reports the data keys' state as gauges - tresor.keys.data_keys, tresor.keys.oldest_age,
+// tresor.keys.rows_behind - read by read every `every` (a count of rows: not at each collection), until ctx ends.
+// A read that fails reports nothing (no stale value) and calls failed.
+func ObserveKeys(ctx context.Context, every time.Duration, read func(context.Context) (KeysSample, error), failed func(error)) error {
+	var mu sync.Mutex
+	var last *KeysSample
+	refresh := func() {
+		s, err := read(ctx)
+		mu.Lock()
+		last = nil
+		if err == nil {
+			last = &s
+		}
+		mu.Unlock()
+		if err != nil && ctx.Err() == nil {
+			failed(err)
+		}
+	}
+	stored, err := meter.Int64ObservableGauge("tresor.keys.data_keys", metric.WithDescription("data keys stored"))
+	if err != nil {
+		return err
+	}
+	oldest, err := meter.Float64ObservableGauge("tresor.keys.oldest_age", metric.WithUnit("s"),
+		metric.WithDescription("the oldest data key's age"))
+	if err != nil {
+		return err
+	}
+	behind, err := meter.Int64ObservableGauge("tresor.keys.rows_behind",
+		metric.WithDescription("rows under another data key than the active one: tresor-server reseal moves them"))
+	if err != nil {
+		return err
+	}
+	if _, err := meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if last != nil {
+			o.ObserveInt64(stored, int64(last.Stored))
+			o.ObserveFloat64(oldest, last.OldestAge.Seconds())
+			o.ObserveInt64(behind, int64(last.RowsBehind))
+		}
+		return nil
+	}, stored, oldest, behind); err != nil {
+		return err
+	}
+	go func() {
+		refresh()
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				refresh()
+			}
+		}
+	}()
+	return nil
 }
