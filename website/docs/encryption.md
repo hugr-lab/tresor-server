@@ -146,6 +146,30 @@ vault:
 
 Data keys also rotate by age: one older than `keys.data_key_max_age` (30 days) is replaced for new values.
 
+## Resealing, and retiring data keys
+
+A data key's rotation moves new writes only: a value written once stays under the data key of its day, and
+every data key stays stored. `reseal` (spec 018) moves the rows to the active data key and deletes the data
+keys nothing uses any more:
+
+```bash
+tresor-server reseal -config server.yaml                   # every row onto the active data key
+tresor-server reseal -config server.yaml -rotate -retire   # a data key leaked: a new one, then the old ones deleted
+```
+
+- **Not a write**: each value is opened and sealed again under the same binding, its MAC made anew; its
+  version, its times and its ETag stay. Every move is compare-and-set; it runs next to the service (on SQLite,
+  with the service stopped).
+- **Only what verifies moves**: a row whose MAC does not verify, or (a SQL store) has none yet - `tresor-server
+  mac` first - is named and left, and the command exits non-zero.
+- **Minted tokens on a SQL store stay** under their data key: the store keeps their key only hashed, and their
+  binding names it. They go with their delegation grant, within hours; `-retire` keeps their data key until
+  then. The Kubernetes store moves them too.
+- **`-retire`** deletes a data key that is not the active one, was superseded more than `keys.cache_ttl` plus
+  a minute ago (a replica may seal under one it still holds as active), and that no row uses. A row under a
+  deleted data key is refused, never read as empty.
+- **Backups** keep their own data keys: a leaked data key still opens a backup taken before.
+
 ## Moving to another KEK
 
 From a local key to Key Vault or Vault, from one Key Vault key to another, from one Transit key (or mount) to

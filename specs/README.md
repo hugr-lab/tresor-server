@@ -31,4 +31,4 @@ Research lives in the local, gitignored `design/` folder.
 | [015](015-policy-package/spec.md) | `internal/policy`: the permission model in a package of its own (a refactor) | implemented |
 | [016](016-platform-contract/spec.md) | the console in the hugr platform: the microfrontend's contract, version 1 | implemented |
 | [017](017-service-client-refused/spec.md) | the service's own client refused by the IdP: `503`, never stored in a grant | implemented |
-| [018](018-reseal/spec.md) | `tresor-server reseal`: every row moved to the active data key, old data keys retired | accepted |
+| [018](018-reseal/spec.md) | `tresor-server reseal`: every row moved to the active data key, old data keys retired | implemented |

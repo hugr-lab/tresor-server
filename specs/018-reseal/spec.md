@@ -1,6 +1,6 @@
 # Spec 018: `tresor-server reseal` - every row moved to the active data key, old data keys retired
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-09
 - **Author**: hugr lab
 
@@ -42,7 +42,7 @@ For each store (SQL: SQLite, PostgreSQL, SQL Server; Kubernetes; `memory` has no
 | --- | --- |
 | a secret, a variable | its material opened under its data key, sealed under the active one with the **same AAD** (its version unchanged), its MAC recomputed |
 | a delegation grant | its subject token, the same; one with nothing sealed: its MAC under the active key |
-| a minted token | its sealed tokens, the same (its version unchanged); one that failed: its MAC under the active key |
+| a minted token (Kubernetes) | its sealed tokens, the same (its version unchanged); one that failed: its MAC under the active key |
 | Kubernetes: an actor's counter, the installation keyring | their MAC under the active key |
 
 - **Not a write**: the version, the times and the ETag stay - a client's `If-Match` still holds, nothing is
@@ -55,6 +55,10 @@ For each store (SQL: SQLite, PostgreSQL, SQL Server; Kubernetes; `memory` has no
 - **Under any KEK of the chain**: a data key wrapped by `keys.previous` (spec 011) opens; the active one is under
   the current KEK.
 - `-rotate`: activates a new data key first, as rotation by age does, so the rows leave the active one too.
+- **Minted tokens on a SQL store stay** (found in implementing): their AAD names their key (the audience and the
+  scope), which the SQL stores keep only hashed - their binding cannot be made again. They are caches of a
+  delegation grant, which lives hours: `-retire` keeps their data key until the grant is purged, and a run then
+  retires it. The Kubernetes store keeps the key in the resource, and moves them.
 
 ### Retiring
 

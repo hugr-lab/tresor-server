@@ -103,3 +103,14 @@ func (k dataKeys) Rewrapped(ctx context.Context, id, fromKEKID string, wrapped [
 	n, err := res.RowsAffected()
 	return n == 1, err
 }
+
+// Delete removes a data key (spec 018), never the active one (the slot's foreign key keeps it too).
+func (k dataKeys) Delete(ctx context.Context, id string) (bool, error) {
+	res, err := k.s.db.ExecContext(ctx, k.s.q(`DELETE FROM data_keys WHERE id = ?
+		AND NOT EXISTS (SELECT 1 FROM active_data_key WHERE data_key_id = ?)`), id, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}

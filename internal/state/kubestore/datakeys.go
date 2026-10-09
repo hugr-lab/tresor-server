@@ -124,3 +124,23 @@ func (k dataKeys) Rewrapped(ctx context.Context, id, fromKEKID string, wrapped [
 	}
 	return false, fmt.Errorf("data key %s kept changing under its rewrap", id)
 }
+
+// Delete removes a data key's resource (spec 018) at the resourceVersion read, never the active one's.
+func (k dataKeys) Delete(ctx context.Context, id string) (bool, error) {
+	ring, err := k.s.keyrings.get(ctx, keyringName)
+	if err != nil {
+		return false, err
+	}
+	if ring != nil && ring.Spec.DataKeyID == id {
+		return false, nil
+	}
+	o, err := k.read(ctx, id)
+	if err != nil || o == nil {
+		return false, err
+	}
+	removed, err := k.s.dataKeys.remove(ctx, o.Metadata.Name, o)
+	if apierrors.IsConflict(err) {
+		return false, nil // changed since: kept
+	}
+	return removed, err
+}

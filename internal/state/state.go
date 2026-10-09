@@ -49,6 +49,16 @@ var (
 	ErrUnavailable = errors.New("the store is held by another replica")
 )
 
+// Resealer is a store whose rows move to the active data key (spec 018: tresor-server reseal). The memory
+// store, with nothing at rest, is none.
+type Resealer interface {
+	// Reseal moves every row sealed or authenticated under another data key to the active one, its version
+	// kept; a row it cannot move is logged and counted as skipped.
+	Reseal(ctx context.Context) (moved, skipped int, err error)
+	// DataKeysInUse names every data key a row is sealed or authenticated under.
+	DataKeysInUse(ctx context.Context) (map[string]bool, error)
+}
+
 // Store keeps the secrets. Implementations are safe for concurrent use, across replicas where the store
 // allows several.
 type Store interface {

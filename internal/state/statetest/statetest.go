@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hugr-lab/tresor-server/internal/keys"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
@@ -40,6 +41,7 @@ func Run(t *testing.T, open Opener) {
 	t.Run("DelegationLimit", func(t *testing.T) { testDelegationLimit(t, open) })
 	t.Run("MintedTokens", func(t *testing.T) { testMintedTokens(t, open) })
 	t.Run("Namespaces", func(t *testing.T) { testNamespaces(t, open) })
+	t.Run("Reseal", func(t *testing.T) { testReseal(t, open) })
 	// spec 004: the variables' namespace keeps to the same rules
 	variables := func(t *testing.T) Handles {
 		h := open(t)
@@ -544,5 +546,118 @@ func testMintedTokens(t *testing.T, open Opener) {
 	}
 	if err := put(1, `{"access":"x"}`, ""); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("a token for a grant that is gone: %v", err)
+	}
+}
+
+// spec 018: every row moves to the active data key, its version kept; the data keys nothing uses are retired,
+// and every row still reads
+func testReseal(t *testing.T, open Opener) {
+	h := open(t)
+	st := h.First
+	rs, ok := st.(state.Resealer)
+	sealed, enveloped := st.(interface{ Envelope() *keys.Envelope })
+	if !ok || !enveloped {
+		t.Skip("nothing at rest")
+	}
+	env := sealed.Envelope()
+	d := st.Delegations()
+	now := time.Now()
+	const key = "aud\x00scope"
+
+	// under the first data key: a secret, a variable, a grant with its subject and its minted token, one without
+	first, err := env.ActiveID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create(t, st, "a")
+	create(t, st.Variables(), "v")
+	withSubject, without := grant("a", "node", "alice", now.Add(time.Hour)), grant("b", "node", "bob", now.Add(time.Hour))
+	without.Subject = nil
+	for _, g := range []state.Delegation{withSubject, without} {
+		if err := d.Put(ctx, g, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.PutToken(ctx, withSubject.IDHash, state.MintedToken{Key: key, Version: 1, Token: []byte("minted")}); err != nil {
+		t.Fatal(err)
+	}
+	// under the second: another secret; then a third is the active one
+	second, err := env.Rotate(ctx)
+	if err != nil || second == first {
+		t.Fatalf("rotate: %s %v", second, err)
+	}
+	create(t, st, "b")
+	active, err := env.Rotate(ctx)
+	if err != nil || active == second {
+		t.Fatalf("rotate: %s %v", active, err)
+	}
+
+	moved, skipped, err := rs.Reseal(ctx)
+	if err != nil || skipped != 0 || moved < 5 {
+		t.Fatalf("reseal: moved %d, skipped %d, %v", moved, skipped, err)
+	}
+	if again, _, err := rs.Reseal(ctx); err != nil || again != 0 {
+		t.Fatalf("a second reseal moves nothing: %d %v", again, err)
+	}
+	inUse, err := rs.DataKeysInUse(ctx)
+	if err != nil || !inUse[active] || inUse[second] {
+		t.Fatalf("in use after the reseal: %v %v", inUse, err)
+	}
+	// every row as it was: its version, its material
+	reads := func(when string) {
+		t.Helper()
+		for _, e := range []struct {
+			st   state.Store
+			name string
+		}{{st, "a"}, {st, "b"}, {st.Variables(), "v"}} {
+			got, err := e.st.Get(ctx, e.name)
+			if err != nil || got.Version != 1 || mustJSON(t, got.Params) != mustJSON(t, secret(1).Params) {
+				t.Fatalf("%s: %s: %+v %v", when, e.name, got, err)
+			}
+		}
+		if subject, err := d.SubjectToken(ctx, withSubject.IDHash, now); err != nil || string(subject) != string(withSubject.Subject) {
+			t.Fatalf("%s: the subject: %q %v", when, subject, err)
+		}
+		if _, err := d.Get(ctx, without.IDHash, now); err != nil {
+			t.Fatalf("%s: a grant with no subject: %v", when, err)
+		}
+	}
+	reads("resealed")
+	if tok, err := d.Token(ctx, withSubject.IDHash, key); err != nil || string(tok.Token) != "minted" || tok.Version != 1 {
+		t.Fatalf("resealed: the minted token: %+v %v", tok, err)
+	}
+
+	// retired: superseded just now, nothing goes; an hour on, every key nothing uses
+	kept, err := env.Retire(ctx, inUse)
+	if err != nil || len(kept) != 2 || kept[0].Reason == "" || kept[1].Reason == "" {
+		t.Fatalf("superseded just now: %+v %v", kept, err)
+	}
+	env.SetClock(func() time.Time { return time.Now().Add(time.Hour) })
+	defer env.SetClock(time.Now)
+	if _, err := env.Retire(ctx, inUse); err != nil {
+		t.Fatal(err)
+	}
+	reads("retired")
+	if tok, err := d.Token(ctx, withSubject.IDHash, key); err != nil || string(tok.Token) != "minted" {
+		t.Fatalf("a token kept under its data key (a SQL store) keeps it: %+v %v", tok, err)
+	}
+	if _, err := d.Delete(ctx, withSubject.IDHash); err != nil {
+		t.Fatal(err)
+	}
+	if inUse, err = rs.DataKeysInUse(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.Retire(ctx, inUse); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{first, second} {
+		if _, err := env.Open(ctx, id, []byte("x"), make([]byte, 32)); !errors.Is(err, keys.ErrSealed) {
+			t.Fatalf("data key %s retired: %v", id, err)
+		}
+	}
+	if h.Another != nil && h.Replicas {
+		if got, err := h.Another().Get(ctx, "a"); err != nil || got.Version != 1 {
+			t.Fatalf("another replica reads it: %+v %v", got, err)
+		}
 	}
 }

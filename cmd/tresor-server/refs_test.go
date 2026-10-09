@@ -209,18 +209,20 @@ func TestCheckRefsErrors(t *testing.T) {
 // the command line: the command first, its own flags only, nothing after
 func TestParseArgs(t *testing.T) {
 	for line, want := range map[string]invocation{
-		"-config x":                      {command: "serve", configPath: "x"},
-		"refs -config x":                 {command: "refs", configPath: "x"},
-		"refs -config x -resolve":        {command: "refs", configPath: "x", resolve: true},
-		"rewrap -tag-untagged -config x": {command: "rewrap", configPath: "x", tagUntagged: true},
-		"mac -config x":                  {command: "mac", configPath: "x"},
+		"-config x":                        {command: "serve", configPath: "x"},
+		"refs -config x":                   {command: "refs", configPath: "x"},
+		"refs -config x -resolve":          {command: "refs", configPath: "x", resolve: true},
+		"rewrap -tag-untagged -config x":   {command: "rewrap", configPath: "x", tagUntagged: true},
+		"mac -config x":                    {command: "mac", configPath: "x"},
+		"reseal -config x":                 {command: "reseal", configPath: "x"},
+		"reseal -rotate -retire -config x": {command: "reseal", configPath: "x", rotate: true, retire: true},
 	} {
 		if got, err := parseArgs(strings.Fields(line)); err != nil || got != want {
 			t.Errorf("%s: %+v %v", line, got, err)
 		}
 	}
 	for _, line := range []string{"-config x refs", "-config x rewrap", "refs -config x extra", "-resolve -config x",
-		"rewrap -resolve", "refs -tag-untagged"} {
+		"rewrap -resolve", "refs -tag-untagged", "reseal -tag-untagged", "rewrap -retire", "-config x reseal"} {
 		if _, err := parseArgs(strings.Fields(line)); err == nil {
 			t.Errorf("%s: accepted", line)
 		}

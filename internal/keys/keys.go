@@ -49,6 +49,9 @@ type DataKeyStore interface {
 	// Rewrapped replaces a data key's wrap and tag, compare-and-set on the KEK id it was read with; false
 	// when another rewrap came first.
 	Rewrapped(ctx context.Context, id, fromKEKID string, wrapped []byte, kekID string, tag []byte) (bool, error)
+	// Delete removes a data key that is not the active one (spec 018: retired); false when there is none, or
+	// it is the active one.
+	Delete(ctx context.Context, id string) (bool, error)
 }
 
 var (

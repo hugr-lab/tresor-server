@@ -85,6 +85,10 @@ func main() {
 		run = func(configPath string, log *slog.Logger) error { return refs(configPath, inv.resolve, os.Stdout, log) }
 	case "mac":
 		run = fillMACs
+	case "reseal":
+		run = func(configPath string, log *slog.Logger) error {
+			return reseal(configPath, inv.rotate, inv.retire, log)
+		}
 	}
 	if err := run(inv.configPath, log); err != nil {
 		if errors.Is(err, errFindings) {
@@ -100,12 +104,13 @@ func main() {
 type invocation struct {
 	command, configPath  string
 	tagUntagged, resolve bool
+	rotate, retire       bool
 }
 
-// parseArgs reads [rewrap | refs | mac] and the flags; an error is a usage error (exit 2).
+// parseArgs reads [rewrap | refs | mac | reseal] and the flags; an error is a usage error (exit 2).
 func parseArgs(args []string) (invocation, error) {
 	inv := invocation{command: "serve"}
-	if len(args) > 0 && (args[0] == "rewrap" || args[0] == "refs" || args[0] == "mac") {
+	if len(args) > 0 && (args[0] == "rewrap" || args[0] == "refs" || args[0] == "mac" || args[0] == "reseal") {
 		inv.command, args = args[0], args[1:]
 	}
 	flags := flag.NewFlagSet("tresor-server "+inv.command, flag.ContinueOnError)
@@ -115,6 +120,11 @@ func parseArgs(args []string) (invocation, error) {
 	case "rewrap":
 		flags.BoolVar(&inv.tagUntagged, "tag-untagged", false, "rewrap: tag the data keys that have no tag (made "+
 			"before spec 003) - once, at the upgrade: you vouch for the store as it is")
+	case "reseal":
+		flags.BoolVar(&inv.rotate, "rotate", false, "reseal: a new active data key first (one that leaked: the rows "+
+			"leave it too)")
+		flags.BoolVar(&inv.retire, "retire", false, "reseal: then delete the data keys no row uses, superseded longer "+
+			"than keys.cache_ttl ago")
 	case "refs":
 		flags.BoolVar(&inv.resolve, "resolve", false, "refs: read each admitted reference too, and list those that "+
 			"do not resolve (the value is never printed)")
@@ -124,7 +134,7 @@ func parseArgs(args []string) (invocation, error) {
 	}
 	if flags.NArg() > 0 {
 		// `tresor-server -config x rewrap` must not start the service: the command comes first
-		return inv, fmt.Errorf("unexpected arguments %q (usage: tresor-server [rewrap | refs | mac] -config <file>)", flags.Args())
+		return inv, fmt.Errorf("unexpected arguments %q (usage: tresor-server [rewrap | refs | mac | reseal] -config <file>)", flags.Args())
 	}
 	return inv, nil
 }
@@ -200,6 +210,78 @@ func fillMACs(configPath string, log *slog.Logger) error {
 	}
 	log.Info("set state.mac: true now")
 	return nil
+}
+
+// reseal moves every row to the active data key (spec 018: tresor-server reseal), a new one first with rotate,
+// and with retire deletes the data keys nothing uses any more. It runs next to the service (every change is
+// compare-and-set); on SQLite with the service stopped.
+func reseal(configPath string, rotate, retire bool, log *slog.Logger) error {
+	cfg, _, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	if cfg.State.Kind == "sqlite" {
+		if _, err := os.Stat(cfg.State.Path); err != nil {
+			return fmt.Errorf("state.path: %w", err)
+		}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	st, _, err := openState(ctx, cfg, log, false)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	rs, ok := st.(state.Resealer)
+	sealed, enveloped := st.(interface{ Envelope() *keys.Envelope })
+	if !ok || !enveloped {
+		return fmt.Errorf("state.kind %s keeps nothing at rest: nothing to reseal", cfg.State.Kind)
+	}
+	env := sealed.Envelope()
+	if rotate {
+		id, err := env.Rotate(ctx)
+		if err != nil {
+			return unheld(cfg, err)
+		}
+		log.Info("a new active data key", "data_key", id)
+	}
+	moved, skipped, err := rs.Reseal(ctx)
+	if err != nil {
+		return unheld(cfg, err)
+	}
+	log.Info("rows moved to the active data key", "moved", moved, "skipped", skipped)
+	if retire {
+		inUse, err := rs.DataKeysInUse(ctx)
+		if err != nil {
+			return err
+		}
+		kept, err := env.Retire(ctx, inUse)
+		if err != nil {
+			return err
+		}
+		n := 0
+		for _, k := range kept {
+			if k.Reason == "" {
+				n++
+				log.Info("a data key retired", "data_key", k.ID)
+			} else {
+				log.Info("a data key kept", "data_key", k.ID, "reason", k.Reason)
+			}
+		}
+		log.Info("data keys retired", "count", n)
+	}
+	if skipped > 0 {
+		return fmt.Errorf("%d rows could not be moved (named above): their data keys are kept", skipped)
+	}
+	return nil
+}
+
+// unheld says what a SQLite store held by a serving replica means for a command.
+func unheld(cfg *config.Config, err error) error {
+	if errors.Is(err, state.ErrUnavailable) && cfg.State.Kind == "sqlite" {
+		return errors.New("the SQLite database is held by a serving replica: stop the service, run the command, start it")
+	}
+	return err
 }
 
 // openState opens the configured store, and the readiness checks it brings (the KEK's). readOnly (refs, spec

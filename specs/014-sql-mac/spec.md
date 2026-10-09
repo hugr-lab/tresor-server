@@ -132,4 +132,4 @@ Turning it off again stops the checks only; back on, nothing needs filling (writ
 - `state.mac: true` by default in a major version.
 - Rollback detection (a monotonic counter under the KEK, or an append-only log) - for both stores.
 - Re-sealing: every row's material and MAC moved to the active data key (a command), so old data keys can be
-  retired - for both stores, encryption and MAC alike.
+  retired - for both stores, encryption and MAC alike. Done: spec 018 (`tresor-server reseal`).
