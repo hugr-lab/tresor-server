@@ -19,27 +19,56 @@ export interface Answer<T> {
   etag: string | null
 }
 
+/** what the API tells its owner about the token (spec 016): refused even renewed, or accepted again */
+export interface TokenEvents {
+  unauthorized?: () => void
+  authorized?: () => void
+}
+
 export class Api {
+  private renewing?: Promise<string> // one renewal for every request refused meanwhile: a refresh token is used once
+  private refusals = 0 // how many times the session was refused: an answer to an older request does not clear it
+
   constructor(
     private readonly base: string,
-    private readonly token: () => Promise<string>,
+    // renew: the host's token was refused - a fresh one, not its cache's (spec 016)
+    private readonly token: (renew?: boolean) => Promise<string>,
+    private readonly events: TokenEvents = {},
   ) {}
 
-  async call<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Answer<T>> {
-    const h: Record<string, string> = { Authorization: `Bearer ${await this.token()}`, ...headers }
-    if (body !== undefined) h['Content-Type'] = 'application/json'
-    let res: Response
-    try {
-      res = await fetch(this.base.replace(/\/$/, '') + path, {
-        method,
-        headers: h,
-        body: body === undefined ? undefined : JSON.stringify(body),
-        cache: 'no-store',
-        credentials: 'omit',
+  private renewed(): Promise<string> {
+    if (!this.renewing) {
+      const p = this.token(true).finally(() => {
+        if (this.renewing === p) this.renewing = undefined
       })
-    } catch {
-      throw new ApiError({ type: 'service_unavailable', title: 'service_unavailable', status: 0, detail: 'the service did not answer' })
+      this.renewing = p
     }
+    return this.renewing
+  }
+
+  async call<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Answer<T>> {
+    const payload = body === undefined ? undefined : JSON.stringify(body)
+    let refusals = this.refusals
+    const send = async (renew: boolean) => {
+      const h: Record<string, string> = { Authorization: `Bearer ${await (renew ? this.renewed() : this.token(false))}`, ...headers }
+      if (payload !== undefined) h['Content-Type'] = 'application/json'
+      try {
+        return await fetch(this.base.replace(/\/$/, '') + path, { method, headers: h, body: payload, cache: 'no-store', credentials: 'omit' })
+      } catch {
+        throw new ApiError({ type: 'service_unavailable', title: 'service_unavailable', status: 0, detail: 'the service did not answer' })
+      }
+    }
+    let res = await send(false)
+    if (res.status === 401) {
+      await res.body?.cancel().catch(() => undefined)
+      refusals = this.refusals
+      res = await send(true) // the token expired on the way, or was revoked: once more with a renewed one
+      if (res.status === 401) {
+        this.refusals++
+        this.events.unauthorized?.()
+      }
+    }
+    if (res.status !== 401 && refusals === this.refusals) this.events.authorized?.()
     const etag = res.headers.get('ETag')
     if (res.status === 204) return { data: undefined as T, etag }
     const text = await res.text()

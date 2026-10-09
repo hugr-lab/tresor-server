@@ -17,6 +17,11 @@ const $ = (id: string) => document.getElementById(id)!
 let theme: 'light' | 'dark' = 'light'
 let handle: { update(o: { theme?: 'light' | 'dark'; path?: string }): void; unmount(): void } | undefined
 let token = ''
+// the token's life, simulated for the end-to-end (spec 016): expired (renewed when asked), or revoked (refused even
+// renewed, until restored)
+let expired = false
+let revoked = false
+let told = 0
 
 async function signIn() {
   sessionStorage.setItem('host.return', location.pathname)
@@ -36,7 +41,13 @@ async function show(path: string) {
   const { mountTresor } = await import(/* @vite-ignore */ `${tresor}/ui/mfe/tresor.js`)
   handle = mountTresor($('slot'), {
     apiBase: tresor,
-    getToken: async () => token,
+    getToken: async (_audience?: string, how?: { renew?: boolean }) => {
+      if (revoked) return 'revoked'
+      if (expired && !how?.renew) return 'expired'
+      expired = false
+      return token
+    },
+    onUnauthorized: () => ($('status').textContent = `tresor: session ended (${++told})`),
     theme,
     basePath: base,
     onNavigate: (p: string, how: { replace: boolean }) => history[how.replace ? 'replaceState' : 'pushState'](null, '', p),
@@ -58,6 +69,13 @@ $('theme').onclick = () => {
   handle?.update({ theme })
 }
 $('signin').onclick = () => void signIn()
+$('expire').onclick = () => (expired = true)
+$('revoke').onclick = () => (revoked = true)
+$('restore').onclick = () => {
+  revoked = false
+  $('status').textContent = 'signed in'
+}
+$('brand').onclick = () => $('slot').classList.toggle('branded')
 
 if (location.pathname === '/platform/callback') {
   const user = await users.signinRedirectCallback()
