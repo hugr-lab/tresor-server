@@ -12,7 +12,9 @@
 @tailwind components;
 @tailwind utilities;
 
-/* :host - the microfrontend's shadow root (spec 010, c); its theme is the wrapper's data-theme */
+/* :host - the microfrontend's shadow root (spec 010, c). The dark defaults are on :host too, by the element's
+   data-tresor-theme: a host's variables set on the element win over :host in either theme (spec 016) - a rule on an
+   element inside the shadow root would win over them */
 :root, :host {
   --surface: #ffffff; --surface-soft: #f2f7f7; --ink: #0b1f2a; --ink-muted: #4a5b64; --border: #d3e1e2;
   --brand: #338a86; --brand-strong: #2a7470; --on-brand: #ffffff; --navy: #0a3146; --focus: #2a7470;
@@ -20,7 +22,7 @@
   --danger: #b3261e; --danger-soft: #fbe6e4; --row: #f7fafa;
   color-scheme: light;
 }
-[data-theme='dark'] {
+[data-theme='dark']:root, :host([data-tresor-theme='dark']) {
   --surface: #061c28; --surface-soft: #0a3146; --ink: #e8f1f2; --ink-muted: #9cb1ba; --border: #1e4a60;
   --brand: #5cbdb6; --brand-strong: #5cbdb6; --on-brand: #061c28; --focus: #5cbdb6;
   --success: #5fcb91; --success-soft: #0e3a2c; --warning: #e8b45c; --warning-soft: #3a2e10;

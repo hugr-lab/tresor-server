@@ -138,3 +138,41 @@ test('the microfrontend in a host on another origin', async ({ page }) => {
   await page.locator('#theme').click()
   await expect(page.locator('#slot .mfe-root')).toHaveAttribute('data-theme', 'dark')
 })
+
+test("the platform's contract: its colours on the element, the token renewed, then the host told", async ({ page }) => {
+  await page.goto(`${env('E2E_HOST_URL')}/platform/tresor/secrets`)
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  await login(page, 'anna', env('E2E_ADMIN_PW'))
+  const tabs = page.locator('#slot').getByRole('navigation', { name: 'tresor' })
+  const active = tabs.getByRole('link', { name: 'Secrets' })
+  const background = () => active.evaluate((a) => getComputedStyle(a).backgroundColor)
+  await expect(active).toBeVisible()
+  expect(await background()).not.toBe('rgb(200, 30, 90)')
+  await page.locator('#brand').click() // a variable set on the element by the host's own stylesheet
+  await expect.poll(background).toBe('rgb(200, 30, 90)')
+  await page.locator('#theme').click() // the dark defaults do not win over the host's either
+  await expect(page.locator('#slot .mfe-root')).toHaveAttribute('data-theme', 'dark')
+  await expect.poll(background).toBe('rgb(200, 30, 90)')
+  await page.locator('#brand').click()
+  await expect.poll(background).not.toBe('rgb(200, 30, 90)')
+
+  // expired: refused once, renewed through getToken, the request retried - nothing shown, the host not told
+  await page.locator('#expire').click()
+  await tabs.getByRole('link', { name: 'Variables' }).click()
+  await expect(page.locator('#title')).toHaveText('tresor · Variables')
+  await expect(page.locator('#slot').getByRole('link', { name: /New variable/ })).toBeVisible()
+  await expect(page.locator('#slot').getByText('Your session ended')).toBeHidden()
+  await expect(page.locator('#status')).toHaveText('signed in')
+
+  // revoked: refused renewed too - the host told, once, and the console says so until a request succeeds
+  await page.locator('#revoke').click()
+  await tabs.getByRole('link', { name: 'Access' }).click()
+  await expect(page.locator('#slot').getByText('Your session ended')).toBeVisible()
+  await expect(page.locator('#status')).toHaveText('tresor: session ended (1)')
+  await tabs.getByRole('link', { name: 'Secrets' }).click()
+  await page.waitForTimeout(500)
+  await expect(page.locator('#status')).toHaveText('tresor: session ended (1)') // at most once per 30 seconds
+  await page.locator('#restore').click()
+  await page.locator('#slot').getByRole('button', { name: 'Try again' }).click()
+  await expect(page.locator('#slot').getByText('Your session ended')).toBeHidden()
+})
