@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hugr-lab/tresor-server/internal/audit"
 	"github.com/hugr-lab/tresor-server/internal/clientauth"
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/mint"
@@ -167,17 +168,85 @@ func TestMintedUnderGrant(t *testing.T) {
 	}
 }
 
-// the IdP refuses: the refusal names no token, and a user's own token is never quoted back
+// the IdP refuses the user: 403, the IdP's word with what was presented redacted - the user's token is never
+// quoted back
 func TestMintedRefused(t *testing.T) {
 	f := newFixture(t, "")
 	f.do("PUT", "/v1/secrets/echo", f.admin, strings.Replace(mintedSecret, "echo-api", "refused-api", 1))
 	f.do("PUT", "/v1/secrets/echo/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
-	f.idp.Kill()
-	// the test IdP refuses a subject token literally "refused"; here: a wrong client makes it refuse
-	f.srv.cfg.Issuers[0].Exchange.ClientSecret = "wrong"
-	r := f.do("GET", "/v1/secrets/echo", f.alice, "")
-	if r.status != 403 || !strings.Contains(string(r.body), "invalid_client") || strings.Contains(string(r.body), f.alice) {
+	_, _, r := f.mintedMaterial(f.alice)
+	detail, _ := r.json(t)["detail"].(string)
+	if r.status != 403 || r.problemType(t) != "mint_refused" || !strings.Contains(detail, "invalid_grant") ||
+		!strings.Contains(detail, "<redacted>") || strings.Contains(string(r.body), f.alice) {
 		t.Fatalf("refused: %d %s", r.status, r.body)
+	}
+	if strings.Contains(f.logs.String(), f.alice) {
+		t.Fatal("the user's token reached the log")
+	}
+}
+
+// the IdP refuses the service's own client (spec 017): the service's problem - 503, the IdP's word in the log
+// and not in the answer, nothing kept in a grant; once the operator fixes it, everything mints again
+func TestMintedClientRefused(t *testing.T) {
+	f := newFixture(t, "")
+	node := f.idp.Service(t, "duckdb-secrets", "node", "nodes")
+	f.do("PUT", "/v1/secrets/echo", f.admin, mintedSecret)
+	f.do("PUT", "/v1/secrets/echo/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	f.do("PUT", "/v1/secrets/echo/grants/n", f.admin, `{"principal":"role:nodes","verbs":["use"]}`)
+	unavailable := func(what string, r reply) {
+		t.Helper()
+		if r.status != 503 || r.problemType(t) != "service_unavailable" || !strings.Contains(string(r.body), "service's own client") ||
+			strings.Contains(string(r.body), "invalid_client") || strings.Contains(string(r.body), "app-7f3a") ||
+			strings.Contains(string(r.body), f.alice) {
+			t.Fatalf("%s: %d %s", what, r.status, r.body)
+		}
+	}
+	good := f.srv.cfg.Issuers[0].Exchange.ClientSecret
+	trail := audited(f, audit.All)
+	t.Cleanup(func() { f.srv.now = time.Now })
+
+	// directly: a wrong secret, then an app the IdP does not know
+	f.srv.cfg.Issuers[0].Exchange.ClientSecret = "wrong"
+	_, _, r := f.mintedMaterial(f.alice)
+	unavailable("directly, a wrong secret", r)
+	if logs := f.logs.String(); !strings.Contains(logs, "level=ERROR") || !strings.Contains(logs, "invalid_client") {
+		t.Fatalf("the log, a wrong secret: %s", logs)
+	}
+	f.srv.cfg.Issuers[0].Exchange.ClientSecret = good
+	f.idp.UnauthorizedClient = true
+	_, _, r = f.mintedMaterial(f.alice)
+	unavailable("directly, an unknown app", r)
+
+	// a grant made meanwhile keeps no refusal: fixed, its token is minted from the subject token
+	g, r := f.grantFor(node, f.alice)
+	if g == "" {
+		t.Fatalf("exchange: %d %s", r.status, r.body)
+	}
+	_, _, r = f.mintedMaterial(node, "Delegation", g)
+	unavailable("under a grant, minted lazily", r)
+	f.idp.UnauthorizedClient = false
+	if bearer, _, r := f.mintedMaterial(node, "Delegation", g); bearer == "" || claimsOf(t, bearer)["sub"] != "alice-id" {
+		t.Fatalf("fixed, the grant mints: %d %s", r.status, r.body)
+	}
+
+	// a refresh refused for the client: the refresh token is kept, and renews once fixed
+	f.srv.now = func() time.Time { return time.Now().Add(290 * time.Second) }
+	f.idp.UnauthorizedClient = true
+	_, _, r = f.mintedMaterial(node, "Delegation", g)
+	unavailable("under a grant, renewed", r)
+	f.idp.UnauthorizedClient = false
+	if renewed, _, r := f.mintedMaterial(node, "Delegation", g); renewed == "" || f.idp.Refreshed != 1 {
+		t.Fatalf("fixed, the grant renews: %d %s (refreshes %d)", r.status, r.body, f.idp.Refreshed)
+	}
+	f.srv.now = time.Now
+
+	if es := events(t, trail); find(es, audit.KindMint, "error", "echo") == nil || find(es, audit.KindMint, "refused", "echo") != nil {
+		t.Fatalf("the audit: an error, never a refusal: %+v", es)
+	}
+	logs := f.logs.String()
+	if !strings.Contains(logs, "refused the service's own client") || !strings.Contains(logs, "unauthorized_client") ||
+		!strings.Contains(logs, "level=ERROR") || strings.Contains(logs, f.alice) {
+		t.Fatalf("the log: %s", logs)
 	}
 }
 
