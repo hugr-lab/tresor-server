@@ -46,12 +46,8 @@ material of their choice under it. So a data key that unwraps proves nothing. Th
   is made for new values; `rewrap` tags it anew.
 - A data key whose tag does not match is refused, on every store.
 - **Upgrading from a version before this**: its data keys have no tag, and every value sealed under them is
-  refused (`500`) until they are tagged. Once, at the upgrade, with the service's new version:
-  1. Key Vault: give the KEK the `sign` operation (`az keyvault key set-attributes --vault-name <vault>
-     --name <key> --ops wrapKey unwrapKey sign`, or rotate it with those operations), and the service's
-     identity the custom role (get, wrap, unwrap, sign) on the key;
-  2. `tresor-server rewrap -tag-untagged -config …`: it tags the data keys that have none - you vouch for
-     the store as it is - and logs each one it tagged.
+  refused (`500`) until they are tagged: the KEK's `sign`, then `tresor-server rewrap -tag-untagged` once - see
+  [Upgrading](administration/upgrading.md#authenticated-data-keys-spec-003).
 - **On the Kubernetes store**, what is not sealed (a secret's grants, a delegation grant's user) carries a
   MAC under a key derived from a data key: only the KEK's holder can make one that verifies. A `rewrap` keeps
   the data keys, so it keeps every MAC.
@@ -115,10 +111,8 @@ vault:
   path "transit/keys/tresor-kek"     { capabilities = ["read"] }
   ```
 
-- **Rotation**:
-  1. `bao write -f transit/keys/tresor-kek/rotate`;
-  2. `tresor-server rewrap`;
-  3. raise the key's `min_decryption_version` to retire the old versions.
+- **Rotation**: rotate the key, `tresor-server rewrap`, then raise `min_decryption_version` - see
+  [The KEK](administration/kek.md#openbao-vault-transit-vault).
 - **The login has no static secret**:
   - `kubernetes`: the pod's ServiceAccount token, against Vault's Kubernetes auth method;
   - `jwt`: a projected token (`jwt_file`), against its JWT auth method;
@@ -130,82 +124,50 @@ vault:
 
 ## Rotation
 
-1. **Rotate the KEK in the vault** (by hand, or a rotation policy). The service sees the new version within
-   a minute and makes a new data key for new values. Old values still open: their data keys name the old
-   version.
-2. **Rewrap**, to retire the old versions:
-
-   ```bash
-   tresor-server rewrap -config server.yaml
-   ```
-
-   Every data key is unwrapped under its old version and wrapped under the current one, compare-and-set.
-   No sealed value is touched. It runs next to the service. It goes on past a data key it cannot rewrap,
-   names each, and exits non-zero.
-3. **Retire the old versions** in the vault once `rewrap` has passed.
+A new version of the KEK (in the vault, by hand or a rotation policy) is seen within a minute; new data keys are
+wrapped under it, and old values still open: their data keys name the old version. `tresor-server rewrap` wraps
+every data key under the current version; the old versions can then be retired. No sealed value is touched. The
+runbook, per kind: [The KEK](administration/kek.md#rotating-it).
 
 Data keys also rotate by age: one older than `keys.data_key_max_age` (30 days) is replaced for new values.
 
 ## Resealing, and retiring data keys
 
 A data key's rotation moves new writes only: a value written once stays under the data key of its day, and
-every data key stays stored. `reseal` (spec 018) moves the rows to the active data key and deletes the data
-keys nothing uses any more:
+every data key stays stored. `tresor-server reseal` (spec 018) moves the rows to the active data key, `-rotate`
+makes a new one first (a data key leaked), and `-retire` deletes the data keys nothing uses any more.
 
-```bash
-tresor-server reseal -config server.yaml                   # every row onto the active data key
-tresor-server reseal -config server.yaml -rotate -retire   # a data key leaked: a new one, the rows moved to it
-tresor-server reseal -config server.yaml -retire           # a few minutes later: the replaced key deleted
-```
+- **Not a write**: each value is opened and sealed again under the same binding, its MAC made anew; its version,
+  its times and its ETag stay.
+- **Only what verifies moves**: a row whose MAC does not verify, or (a SQL store) has none yet, is named and left.
+- **Minted tokens on a SQL store stay** under their data key until their delegation grant goes; the Kubernetes
+  store moves them too.
+- **`-retire`** deletes a data key that is not the active one, that no row uses, and that has settled: an older
+  key once the active one is older than `keys.cache_ttl` plus a minute ([Data keys](administration/data-keys.md)). A row under a deleted data key is refused, never read as empty.
+- **Backups** keep their own data keys.
 
-- **Not a write**: each value is opened and sealed again under the same binding, its MAC made anew; its
-  version, its times and its ETag stay. Every move is compare-and-set; it runs next to the service (on SQLite,
-  with the service stopped).
-- **Only what verifies moves**: a row whose MAC does not verify, or (a SQL store) has none yet - `tresor-server
-  mac` first - is named and left, and the command exits non-zero.
-- **Minted tokens on a SQL store stay** under their data key: the store keeps their key only hashed, and their
-  binding names it. They go with their delegation grant, within hours; `-retire` keeps their data key until
-  then. The Kubernetes store moves them too.
-- **`-retire`** deletes a data key that is not the active one, that no row uses, and that has settled: a key
-  older than the active one goes once the active key is older than `keys.cache_ttl` plus a minute (a write in
-  flight may still seal under the key it replaced). So the key `-rotate` replaces is kept by that run: run
-  `-retire` again a few minutes later. Each key kept is logged, with why. A row under a deleted data key is
-  refused, never read as empty. Keep the replicas' clocks in sync (NTP).
-- **Backups** keep their own data keys: a leaked data key still opens a backup taken before.
+The runbooks, a leaked data key among them: [Data keys](administration/data-keys.md).
 
 ## Moving to another KEK
 
-From a local key to Key Vault or Vault, from one Key Vault key to another, from one Transit key (or mount) to
-another on the same Vault server: the data keys are moved, the values stay as they are, and the service serves
-throughout. Moving between two Vault servers is not supported: one `vault:` client serves every vault KEK.
+From a local key to Key Vault, Vault or a KMS, from one key to another: the old KEK is listed under
+`keys.previous` (read only: data keys under it still unwrap, nothing new is wrapped with it), `tresor-server
+rewrap` moves the data keys under the new one, and `keys.previous` is removed (spec 011). The values stay as they
+are, and the service serves throughout. Moving between two Vault servers is not supported: one `vault:` client
+serves every vault KEK. The runbook: [The KEK](administration/kek.md#moving-to-another-kek).
 
-1. **Both KEKs configured.** The new one is `keys`; the old one is listed under `keys.previous`, read only: data
-   keys under it still unwrap, nothing new is wrapped with it. Deploy.
-
-   ```yaml
-   keys:
-     kind: azurekeyvault
-     key: https://corp-kv.vault.azure.net/keys/tresor-kek
-     previous:
-       - {kind: local, key_file: /var/run/tresor/kek-old/kek}
-   ```
-
-   New values go under a new data key wrapped by the new KEK. Readiness checks each previous KEK too, and the
-   console's Service screen shows them.
-2. **Move the data keys**, once the rollout has finished (a replica still on the old configuration would make
-   new data keys under the old KEK):
-
-   ```bash
-   tresor-server rewrap -config server.yaml
-   ```
-
-   Every data key under a previous KEK is unwrapped with it and wrapped under the new one, its tag made under the
-   new KEK's root. Run it until it moves none.
-3. **Remove `keys.previous`**, deploy, then retire the old KEK (delete the local key's file and its Secret).
+```yaml
+keys:
+  kind: azurekeyvault
+  key: https://corp-kv.vault.azure.net/keys/tresor-kek
+  previous:
+    - {kind: local, key_file: /var/run/tresor/kek-old/kek}
+```
 
 - A data key opens only with the KEK that owns its id - never by trying each. A data key left under a KEK that
   is no longer configured is refused (`500`), never read as empty.
 - The same KEK as `keys` and in `keys.previous` is refused at start.
-- Until step 3 the old KEK is trusted as the current one is: `rewrap` carries over every data key authentic
-  under it.
+- Readiness checks each previous KEK too, and the console's Service screen shows them.
+- Until `keys.previous` is removed the old KEK is trusted as the current one is: `rewrap` carries over every data
+  key authentic under it, its tag made under the new KEK's root.
 - On the chart, `localKEK.previousSecretName` mounts the old local KEK and lists it in `keys.previous`.

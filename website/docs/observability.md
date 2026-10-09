@@ -72,7 +72,7 @@ The service's spans **only continue tresor's trace**: it never starts one.
 | `tresor.references` | by scheme (the source's name: `vault`, or a named source's), kind and outcome |
 | `tresor.mint` | by outcome |
 | `tresor.state.conflicts` | compare-and-set writes lost and run again |
-| `tresor.state.left_out` | Kubernetes resources a list left out (their MAC) |
+| `tresor.state.left_out` | rows or resources a list left out (their MAC; `kind` names the table or kind, `unchecked` a SQL row served with `state.mac` off) |
 | `tresor.keys.data_keys` | data keys stored (counted every 10 minutes) |
 | `tresor.keys.oldest_age` | the oldest data key's age, in seconds |
 | `tresor.keys.rows_behind` | rows under another data key than the active one: `tresor-server reseal` moves them |

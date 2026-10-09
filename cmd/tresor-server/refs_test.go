@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -226,5 +228,32 @@ func TestParseArgs(t *testing.T) {
 		if _, err := parseArgs(strings.Fields(line)); err == nil {
 			t.Errorf("%s: accepted", line)
 		}
+	}
+}
+
+// every command line the docs show is one the command line accepts (spec 019: the runbooks)
+func TestDocsCommandLines(t *testing.T) {
+	line := regexp.MustCompile("tresor-server ((?:rewrap|refs|mac|reseal)(?: +-[^\\s`|#]+(?: +[^\\s`|#-][^\\s`|#]*)?)*)")
+	// and a command with its flags as inline code, without the binary's name: `reseal -rotate -retire`
+	inline := regexp.MustCompile("`((?:rewrap|refs|mac|reseal)(?: +-[a-z-]+)+)`")
+	n := 0
+	err := filepath.WalkDir("../../website/docs", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, m := range append(line.FindAllStringSubmatch(string(data), -1), inline.FindAllStringSubmatch(string(data), -1)...) {
+			n++
+			if _, err := parseArgs(strings.Fields(m[1])); err != nil {
+				t.Errorf("%s: tresor-server %s: %v", path, m[1], err)
+			}
+		}
+		return nil
+	})
+	if err != nil || n < 10 {
+		t.Fatalf("the docs' command lines: %d found, %v", n, err)
 	}
 }

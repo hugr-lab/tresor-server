@@ -15,8 +15,9 @@ corp`); the console is for looking at what the service holds and changing it wit
 - **Access**: what each role and group may use, granted and revoked in one place.
 - **References check**: every `ref+…` checked against the [sources](references.md) as configured now, the
   check `tresor-server refs` runs, optionally reading each one.
-- **Service**: the version, the state store, the KEK's kind and current version, the issuers, the sources and
-  where they may read, the policy, readiness.
+- **Service**: the version, the state store, the KEK's kind and current version, the data keys (how many, how
+  old, and whether `reseal` or `reseal -retire` is due - see [Data keys](administration/data-keys.md)), the
+  issuers, the sources and where they may read, the policy, readiness.
 
 ## What an administrator sees
 

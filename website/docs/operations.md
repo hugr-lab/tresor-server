@@ -15,10 +15,14 @@ The checks run in the background every 30 s, so a probe never calls a database, 
 provider itself:
 
 - **state**: the store answers; on SQLite, this replica holds the lease;
-- **keys**: the KEK wraps and unwraps a throwaway key;
+- **keys**: the KEK wraps and unwraps a throwaway key; **keys.previous[i]**: each previous KEK, during a move;
 - **issuer ...**: one per issuer, its discovery and signing keys. An issuer that answered once and is down
   now is `degraded`, not `unavailable`: its keys are cached, and one IdP's outage must not take every
   replica out.
+- **exchange ...**: one per issuer with `exchange`, the service's client assertion. A failure is `degraded`:
+  only `token_exchange` secrets depend on it.
+
+What each check's failure means: [Incidents](administration/incidents.md#the-service-unready).
 
 `/readyz` names each check's status (`ok`, `degraded`, `unavailable`, `not checked yet`), never an error's
 text; the error goes to the log. On SIGTERM the service turns unready first, then shuts down.
@@ -43,12 +47,8 @@ Never logged: material, tokens, data keys, a grant's id, a configuration value.
 
 ## Upgrading
 
-- Migrations run at start, one replica at a time (a lock in the database).
-- An upgrade may ask for a step of its own. To the version that authenticates data keys (spec 003): the
-  KEK's `sign`, and `tresor-server rewrap -tag-untagged` once - see [Encryption](encryption.md#the-root).
-- To the version with the SQL stores' MAC (spec 014): once every replica runs it, `tresor-server mac` (on SQLite
-  with the service stopped), then `state.mac: true` - see [State](state.md#the-sql-stores-mac-statemac).
-- An older binary refuses a database migrated by a newer one: roll forward, or restore the database.
+Migrations run at start, one replica at a time; an older binary refuses a database a newer one migrated. The
+steps a version asks for (`rewrap -tag-untagged`, `mac` then `state.mac`): [Upgrading](administration/upgrading.md).
 
 ## Checking references
 
@@ -75,12 +75,9 @@ tresor-server refs -config server.yaml -resolve   # and a read of each one
 - **No value** is printed. A reference that does not parse is named by its scheme only: its text may be a value
   written by mistake.
 - **Exit**: `0` nothing to report, `3` findings, `1` an error, `2` a usage error.
-- **It runs as the service**: the store, the KEK, and (with `-resolve`) the sources' rights. On Kubernetes
-  (`<release>` is the Helm release):
-
-  ```sh
-  kubectl -n tresor exec deploy/<release>-tresor-server -- /tresor-server refs -config /etc/tresor/server.yaml
-  ```
+- **It runs as the service**: the store, the KEK, and (with `-resolve`) the sources' rights - as a job:
+  `<fullname>-refs` on the chart, `<prefix>-refs` on Container Apps ([Running a command](administration/commands.md)).
+  With the new configuration before a change: [Changing the configuration](administration/configuration.md).
 
 - **It writes nothing**, beside a serving replica:
   - a SQL store is not migrated: run the service's own version, or the schema is refused;
@@ -89,5 +86,5 @@ tresor-server refs -config server.yaml -resolve   # and a read of each one
 
 ## Backups
 
-The database holds everything but the KEK. Back it up as any database. Without the KEK its material does not
-open: keep the Key Vault key (purge protection), or the local key, as carefully as the backups.
+The database holds everything but the KEK: keep the KEK as carefully as the backups. What to keep, a restore and
+its checks: [Backup and restore](administration/backup-restore.md).
