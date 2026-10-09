@@ -267,3 +267,13 @@ func TestOwns(t *testing.T) {
 		}
 	}
 }
+
+func (s *store) Delete(_ context.Context, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.keys[id]; !ok || id == s.active {
+		return false, nil
+	}
+	delete(s.keys, id)
+	return true, nil
+}
