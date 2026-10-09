@@ -70,11 +70,16 @@ func (k dataKeys) Activate(ctx context.Context, dk keys.DataKey, slot int64) err
 		ID: dk.ID, KEKID: dk.KEKID, Wrapped: dk.Wrapped, Tag: dk.Tag, CreatedAt: nanos(dk.CreatedAt)}}); err != nil {
 		return err
 	}
+	// a race lost: the key is removed again (best effort: one left is an orphan, retired by reseal -retire)
+	lost := func() error {
+		_, _ = k.s.dataKeys.remove(ctx, name, nil)
+		return keys.ErrKeyRace
+	}
 	if slot == 0 {
 		_, err := k.s.keyrings.create(ctx, &object[keyringSpec]{Metadata: meta(keyringName),
 			Spec: keyringSpec{DataKeyID: dk.ID, Slot: 1}})
 		if apierrors.IsAlreadyExists(err) {
-			return keys.ErrKeyRace
+			return lost()
 		}
 		return err
 	}
@@ -83,12 +88,12 @@ func (k dataKeys) Activate(ctx context.Context, dk keys.DataKey, slot int64) err
 		return err
 	}
 	if ring == nil || ring.Spec.Slot != slot {
-		return keys.ErrKeyRace
+		return lost()
 	}
 	ring.Spec = keyringSpec{DataKeyID: dk.ID, Slot: slot + 1}
 	_, err = k.s.keyrings.update(ctx, ring)
 	if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
-		return keys.ErrKeyRace
+		return lost()
 	}
 	return err
 }

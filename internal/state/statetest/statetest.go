@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -604,7 +605,7 @@ func testReseal(t *testing.T, open Opener) {
 		t.Fatalf("in use after the reseal: %v %v", inUse, err)
 	}
 	// every row as it was: its version, its material
-	reads := func(when string) {
+	reads := func(when string, subject bool) {
 		t.Helper()
 		for _, e := range []struct {
 			st   state.Store
@@ -615,46 +616,65 @@ func testReseal(t *testing.T, open Opener) {
 				t.Fatalf("%s: %s: %+v %v", when, e.name, got, err)
 			}
 		}
-		if subject, err := d.SubjectToken(ctx, withSubject.IDHash, now); err != nil || string(subject) != string(withSubject.Subject) {
-			t.Fatalf("%s: the subject: %q %v", when, subject, err)
+		if !subject {
+			// its grant deleted
+		} else if got, err := d.SubjectToken(ctx, withSubject.IDHash, now); err != nil || string(got) != string(withSubject.Subject) {
+			t.Fatalf("%s: the subject: %q %v", when, got, err)
 		}
 		if _, err := d.Get(ctx, without.IDHash, now); err != nil {
 			t.Fatalf("%s: a grant with no subject: %v", when, err)
 		}
 	}
-	reads("resealed")
+	reads("resealed", true)
 	if tok, err := d.Token(ctx, withSubject.IDHash, key); err != nil || string(tok.Token) != "minted" || tok.Version != 1 {
 		t.Fatalf("resealed: the minted token: %+v %v", tok, err)
 	}
 
-	// retired: superseded just now, nothing goes; an hour on, every key nothing uses
+	// retired: the active key made just now, nothing goes; an hour on, every key nothing uses
 	kept, err := env.Retire(ctx, inUse)
 	if err != nil || len(kept) != 2 || kept[0].Reason == "" || kept[1].Reason == "" {
-		t.Fatalf("superseded just now: %+v %v", kept, err)
+		t.Fatalf("the active key made just now: %+v %v", kept, err)
 	}
 	env.SetClock(func() time.Time { return time.Now().Add(time.Hour) })
 	defer env.SetClock(time.Now)
-	if _, err := env.Retire(ctx, inUse); err != nil {
-		t.Fatal(err)
+	retired := map[string]bool{}
+	retire := func() {
+		t.Helper()
+		if inUse, err = rs.DataKeysInUse(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got, err := env.Retire(ctx, inUse)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range got {
+			if r.Reason == "" {
+				retired[r.ID] = true
+			}
+		}
 	}
-	reads("retired")
+	retire()
+	if !retired[second] {
+		t.Fatalf("the second key, used by nothing, retired: %v", retired)
+	}
+	reads("retired", true)
 	if tok, err := d.Token(ctx, withSubject.IDHash, key); err != nil || string(tok.Token) != "minted" {
 		t.Fatalf("a token kept under its data key (a SQL store) keeps it: %+v %v", tok, err)
 	}
+	// the token's grant gone: nothing is under the first key any more - every row left it
 	if _, err := d.Delete(ctx, withSubject.IDHash); err != nil {
 		t.Fatal(err)
 	}
-	if inUse, err = rs.DataKeysInUse(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := env.Retire(ctx, inUse); err != nil {
-		t.Fatal(err)
+	retire()
+	if !retired[first] || len(inUse) != 1 || !inUse[active] {
+		t.Fatalf("only the active key is used, the others retired: in use %v, retired %v", inUse, retired)
 	}
 	for _, id := range []string{first, second} {
-		if _, err := env.Open(ctx, id, []byte("x"), make([]byte, 32)); !errors.Is(err, keys.ErrSealed) {
-			t.Fatalf("data key %s retired: %v", id, err)
+		if _, err := env.Open(ctx, id, []byte("x"), make([]byte, 32)); err == nil || !strings.Contains(err.Error(), "is not stored") {
+			t.Fatalf("data key %s is gone: %v", id, err)
 		}
 	}
+	reads("all retired", false)
 	if h.Another != nil && h.Replicas {
 		if got, err := h.Another().Get(ctx, "a"); err != nil || got.Version != 1 {
 			t.Fatalf("another replica reads it: %+v %v", got, err)

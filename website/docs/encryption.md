@@ -154,7 +154,8 @@ keys nothing uses any more:
 
 ```bash
 tresor-server reseal -config server.yaml                   # every row onto the active data key
-tresor-server reseal -config server.yaml -rotate -retire   # a data key leaked: a new one, then the old ones deleted
+tresor-server reseal -config server.yaml -rotate -retire   # a data key leaked: a new one, the rows moved to it
+tresor-server reseal -config server.yaml -retire           # a few minutes later: the replaced key deleted
 ```
 
 - **Not a write**: each value is opened and sealed again under the same binding, its MAC made anew; its
@@ -165,9 +166,11 @@ tresor-server reseal -config server.yaml -rotate -retire   # a data key leaked: 
 - **Minted tokens on a SQL store stay** under their data key: the store keeps their key only hashed, and their
   binding names it. They go with their delegation grant, within hours; `-retire` keeps their data key until
   then. The Kubernetes store moves them too.
-- **`-retire`** deletes a data key that is not the active one, was superseded more than `keys.cache_ttl` plus
-  a minute ago (a replica may seal under one it still holds as active), and that no row uses. A row under a
-  deleted data key is refused, never read as empty.
+- **`-retire`** deletes a data key that is not the active one, that no row uses, and that has settled: a key
+  older than the active one goes once the active key is older than `keys.cache_ttl` plus a minute (a write in
+  flight may still seal under the key it replaced). So the key `-rotate` replaces is kept by that run: run
+  `-retire` again a few minutes later. Each key kept is logged, with why. A row under a deleted data key is
+  refused, never read as empty. Keep the replicas' clocks in sync (NTP).
 - **Backups** keep their own data keys: a leaked data key still opens a backup taken before.
 
 ## Moving to another KEK

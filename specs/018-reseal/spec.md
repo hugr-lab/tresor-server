@@ -65,12 +65,21 @@ For each store (SQL: SQLite, PostgreSQL, SQL Server; Kubernetes; `memory` has no
 `-retire`, after the moves, deletes each data key that is:
 
 1. not the active one;
-2. **superseded long enough**: the next data key was made more than `keys.cache_ttl` (5 minutes) plus a minute ago
-   - a replica may hold a superseded key as active for that long, and seal under it;
+2. **settled**, by a margin of `keys.cache_ttl` (5 minutes) plus a minute - a write reads the active key at each
+   seal, and the margin covers a write's latency between that read and its commit, and replicas' clocks a little
+   apart (NTP):
+   - a key made before the active one (once active, or a race's loser): once the **active key** is older than
+     the margin - it was superseded no later than the active key took over. Not the next key in time: a key
+     that lost an activation race (left behind on Kubernetes, which removes it again on a best-effort basis)
+     can sit between the old active key and the new one;
+   - a key made after the active one was never active (a race's loser, or one being activated now): once it is
+     older than the margin;
 3. **used by nothing**: a scan of every row after the moves names none under it.
 
 The scan and the delete are not one transaction, but nothing can start using a key that is neither active nor
-cached (1, 2). SQL: `DELETE FROM data_keys WHERE id = ?` (the column `retired_at` is dropped from the plan: a
+settled (1, 2). After `-rotate`, the key just replaced is kept by (2): `reseal -retire` again a few minutes
+later retires it (and on a SQL store, once the minted tokens under it have gone with their grants); the command
+logs each key it keeps, with why. SQL: `DELETE FROM data_keys WHERE id = ?` (the column `retired_at` is dropped from the plan: a
 deleted key cannot open, a marked one still could); Kubernetes: the `TresorDataKey` deleted at its
 resourceVersion. A key that is still used is kept and named; `-retire` without the moves having finished retires
 nothing that a skipped row needs.

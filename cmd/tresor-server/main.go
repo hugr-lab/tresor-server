@@ -238,6 +238,10 @@ func reseal(configPath string, rotate, retire bool, log *slog.Logger) error {
 		return fmt.Errorf("state.kind %s keeps nothing at rest: nothing to reseal", cfg.State.Kind)
 	}
 	env := sealed.Envelope()
+	// the store first, before anything is written (SQLite: a serving replica's lease)
+	if _, err := rs.DataKeysInUse(ctx); err != nil {
+		return unheld(cfg, err)
+	}
 	if rotate {
 		id, err := env.Rotate(ctx)
 		if err != nil {
@@ -256,19 +260,23 @@ func reseal(configPath string, rotate, retire bool, log *slog.Logger) error {
 			return err
 		}
 		kept, err := env.Retire(ctx, inUse)
-		if err != nil {
-			return err
-		}
-		n := 0
-		for _, k := range kept {
+		n, left := 0, 0
+		for _, k := range kept { // what was done, even when a delete then failed
 			if k.Reason == "" {
 				n++
 				log.Info("a data key retired", "data_key", k.ID)
 			} else {
-				log.Info("a data key kept", "data_key", k.ID, "reason", k.Reason)
+				left++
+				log.Warn("a data key kept", "data_key", k.ID, "reason", k.Reason)
 			}
 		}
-		log.Info("data keys retired", "count", n)
+		if err != nil {
+			return err
+		}
+		log.Info("data keys retired", "count", n, "kept", left)
+		if left > 0 {
+			log.Warn("data keys are still stored: run tresor-server reseal -retire again once their reasons are past")
+		}
 	}
 	if skipped > 0 {
 		return fmt.Errorf("%d rows could not be moved (named above): their data keys are kept", skipped)
