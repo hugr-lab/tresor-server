@@ -168,7 +168,7 @@ func rewrap(configPath string, tagUntagged bool, log *slog.Logger) error {
 		log.Warn("a data key with no tag was tagged (--tag-untagged)", "data_key", id)
 	})
 	if err != nil {
-		return err
+		return unheld(cfg, err)
 	}
 	log.Info("data keys rewrapped under the KEK's current version", "count", n)
 	return nil

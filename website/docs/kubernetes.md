@@ -119,7 +119,7 @@ The KEK in Transit, `ref+vault` and the exchange's key in Vault, with the chart'
   - Or from workload identity, with `auth: entra`.
 - **SQLite**: not recommended on a cluster - one replica on a ReadWriteOnce claim, and every command needs the
   service scaled to 0 first (`kubectl scale deploy/<fullname> --replicas=0`; its volume is the serving pod's,
-  and `mac`, `rewrap` and `reseal` take its lease). A cluster can run PostgreSQL or SQL Server: use one.
+  and `mac` and `reseal` need its lease). A cluster can run PostgreSQL or SQL Server: use one.
 
 ## The commands as jobs
 

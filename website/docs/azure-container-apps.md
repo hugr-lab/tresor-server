@@ -72,7 +72,7 @@ The recipe is small on purpose. Tighten it:
 - **The database role**: rather than the identity as the server's administrator, an administrator of your
   own, and a role for the identity that owns only the `tresor` database.
 - **Other vaults** in the allowlist: *Key Vault Secrets User* for the identity on each.
-- **The KEK**: a rotation policy, then `rewrap` (below).
+- **The KEK**: a rotation policy, then the `<prefix>-rewrap` job ([The KEK](administration/kek.md)).
 - **The image**: a version tag, not `edge`.
 - **Minted secrets** (`token_exchange`): the service's client secret at the IdP as a Container Apps secret,
   in the variable the issuer's `exchange.client_secret_env` names.
