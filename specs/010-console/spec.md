@@ -169,4 +169,5 @@ Writes otherwise use the protocol's routes: `PUT` (create, with `If-None-Match: 
 
 - The decision on values noted in tresor's spec 009 (tresor-server's console may show unredacted parameters to
   administrators). Done: tresor's spec 009, its addendum (hugr-lab/tresor#31).
-- An audit view in the console (the audit stream is stdout and OTLP today).
+- ~~An audit view in the console~~: not planned (the owner, 2026-10-08) - the audit goes to stdout and OTLP
+  (spec 005), and is read where the logs are (Loki, Grafana, any OTLP backend); the service keeps no audit store.
