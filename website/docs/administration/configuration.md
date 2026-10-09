@@ -26,7 +26,7 @@ A source renamed or removed, or an allowlist narrowed, strands references silent
   ```
 
   It runs only when the image stays (a configuration change), with Helm only (not `helm template`, not Argo CD),
-  and with the release's current ServiceAccount and RBAC. Change the image, the ServiceAccount or the RBAC in an
+  not on SQLite, and with the release's current ServiceAccount and RBAC. Change the image, the ServiceAccount or the RBAC in an
   upgrade of their own.
 - **Kubernetes without the hook, Container Apps**: the jobs run with the deployed configuration. Checking a new
   one before it is deployed is not supported: deploy, run `<fullname>-refs` or `<prefix>-refs`
@@ -42,10 +42,11 @@ Fix every finding first: rewrite the references (an administrator), or keep the 
 ### 2. Deploy
 
 - **Kubernetes**: `helm upgrade` with the new values. The pods carry the configuration's checksum: a change rolls
-  them. A change of `env` or of a Secret the pods read is not in the checksum: `kubectl -n tresor rollout restart
-  deploy/<fullname>`.
-- **Container Apps**: the recipe's parameters (`issuers`, `admins`, `actors`, `materialAllow`), or its
-  `serviceEnv` for a setting it has no parameter for; `az deployment group create` again. The app and the jobs get
+  them; a change of `env` is in the pod template and rolls them too. A change of a Secret's content the pods read
+  is in neither: `kubectl -n tresor rollout restart deploy/<fullname>`.
+- **Container Apps**: the recipe's parameters (`issuers`, `admins`, `actors`, `materialAllow`), or - for a
+  setting it has no parameter for - the `serviceEnv` variable in your copy of `main.bicep`;
+  `az deployment group create` again. The app and the jobs get
   the same settings.
 - **Docker, a VM**: restart the service with the new file or environment.
 

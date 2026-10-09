@@ -57,9 +57,9 @@ One replica serves; it holds a lease row, renewed every 5 seconds (15 seconds ex
 unready (`state`), and takes over when the first stops.
 
 - A second replica waiting is by design: one serves.
-- A command (`rewrap`, `mac`, `reseal`) stops with "the SQLite database is held by a serving replica": stop the
-  service, run it, start it ([Running a command](commands.md#sqlite)).
-- After a stop, the lease expires within 15 seconds.
+- A command (`mac`, `reseal`) stops with "the SQLite database is held by a serving replica": stop the service,
+  run it, start it ([Running a command](commands.md#sqlite)).
+- A clean stop frees the lease at once; after a crash, it expires within 15 seconds.
 
 ## The IdP refuses the service's client
 

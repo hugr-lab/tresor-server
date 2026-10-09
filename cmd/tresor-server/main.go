@@ -168,7 +168,7 @@ func rewrap(configPath string, tagUntagged bool, log *slog.Logger) error {
 		log.Warn("a data key with no tag was tagged (--tag-untagged)", "data_key", id)
 	})
 	if err != nil {
-		return unheld(cfg, err)
+		return err // SQLite: rewrap needs no lease - the data keys are compare-and-set
 	}
 	log.Info("data keys rewrapped under the KEK's current version", "count", n)
 	return nil

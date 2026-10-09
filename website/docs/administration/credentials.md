@@ -22,17 +22,19 @@ For `token_exchange` secrets the service logs in to the IdP as its own client
 | `secret` | The secret is read from `client_secret_env` at start: change it, then restart the replicas. |
 | `azure` | Nothing: the identity's token is the assertion. The federated credential names the identity. |
 | `file` | Nothing: the kubelet rotates the projected token; the service reads it at each request. |
-| `keyvault` | The key's current version signs: a rotation changes the key the IdP must know - register the new one first. `x5t` (or `kid`) names it: change it with the key. |
+| `keyvault` | The key's current version signs, and `x5t` (or `kid`) is read at start: a rotation in the vault signs with the new version under the old name, and the IdP refuses (`503`) until the configuration and the replicas follow. Without that window: a new key under a new name, registered at the IdP; then `key` and `x5t` changed and the replicas restarted; then the old key removed. |
 | `key_file` | ZITADEL's key: a new key in ZITADEL, the Secret updated, the replicas restarted. |
-| `vault` | The version is pinned at start: rotate the key, register its new public key at the IdP, change `kid`, restart. An imported key: a new key imported under a new name, then `key` and `kid`. |
+| `vault` | The version is pinned at start: rotate the key, register its new public key at the IdP, change `kid`, restart - back to back (a replica that restarts in between signs the new version under the old `kid`). An imported key: a new key imported under a new name, then `key` and `kid`. |
 | `awskms`, `gcpkms` | Not documented as a rotation: a new key (or version) is a configuration change of `key` and `kid`, its public key registered at the IdP first. |
 
 ### A client secret (`secret`)
 
 1. Make the new secret at the IdP. Where the IdP keeps two at once, keep the old one until step 3.
 2. Put the new one where `client_secret_env` reads it: on the chart, the Secret `env` takes it from; on Container
-   Apps, the app's secret.
-3. Restart: `kubectl -n tresor rollout restart deploy/<fullname>`; on Container Apps, a new revision.
+   Apps, the app's secret **and each job's** - every command loads the configuration, and one with no secret in
+   `client_secret_env` does not start.
+3. Restart: `kubectl -n tresor rollout restart deploy/<fullname>`; on Container Apps,
+   `az containerapp revision restart` (a secret's change makes no revision).
 4. Remove the old secret at the IdP.
 
 ### While the IdP refuses the client

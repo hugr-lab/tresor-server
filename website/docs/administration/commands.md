@@ -139,10 +139,10 @@ otherwise).
 ## A VM
 
 The binary, as the service's user, with its configuration file and its environment (a local KEK's variable, a
-password's):
+password's) - `sudo -u` alone drops the environment; take the service's own env file:
 
 ```sh
-sudo -u <the service's user> tresor-server reseal -retire -config /etc/tresor/server.yaml
+sudo -u <the service's user> env $(cat /etc/tresor/env) tresor-server reseal -retire -config /etc/tresor/server.yaml
 ```
 
 On SQLite, stop the service first for `rewrap`, `mac` and `reseal`, and start it after.

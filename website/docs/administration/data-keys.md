@@ -64,6 +64,9 @@ A data key's plaintext was exposed; the KEK was not.
    it.
 3. **On a SQL store**, minted tokens stay under the leaked key until their delegation grants expire: run
    `reseal -retire` again after that. The log names the keys kept and why.
+4. **The material itself**: if the store or a backup may have been read with the leaked key, every value sealed
+   under it is exposed - rotate those credentials at their source (a password, a key), as for any leak. The
+   moves do not undo a read.
 
 - **Backups** keep their own data keys: the leaked key still opens a backup taken before. Keep those backups as
   exposed, or delete them.
@@ -71,10 +74,12 @@ A data key's plaintext was exposed; the KEK was not.
 
 ## Check
 
-- The command exits `0`; its log counts the rows moved and the keys retired, none kept.
-- The Service screen: no row under older data keys, no data key unused.
+- The command exits `0`; its log counts the rows moved and the keys retired. A key it kept is named with why: one
+  just replaced (run again in a few minutes), or one minted tokens still use (a SQL store, until their grants go).
+- The Service screen: no row under older data keys (minted tokens on a SQL store are not counted: they cannot be
+  moved), and no data key unused once the kept ones are past their reasons.
 - `tresor.keys.rows_behind` is 0 at the next count.
-- After a leak: the leaked key's id is logged as retired.
+- After a leak: the leaked key's id is logged as retired, at the last run.
 
 ## Back
 

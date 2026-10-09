@@ -61,7 +61,7 @@ Once, with the new version:
    stopped). Rows with no MAC, or a stale one, get one: you vouch for the database. A row that cannot be given
    one (its data key gone) is named, and the command exits `1`.
 2. Then `state.mac: true`, and deploy ([Changing the configuration](configuration.md)). On Container Apps the
-   recipe has no parameter for it: `TRESOR_STATE__MAC` in its `serviceEnv`.
+   recipe has no parameter for it: `TRESOR_STATE__MAC` in the `serviceEnv` variable of your copy of `main.bicep`.
 
 See [State](../state.md#the-sql-stores-mac-statemac).
 

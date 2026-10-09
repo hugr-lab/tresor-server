@@ -36,16 +36,26 @@ metadata: {name: tresor-operator, namespace: tresor}
 rules:
   - {apiGroups: [batch], resources: [cronjobs], verbs: [get]}              # create job --from=cronjob/…
   - {apiGroups: [batch], resources: [jobs], verbs: [create, get, list, watch]}
-  - {apiGroups: [""], resources: [pods, pods/log], verbs: [get, list]}     # kubectl logs job/…
+  - {apiGroups: [""], resources: [pods, pods/log], verbs: [get, list, watch]}   # kubectl logs job/…
+  # scaling to 0 (SQLite, a restore), rollout restart and status:
+  - {apiGroups: [apps], resources: [deployments], verbs: [get, list, watch, patch]}
+  - {apiGroups: [apps], resources: [deployments/scale], verbs: [get, patch, update]}
 ```
+
+A cluster with the `OwnerReferencesPermissionEnforcement` admission plugin also needs `update` on
+`cronjobs/finalizers` (`--from` sets the Job's owner).
 
 Each of these rights, in that namespace, is as strong as `create jobs` - whoever has one acts as the service:
 
 - `create` on pods, jobs, cronjobs, deployments (any workload that can name the service's ServiceAccount);
+- `update` or `patch` on an existing workload - the chart's CronJobs included: their image, their arguments,
+  their `suspend`;
+- `update` or `patch` on the service's ConfigMap (its allowlists, its policy);
 - `pods/exec` on the service's pods (their files: a local KEK, an identity's token);
 - `create` on `serviceaccounts/token` for the service's ServiceAccount;
 - `impersonate` of that ServiceAccount;
-- `get` on the namespace's Secrets (a local KEK, a client secret, a password).
+- `get`, `list` or `watch` on the namespace's Secrets (a local KEK, a client secret, a password: a list returns
+  their contents).
 
 Keep them to the platform's operators. The chart's NOTES say the same. On the Kubernetes store, writing the
 `tresor` resources is the service's alone: the [admission policy](../kubernetes.md#the-store) refuses anyone
@@ -57,6 +67,9 @@ else.
   service's managed identity. Give the start (`Microsoft.App/jobs/start/action`) on those jobs to the operators
   only.
 - **Who may change the app or a job** (its image, its arguments, its settings) acts as the identity too.
+- **Who may assign the identity** (`Microsoft.ManagedIdentity/userAssignedIdentities/assign/action`) to a resource
+  of their own acts as it.
+- **Reading a job's executions** (`az containerapp job execution list`) needs read on the jobs.
 - **Who may read the environment's Log Analytics** reads the jobs' logs: names and counts, never a value.
 
 ### OpenBao and Vault

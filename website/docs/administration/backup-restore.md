@@ -35,18 +35,23 @@ A backup holds its own data keys. A data key retired since, or a leaked one, sti
 2. **Restore the store**:
    - **a database**: as any database, with its `installation` table;
    - **the Kubernetes store**: the CRDs first. A restore (Velero) writes as another account than the service's:
-     remove the admission policy's binding for its duration, then put it back.
+     remove the admission policy's binding for its duration (step 4 puts it back).
 
      ```sh
      kubectl delete validatingadmissionpolicybinding <fullname>-<namespace>
      # the restore
-     helm upgrade <release> oci://ghcr.io/hugr-lab/charts/tresor-server -n tresor -f values.yaml   # the binding again
      ```
 
 3. **The same KEK and configuration** as when the backup was taken - any previous KEK its data keys are under in
    `keys.previous`. The same version of the service, or a newer one: an older one refuses a database a newer one
    migrated.
-4. **Start the service**.
+4. **Start the service**: on Kubernetes, `helm upgrade` with the release's values - it puts the admission
+   policy's binding back and scales the Deployment to its replicas (not before step 3: Helm restores the
+   replicas a manual scale set to 0).
+
+   ```sh
+   helm upgrade <release> oci://ghcr.io/hugr-lab/charts/tresor-server -n tresor -f values.yaml
+   ```
 
 ## Check
 

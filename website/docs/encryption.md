@@ -142,8 +142,8 @@ makes a new one first (a data key leaked), and `-retire` deletes the data keys n
 - **Only what verifies moves**: a row whose MAC does not verify, or (a SQL store) has none yet, is named and left.
 - **Minted tokens on a SQL store stay** under their data key until their delegation grant goes; the Kubernetes
   store moves them too.
-- **`-retire`** deletes a data key that is not the active one, that no row uses, and that is older than the
-  active one by `keys.cache_ttl` plus a minute. A row under a deleted data key is refused, never read as empty.
+- **`-retire`** deletes a data key that is not the active one, that no row uses, and that has settled: an older
+  key once the active one is older than `keys.cache_ttl` plus a minute ([Data keys](administration/data-keys.md)). A row under a deleted data key is refused, never read as empty.
 - **Backups** keep their own data keys.
 
 The runbooks, a leaked data key among them: [Data keys](administration/data-keys.md).

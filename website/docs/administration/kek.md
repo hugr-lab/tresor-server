@@ -31,7 +31,9 @@ wrapping only: no sealed value is touched, and the service serves throughout. Th
 
    Every data key is unwrapped under its old version and wrapped under the current one, compare-and-set. It goes
    on past a data key it cannot rewrap, names each, and exits `1`: run it again once that is fixed.
-3. **Retire the old versions** in the vault once `rewrap` has passed.
+3. **Retire the old versions** in the vault once a second `rewrap` moves none (a replica may use an old version
+   for up to an hour). A backup taken before the `rewrap` needs them: keep them while such a backup may be
+   restored.
 
 ### OpenBao, Vault Transit (`vault`)
 
@@ -84,7 +86,8 @@ is not supported: one `vault:` client serves every Vault KEK.
    keys under the old KEK): `rewrap`, as above. Every data key under a previous KEK is wrapped under the new one,
    its tag made under the new KEK's root. Run it until it moves none.
 3. **Remove `keys.previous`**, deploy, then retire the old KEK: delete the local key's file and its Secret, or
-   disable the old key in its vault.
+   disable the old key in its vault. A backup taken before the move needs the old KEK: keep it (apart, as
+   carefully) while such a backup may be restored.
 
 - Until step 3 the old KEK is trusted as the current one is: `rewrap` carries over every data key authentic under
   it.
