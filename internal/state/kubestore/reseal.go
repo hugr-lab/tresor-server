@@ -214,47 +214,63 @@ func (s *Store) Reseal(ctx context.Context) (moved, skipped int, err error) {
 // DataKeysInUse names every data key a resource is sealed or authenticated under (spec 018: what -retire keeps).
 func (s *Store) DataKeysInUse(ctx context.Context) (map[string]bool, error) {
 	used := map[string]bool{}
-	add := func(id string) {
+	err := s.eachDataKeyID(ctx, func(id string) {
 		if id != "" {
 			used[id] = true
 		}
-	}
+	})
+	return used, err
+}
+
+// RowsBehind counts the resources under another data key than active (spec 019).
+func (s *Store) RowsBehind(ctx context.Context, active string) (int, error) {
+	n := 0
+	err := s.eachDataKeyID(ctx, func(id string) {
+		if id != active {
+			n++
+		}
+	})
+	return n, err
+}
+
+// eachDataKeyID calls fn with the data key of every resource that names one.
+func (s *Store) eachDataKeyID(ctx context.Context, fn func(string)) error {
 	for _, st := range []*Store{s, s.vars} {
 		all, err := st.secrets.list(ctx, "")
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for _, o := range all {
-			add(o.Spec.DataKeyID)
+			fn(o.Spec.DataKeyID)
 		}
 	}
 	grants, err := s.grants.list(ctx, "")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for _, o := range grants {
-		add(o.Spec.DataKeyID)
+		fn(o.Spec.DataKeyID)
 	}
 	tokens, err := s.tokens.list(ctx, "")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for _, o := range tokens {
-		add(o.Spec.DataKeyID)
+		fn(o.Spec.DataKeyID)
 	}
 	actors, err := s.actors.list(ctx, "")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for _, o := range actors {
-		add(o.Spec.DataKeyID)
+		fn(o.Spec.DataKeyID)
 	}
 	mark, err := s.keyrings.get(ctx, installationName)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if mark != nil {
-		add(mark.Spec.DataKeyID)
+		fn(mark.Spec.DataKeyID)
 	}
-	return used, nil
+	return nil
 }

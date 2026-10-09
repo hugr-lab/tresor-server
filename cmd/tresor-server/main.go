@@ -284,6 +284,37 @@ func reseal(configPath string, rotate, retire bool, log *slog.Logger) error {
 	return nil
 }
 
+// keysView is the data keys' state (spec 019): how many, how old, the rows behind the active one and the keys
+// no row uses.
+func keysView(ctx context.Context, env *keys.Envelope, rs state.Resealer) (*api.KeysView, error) {
+	st, err := env.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	inUse, err := rs.DataKeysInUse(ctx)
+	if err != nil {
+		return nil, err
+	}
+	behind, err := rs.RowsBehind(ctx, st.ActiveID)
+	if err != nil {
+		return nil, err
+	}
+	v := &api.KeysView{Stored: len(st.IDs), RowsBehind: behind}
+	now := time.Now()
+	if !st.Active.IsZero() {
+		v.ActiveAge = int64(now.Sub(st.Active).Seconds())
+	}
+	if !st.Oldest.IsZero() {
+		v.OldestAge = int64(now.Sub(st.Oldest).Seconds())
+	}
+	for _, id := range st.IDs {
+		if id != st.ActiveID && !inUse[id] {
+			v.Unused++
+		}
+	}
+	return v, nil
+}
+
 // unheld says what a SQLite store held by a serving replica means for a command.
 func unheld(cfg *config.Config, err error) error {
 	if errors.Is(err, state.ErrUnavailable) && cfg.State.Kind == "sqlite" {
@@ -733,12 +764,30 @@ func serve(configPath string, log *slog.Logger) error {
 		if sealed, ok := st.(interface{ Envelope() *keys.Envelope }); ok {
 			c.KEK = sealed.Envelope().Current
 			c.PreviousKEKs = previousKEKs(cfg)
+			if rs, ok := st.(state.Resealer); ok {
+				c.Keys = func(ctx context.Context) (*api.KeysView, error) { return keysView(ctx, sealed.Envelope(), rs) }
+			}
 		}
 		opts = append(opts, api.WithConsole(c))
 	}
 	srv, err := api.New(ctx, cfg, verifier, traced.Store(st), log, opts...)
 	if err != nil {
 		return err
+	}
+	// spec 019: the data keys' state as gauges, counted every 10 minutes, when metrics are exported
+	if sealed, ok := st.(interface{ Envelope() *keys.Envelope }); ok && telemetry.MetricsOn() {
+		if rs, ok := st.(state.Resealer); ok {
+			if err := telemetry.ObserveKeys(ctx, 10*time.Minute, func(ctx context.Context) (telemetry.KeysSample, error) {
+				v, err := keysView(ctx, sealed.Envelope(), rs)
+				if err != nil {
+					return telemetry.KeysSample{}, err
+				}
+				return telemetry.KeysSample{Stored: v.Stored, RowsBehind: v.RowsBehind,
+					OldestAge: time.Duration(v.OldestAge) * time.Second}, nil
+			}); err != nil {
+				return err
+			}
+		}
 	}
 	checks := append([]health.Check{{Name: "state", Run: st.Ping}}, stateChecks...)
 	checks = append(checks, exchangeChecks...)

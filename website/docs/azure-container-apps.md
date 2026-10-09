@@ -72,11 +72,22 @@ The recipe is small on purpose. Tighten it:
 - **The database role**: rather than the identity as the server's administrator, an administrator of your
   own, and a role for the identity that owns only the `tresor` database.
 - **Other vaults** in the allowlist: *Key Vault Secrets User* for the identity on each.
-- **The KEK**: a rotation policy, then `tresor-server rewrap` as a Container Apps job with the same image
-  and settings.
+- **The KEK**: a rotation policy, then `rewrap` (below).
 - **The image**: a version tag, not `edge`.
 - **Minted secrets** (`token_exchange`): the service's client secret at the IdP as a Container Apps secret,
   in the variable the issuer's `exchange.client_secret_env` names.
+
+## The commands as jobs
+
+The recipe makes a manual Container Apps job per command, with the app's image, managed identity and settings
+(spec 019): `<prefix>-reseal` (`reseal -retire`), `-reseal-rotate`, `-rewrap`, `-refs` (`refs -resolve`), `-mac`.
+
+```sh
+az containerapp job start -g <rg> -n tresor-reseal
+az containerapp job execution list -g <rg> -n tresor-reseal -o table
+```
+
+Their logs go to the environment's Log Analytics. Whoever may start them acts as the service.
 
 ## Checked live
 

@@ -185,3 +185,150 @@ API), or Vault's kubernetes login with no token of its own (vaultToken). */}}
 {{- end -}}
 {{- if or (eq (include "tresor.stateKind" .) "kubernetes") $k8s (include "tresor.passwordSecret" .) $vaultPod -}}true{{- end -}}
 {{- end -}}
+
+{{/* The pod's parts the service and the maintenance jobs share (spec 019): one ServiceAccount, configuration,
+volumes and environment - a job acts as the service. Each is rendered at column 0, for nindent. */}}
+{{- define "tresor.podSecurity" -}}
+serviceAccountName: {{ include "tresor.serviceAccountName" . }}
+automountServiceAccountToken: {{ include "tresor.usesAPI" . | eq "true" }}
+{{- with .Values.imagePullSecrets }}
+imagePullSecrets: {{- toYaml . | nindent 2 }}
+{{- end }}
+securityContext: {{- toYaml .Values.podSecurityContext | nindent 2 }}
+{{- end -}}
+
+{{- define "tresor.env" -}}
+{{- with .Values.env }}
+env: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with .Values.envFrom }}
+envFrom: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end -}}
+
+{{- define "tresor.volumeMounts" -}}
+{{- $kind := include "tresor.stateKind" . -}}
+volumeMounts:
+  - {name: config, mountPath: /etc/tresor, readOnly: true}
+  - {name: tmp, mountPath: /tmp}
+  {{- if .Values.localKEK.secretName }}
+  - {name: kek, mountPath: /var/run/tresor/kek, readOnly: true}
+  {{- end }}
+  {{- if .Values.localKEK.previousSecretName }}
+  - {name: kek-previous, mountPath: /var/run/tresor/kek-previous, readOnly: true}
+  {{- end }}
+  {{- if .Values.tlsSecret }}
+  - {name: tls, mountPath: /var/run/tresor/tls, readOnly: true}
+  {{- end }}
+  {{- if .Values.exchangeToken.enabled }}
+  - {name: idp-token, mountPath: /var/run/tresor/idp-token, readOnly: true}
+  {{- end }}
+  {{- if .Values.vaultToken.enabled }}
+  - {name: vault-token, mountPath: /var/run/tresor/vault-token, readOnly: true}
+  {{- end }}
+  {{- if eq $kind "sqlite" }}
+  - {name: data, mountPath: /var/lib/tresor}
+  {{- end }}
+  {{- with .Values.extraVolumeMounts }}{{ toYaml . | nindent 2 }}{{ end }}
+{{- end -}}
+
+{{- define "tresor.volumes" -}}
+{{- $kind := include "tresor.stateKind" . -}}
+volumes:
+  - name: config
+    configMap: {name: {{ include "tresor.fullname" . }}}
+  - name: tmp
+    emptyDir: {}
+  {{- if .Values.localKEK.secretName }}
+  - name: kek
+    secret:
+      secretName: {{ .Values.localKEK.secretName }}
+      items: [{key: {{ .Values.localKEK.key | quote }}, path: {{ .Values.localKEK.key | quote }}}]
+      defaultMode: 0400   # the pod's user reads it as its owner group (fsGroup)
+  {{- end }}
+  {{- if .Values.localKEK.previousSecretName }}
+  {{- $pk := .Values.localKEK.previousKey | default .Values.localKEK.key }}
+  - name: kek-previous
+    secret:
+      secretName: {{ .Values.localKEK.previousSecretName }}
+      items: [{key: {{ $pk | quote }}, path: {{ $pk | quote }}}]
+      defaultMode: 0400
+  {{- end }}
+  {{- if .Values.tlsSecret }}
+  - name: tls
+    secret: {secretName: {{ .Values.tlsSecret }}, defaultMode: 0400}
+  {{- end }}
+  {{- if .Values.exchangeToken.enabled }}
+  - name: idp-token
+    projected:
+      sources:
+        - serviceAccountToken:
+            path: token
+            audience: {{ required "exchangeToken.audience: the identity provider's" .Values.exchangeToken.audience | quote }}
+            expirationSeconds: {{ .Values.exchangeToken.expirationSeconds }}
+  {{- end }}
+  {{- if .Values.vaultToken.enabled }}
+  - name: vault-token
+    projected:
+      sources:
+        - serviceAccountToken:
+            path: token
+            audience: {{ required "vaultToken.audience: the Vault role's" .Values.vaultToken.audience | quote }}
+            expirationSeconds: {{ .Values.vaultToken.expirationSeconds }}
+  {{- end }}
+  {{- if eq $kind "sqlite" }}
+  - name: data
+    persistentVolumeClaim: {claimName: {{ include "tresor.fullname" . }}}
+  {{- end }}
+  {{- with .Values.extraVolumes }}{{ toYaml . | nindent 2 }}{{ end }}
+{{- end -}}
+
+{{- define "tresor.scheduling" -}}
+{{- with .Values.nodeSelector }}
+nodeSelector: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with .Values.tolerations }}
+tolerations: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with .Values.affinity }}
+affinity: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with .Values.topologySpreadConstraints }}
+topologySpreadConstraints: {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end -}}
+
+{{/* A maintenance job's spec (spec 019): one command, the service's pod - its identity, configuration and
+volumes - with no port, no probe, no retry. Not the service's selector labels: the Service never routes to it. */}}
+{{- define "tresor.maintenanceJob" -}}
+{{- $ := .root -}}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ $.Values.maintenance.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        app.kubernetes.io/component: maintenance
+        tresor.hugr-lab.io/command: {{ .name }}
+        {{- if $.Values.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+      annotations:
+        checksum/config: {{ include "tresor.config" $ | sha256sum }}
+    spec:
+      restartPolicy: Never
+      {{- include "tresor.podSecurity" $ | trim | nindent 6 }}
+      containers:
+        - name: tresor-server
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag | default $.Chart.AppVersion }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          args: {{ concat .args (list "-config" (.config | default "/etc/tresor/server.yaml")) | toJson }}
+          {{- with include "tresor.env" $ | trim }}{{ . | nindent 10 }}{{ end }}
+          securityContext: {{- toYaml $.Values.securityContext | nindent 12 }}
+          resources: {{- toYaml ($.Values.maintenance.resources | default $.Values.resources) | nindent 12 }}
+          {{- include "tresor.volumeMounts" $ | trim | nindent 10 }}
+      {{- include "tresor.volumes" $ | trim | nindent 6 }}
+      {{- with include "tresor.scheduling" $ | trim }}{{ . | nindent 6 }}{{ end }}
+{{- end -}}

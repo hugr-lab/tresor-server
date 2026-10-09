@@ -25,12 +25,7 @@ spec:
         checksum/config: {{ include "tresor.config" . | sha256sum }}
         {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
     spec:
-      serviceAccountName: {{ include "tresor.serviceAccountName" . }}
-      automountServiceAccountToken: {{ include "tresor.usesAPI" . | eq "true" }}
-      {{- with .Values.imagePullSecrets }}
-      imagePullSecrets: {{- toYaml . | nindent 8 }}
-      {{- end }}
-      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- include "tresor.podSecurity" . | trim | nindent 6 }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       containers:
         - name: tresor-server
@@ -39,12 +34,7 @@ spec:
           args: [-config, /etc/tresor/server.yaml]
           ports:
             - {name: http, containerPort: 8080}
-          {{- with .Values.env }}
-          env: {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.envFrom }}
-          envFrom: {{- toYaml . | nindent 12 }}
-          {{- end }}
+          {{- with include "tresor.env" . | trim }}{{ . | nindent 10 }}{{ end }}
           readinessProbe:
             httpGet: {path: /readyz, port: http, scheme: {{ $scheme }}}
             periodSeconds: 5
@@ -57,84 +47,6 @@ spec:
             preStop: {sleep: {seconds: 5}}
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
           resources: {{- toYaml .Values.resources | nindent 12 }}
-          volumeMounts:
-            - {name: config, mountPath: /etc/tresor, readOnly: true}
-            - {name: tmp, mountPath: /tmp}
-            {{- if .Values.localKEK.secretName }}
-            - {name: kek, mountPath: /var/run/tresor/kek, readOnly: true}
-            {{- end }}
-            {{- if .Values.localKEK.previousSecretName }}
-            - {name: kek-previous, mountPath: /var/run/tresor/kek-previous, readOnly: true}
-            {{- end }}
-            {{- if .Values.tlsSecret }}
-            - {name: tls, mountPath: /var/run/tresor/tls, readOnly: true}
-            {{- end }}
-            {{- if .Values.exchangeToken.enabled }}
-            - {name: idp-token, mountPath: /var/run/tresor/idp-token, readOnly: true}
-            {{- end }}
-            {{- if .Values.vaultToken.enabled }}
-            - {name: vault-token, mountPath: /var/run/tresor/vault-token, readOnly: true}
-            {{- end }}
-            {{- if eq $kind "sqlite" }}
-            - {name: data, mountPath: /var/lib/tresor}
-            {{- end }}
-            {{- with .Values.extraVolumeMounts }}{{ toYaml . | nindent 12 }}{{ end }}
-      volumes:
-        - name: config
-          configMap: {name: {{ include "tresor.fullname" . }}}
-        - name: tmp
-          emptyDir: {}
-        {{- if .Values.localKEK.secretName }}
-        - name: kek
-          secret:
-            secretName: {{ .Values.localKEK.secretName }}
-            items: [{key: {{ .Values.localKEK.key | quote }}, path: {{ .Values.localKEK.key | quote }}}]
-            defaultMode: 0400   # the pod's user reads it as its owner group (fsGroup)
-        {{- end }}
-        {{- if .Values.localKEK.previousSecretName }}
-        {{- $pk := .Values.localKEK.previousKey | default .Values.localKEK.key }}
-        - name: kek-previous
-          secret:
-            secretName: {{ .Values.localKEK.previousSecretName }}
-            items: [{key: {{ $pk | quote }}, path: {{ $pk | quote }}}]
-            defaultMode: 0400
-        {{- end }}
-        {{- if .Values.tlsSecret }}
-        - name: tls
-          secret: {secretName: {{ .Values.tlsSecret }}, defaultMode: 0400}
-        {{- end }}
-        {{- if .Values.exchangeToken.enabled }}
-        - name: idp-token
-          projected:
-            sources:
-              - serviceAccountToken:
-                  path: token
-                  audience: {{ required "exchangeToken.audience: the identity provider's" .Values.exchangeToken.audience | quote }}
-                  expirationSeconds: {{ .Values.exchangeToken.expirationSeconds }}
-        {{- end }}
-        {{- if .Values.vaultToken.enabled }}
-        - name: vault-token
-          projected:
-            sources:
-              - serviceAccountToken:
-                  path: token
-                  audience: {{ required "vaultToken.audience: the Vault role's" .Values.vaultToken.audience | quote }}
-                  expirationSeconds: {{ .Values.vaultToken.expirationSeconds }}
-        {{- end }}
-        {{- if eq $kind "sqlite" }}
-        - name: data
-          persistentVolumeClaim: {claimName: {{ include "tresor.fullname" . }}}
-        {{- end }}
-        {{- with .Values.extraVolumes }}{{ toYaml . | nindent 8 }}{{ end }}
-      {{- with .Values.nodeSelector }}
-      nodeSelector: {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.tolerations }}
-      tolerations: {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.affinity }}
-      affinity: {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.topologySpreadConstraints }}
-      topologySpreadConstraints: {{- toYaml . | nindent 8 }}
-      {{- end }}
+          {{- include "tresor.volumeMounts" . | trim | nindent 10 }}
+      {{- include "tresor.volumes" . | trim | nindent 6 }}
+      {{- with include "tresor.scheduling" . | trim }}{{ . | nindent 6 }}{{ end }}

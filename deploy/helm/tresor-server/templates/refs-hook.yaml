@@ -1,0 +1,37 @@
+{{- if and .Values.maintenance.enabled .Values.maintenance.refsBeforeUpgrade (not (has (include "tresor.stateKind" .) (list "memory" "sqlite"))) }}
+# refs with the new configuration before an upgrade (spec 019): the running ConfigMap still holds the old one
+# at pre-upgrade, so the hook brings its own. A finding (exit 3) or an error fails the hook: the upgrade stops
+# before a reference is stranded.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tresor.fullname" . }}-next
+  labels:
+    {{- include "tresor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: maintenance
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+data:
+  server.yaml: |
+    {{- include "tresor.config" . | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "tresor.fullname" . }}-refs-before-upgrade
+  labels:
+    {{- include "tresor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: maintenance
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+{{- $job := include "tresor.maintenanceJob" (dict "root" . "name" "refs-before-upgrade" "args" (list "refs" "-resolve") "config" "/etc/tresor-next/server.yaml") | fromYaml }}
+{{- $pod := $job.spec.template.spec }}
+{{- $_ := set (index $pod.containers 0) "volumeMounts" (append (index $pod.containers 0).volumeMounts (dict "name" "config-next" "mountPath" "/etc/tresor-next" "readOnly" true)) }}
+{{- $_ := set $pod "volumes" (append $pod.volumes (dict "name" "config-next" "configMap" (dict "name" (printf "%s-next" (include "tresor.fullname" .))))) }}
+{{- $_ := unset $job.spec "ttlSecondsAfterFinished" }}
+{{ toYaml $job }}
+{{- end }}

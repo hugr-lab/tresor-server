@@ -1,0 +1,27 @@
+{{- $kind := include "tresor.stateKind" . }}
+{{- if and .Values.maintenance.enabled (ne $kind "memory") }}
+{{- $sql := has $kind (list "sqlite" "postgres" "sqlserver") }}
+{{- /* name: the command's arguments; suspended unless scheduled */}}
+{{- $commands := dict "reseal" (list "reseal" "-retire") "reseal-rotate" (list "reseal" "-rotate" "-retire") "rewrap" (list "rewrap") "refs" (list "refs" "-resolve") }}
+{{- if $sql }}{{ $_ := set $commands "mac" (list "mac") }}{{ end }}
+{{- range $name, $args := $commands }}
+{{- $schedule := ternary $.Values.maintenance.reseal.schedule "" (eq $name "reseal") }}
+---
+# tresor-server {{ join " " $args }} (spec 019): kubectl -n {{ $.Release.Namespace }} create job --from=cronjob/{{ include "tresor.fullname" $ }}-{{ $name }} <job>
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "tresor.fullname" $ }}-{{ $name }}
+  labels:
+    {{- include "tresor.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: maintenance
+spec:
+  schedule: {{ $schedule | default "0 0 31 2 *" | quote }}   # unscheduled: 31 February, and suspended
+  suspend: {{ not $schedule }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    {{- include "tresor.maintenanceJob" (dict "root" $ "name" $name "args" $args) | nindent 4 }}
+{{- end }}
+{{- end }}

@@ -107,6 +107,18 @@ EOF
 	fi
 }
 
+# runjob <namespace> <release> <command>: a maintenance command as the chart's job (spec 019), to its end
+runjob() {
+	local job="$3-$(date +%s)"
+	kubectl -n "$1" create job --from="cronjob/$2-tresor-server-$3" "$job"
+	if ! kubectl -n "$1" wait --for=condition=complete "job/$job" --timeout 180s; then
+		kubectl -n "$1" describe "job/$job" | tail -20 || true
+		kubectl -n "$1" logs "job/$job" --tail 50 || true
+		exit 1
+	fi
+	kubectl -n "$1" logs "job/$job" --tail 20
+}
+
 # smoke <release> <namespace> [<ref> <value>]: through the protocol, by a port-forward on a free local port
 smoke() {
 	forward "$2" "$1-tresor-server"
@@ -319,7 +331,7 @@ move() {
 	if ! helm upgrade m "$chart" -n tresor-move -f "$work/m.yaml" --set config.state.kind=kubernetes --set localKEK.secretName= \
 		--set vaultToken.enabled=true --set-json 'config.keys={"kind":"vault","key":"kek"}' \
 		--set-json 'config.vault={"address":"https://bao.bao.svc:8200","ca_file":"/etc/tresor-ca/ca.crt","auth":{"method":"kubernetes","role":"tresor"}}' \
-		"$@" --wait --timeout 180s; then
+		--set maintenance.refsBeforeUpgrade=true "$@" --wait --timeout 180s; then
 		kubectl -n tresor-move logs -l app.kubernetes.io/instance=m --tail 50 || true
 		exit 1
 	fi
@@ -328,7 +340,7 @@ move() {
 move --set localKEK.previousSecretName=kek
 forward tresor-move m-tresor-server
 "$work/kindcheck" kept "$work/idp" "$issuer" "http://127.0.0.1:$port"
-kubectl -n tresor-move exec deploy/m-tresor-server -- /tresor-server rewrap -config /etc/tresor/server.yaml
+runjob tresor-move m rewrap
 kek="$(kubectl -n tresor-move get tresordatakeys -o jsonpath='{range .items[*]}{.spec.kekID}{"\n"}{end}')"
 if grep -qv '^vault:transit/kek:v' <<<"$kek"; then
 	echo "kind: a data key is still under the old KEK after rewrap: $kek" >&2
@@ -338,6 +350,13 @@ move --set localKEK.previousSecretName=
 forward tresor-move m-tresor-server
 "$work/kindcheck" kept "$work/idp" "$issuer" "http://127.0.0.1:$port"
 echo "kind: the KEK moved: read under the old KEK as previous, rewrapped, read under OpenBao alone"
+# spec 018 by the chart's job (spec 019): every resource onto a new data key, and still read
+runjob tresor-move m reseal-rotate
+active="$(kubectl -n tresor-move get tresorkeyring active -o jsonpath='{.spec.dataKeyID}')"
+behind="$(kubectl -n tresor-move get tresorsecrets -o jsonpath='{range .items[*]}{.spec.dataKeyID}{"\n"}{end}' | grep -vx "$active" || true)"
+[ -z "$behind" ] || { echo "kind: secrets not under the active data key after reseal: $behind" >&2; exit 1; }
+"$work/kindcheck" kept "$work/idp" "$issuer" "http://127.0.0.1:$port"
+echo "kind: resealed by the chart's job: every secret under the new data key, and read"
 
 echo "kind: Keycloak's federated client authentication (spec 006): the service's exchange client logged in by its"
 echo "kind: projected ServiceAccount token, a Kubernetes identity provider in Keycloak - no client secret"

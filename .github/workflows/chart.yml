@@ -42,6 +42,7 @@ jobs:
           for kind in kubernetes postgres sqlserver sqlite memory; do
             helm template t deploy/helm/tresor-server -n tresor -f deploy/helm/tresor-server/ci/test-values.yaml \
               --set config.state.kind=$kind --set tlsSecret=tls --set networkPolicy.enabled=true \
+              --set maintenance.refsBeforeUpgrade=true --set maintenance.reseal.schedule='0 3 1 * *' \
               --set ingress.enabled=true --set-json 'ingress.hosts=[{"host":"t.example.com"}]' \
               --set-json 'networkPolicy.from=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ingress"}}}]' \
               >"rendered-$kind.yaml"

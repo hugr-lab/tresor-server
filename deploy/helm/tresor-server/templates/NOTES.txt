@@ -14,7 +14,17 @@ copy back (a revoked grant, a deleted secret): the MAC refuses a changed resourc
 {{- end }}
 {{- end }}
 
-Whoever can create pods in {{ .Release.Namespace }}, create a token for the service's ServiceAccount or
+{{- if and .Values.maintenance.enabled (ne (include "tresor.stateKind" .) "memory") }}
+The commands (reseal, rewrap, refs{{ if has (include "tresor.stateKind" .) (list "sqlite" "postgres" "sqlserver") }}, mac{{ end }}) run as jobs with the service's identity:
+  kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ include "tresor.fullname" . }}-reseal reseal-$(date +%Y%m%d%H%M)
+{{- end }}
+{{- if eq (include "tresor.stateKind" .) "sqlite" }}
+
+WARNING: SQLite on a cluster is not recommended: one replica, a ReadWriteOnce volume, and the commands that
+write (mac, reseal) need the service scaled to 0 first. Use PostgreSQL or SQL Server.
+{{- end }}
+
+Whoever can create pods or Jobs in {{ .Release.Namespace }}, create a token for the service's ServiceAccount or
 impersonate it can act as the service: keep these rights to the platform's operators.
 {{- if and (.Values.config.tls | default dict).offload (not .Values.networkPolicy.enabled) }}
 

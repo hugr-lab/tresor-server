@@ -143,3 +143,19 @@ tolerations: []
 affinity: {}
 topologySpreadConstraints: []
 terminationGracePeriodSeconds: 30
+
+# The commands as jobs (spec 019: docs, Administration): a suspended CronJob per command, the service's own
+# ServiceAccount, configuration and volumes - a job acts as the service. Run one:
+#   kubectl -n <ns> create job --from=cronjob/<release>-reseal reseal-$(date +%Y%m%d%H%M)
+# Whoever may create Jobs here holds the KEK's power: grant it to the platform's operators only.
+maintenance:
+  enabled: true
+  activeDeadlineSeconds: 3600
+  resources: {}
+  reseal:
+    # reseal -retire on a schedule (cron, e.g. "0 3 1 * *"): the rows follow the data keys' rotation by age,
+    # and data keys nothing uses go. Empty: run by hand only.
+    schedule: ""
+  # refs with the new configuration before an upgrade (a pre-upgrade hook): a reference the new configuration
+  # would strand stops the upgrade. Not on sqlite (its volume is the serving pod's).
+  refsBeforeUpgrade: false

@@ -287,3 +287,26 @@ describe('the platform contract (spec 016)', () => {
     expect(el.shadowRoot!.textContent).not.toMatch(/Your session ended/)
   })
 })
+
+describe('the Service screen (spec 019)', () => {
+  it('shows the data keys and when a command is due', async () => {
+    const keys = { stored: 3, active_age: 2 * 86400, oldest_age: 61 * 86400, rows_behind: 12, unused: 1 }
+    vi.stubGlobal('fetch', (url: string) => {
+      if (url.endsWith('/v1/whoami')) return answer(200, me)
+      if (url.endsWith('/admin/v1/service')) return answer(200, { ...service, data_keys: keys })
+      return answer(200, [])
+    })
+    window.history.replaceState(null, '', '/platform/tresor/service')
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    await act(async () => {
+      mountTresor(el, { apiBase: 'https://tresor.example', getToken: async () => 't', basePath: '/platform/tresor' })
+    })
+    await settle()
+    const text = el.shadowRoot!.textContent!
+    expect(text).toMatch(/Data keys3/)
+    expect(text).toMatch(/Oldest one's age61 days/)
+    expect(text).toMatch(/12 rows are under older data keys: tresor-server reseal moves them/)
+    expect(text).toMatch(/1 data key is used by no row: tresor-server reseal -retire deletes them/)
+  })
+})

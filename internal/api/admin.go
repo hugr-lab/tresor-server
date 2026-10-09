@@ -35,6 +35,18 @@ type Console struct {
 	// PreviousKEKs are keys.previous (spec 011): kind and where, never material
 	PreviousKEKs []map[string]string
 	Ready        func() (bool, map[string]string) // readiness, each check's state
+	// Keys is the data keys' state (spec 019); nil: none (memory)
+	Keys func(ctx context.Context) (*KeysView, error)
+}
+
+// KeysView is the data keys' state as the Service screen shows it (spec 019): when reseal is due. Counts and
+// ages only - no id, nothing opened.
+type KeysView struct {
+	Stored     int   `json:"stored"`      // data keys stored
+	ActiveAge  int64 `json:"active_age"`  // seconds since the active one was made
+	OldestAge  int64 `json:"oldest_age"`  // seconds since the oldest one was made
+	RowsBehind int   `json:"rows_behind"` // rows under another data key than the active one: reseal
+	Unused     int   `json:"unused"`      // data keys no row uses, beside the active one: reseal -retire
 }
 
 // WithConsole serves the console (spec 010): /ui/ and /admin/v1.
@@ -115,8 +127,18 @@ func (s *Server) adminService(w http.ResponseWriter, r *http.Request) {
 	if auditLevel == "" {
 		auditLevel = "all"
 	}
+	var dataKeys any
+	if s.console.Keys != nil {
+		if v, err := s.console.Keys(r.Context()); err == nil {
+			dataKeys = v
+		} else {
+			dataKeys = map[string]string{"error": "the data keys could not be read"} // the reason is in the log
+			s.log.Warn("the data keys' state", "error", err.Error())
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version": s.console.Version, "protocol": Protocol, "environment": cfg.UI.Environment,
+		"data_keys": dataKeys,
+		"version":   s.console.Version, "protocol": Protocol, "environment": cfg.UI.Environment,
 		"capabilities": []string{"write", "annotate", "delegation", "variables", "token_exchange"},
 		"state":        cfg.State.Kind, "kek": kek, "issuers": issuers, "sources": sources,
 		"policy": map[string]any{"admins": cfg.Policy.Admins, "actors": actors},

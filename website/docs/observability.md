@@ -73,6 +73,9 @@ The service's spans **only continue tresor's trace**: it never starts one.
 | `tresor.mint` | by outcome |
 | `tresor.state.conflicts` | compare-and-set writes lost and run again |
 | `tresor.state.left_out` | Kubernetes resources a list left out (their MAC) |
+| `tresor.keys.data_keys` | data keys stored (counted every 10 minutes) |
+| `tresor.keys.oldest_age` | the oldest data key's age, in seconds |
+| `tresor.keys.rows_behind` | rows under another data key than the active one: `tresor-server reseal` moves them |
 
 ## Export
 

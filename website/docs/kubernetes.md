@@ -117,11 +117,36 @@ The KEK in Transit, `ref+vault` and the exchange's key in Vault, with the chart'
   - The password can come from a Secret: `state.password_ref: ref+k8s://db/tresor-pg/password`. The chart
     grants `get` on that one Secret.
   - Or from workload identity, with `auth: entra`.
-- **SQLite**: one replica on a PersistentVolumeClaim. Use block storage.
+- **SQLite**: not recommended on a cluster - one replica on a ReadWriteOnce claim, and the commands that write
+  (`mac`, `reseal`) need the service scaled to 0 first. A cluster can run PostgreSQL or SQL Server: use one.
+
+## The commands as jobs
+
+The image has no shell, and nobody logs into the pod. Each command runs as a Job with the service's own
+ServiceAccount, configuration, volumes and environment (spec 019). The chart makes a suspended CronJob per
+command; start one by hand:
+
+```sh
+kubectl -n tresor create job --from=cronjob/<release>-tresor-server-reseal reseal-$(date +%Y%m%d%H%M)
+kubectl -n tresor logs -f job/reseal-…        # its log: counts and names, never a value
+```
+
+| CronJob | Runs |
+| --- | --- |
+| `<release>-tresor-server-reseal` | `reseal -retire` |
+| `<release>-tresor-server-reseal-rotate` | `reseal -rotate -retire` (a data key leaked) |
+| `<release>-tresor-server-rewrap` | `rewrap` |
+| `<release>-tresor-server-refs` | `refs -resolve` |
+| `<release>-tresor-server-mac` | `mac` (the SQL stores) |
+
+- `maintenance.reseal.schedule` (a cron, e.g. `0 3 1 * *`) runs `reseal -retire` on that schedule.
+- `maintenance.refsBeforeUpgrade: true` runs `refs -resolve` with the new configuration before each upgrade (a
+  pre-upgrade hook): a reference it would strand stops the upgrade.
+- The right to create Jobs in the namespace is the KEK's: whoever has it acts as the service.
 
 ## Hardening
 
 - With `tls.offload` the pod serves plain HTTP. Set `networkPolicy.from` to the ingress controller.
-- Whoever can create pods in the service's namespace, mint a token for its ServiceAccount or impersonate it
+- Whoever can create pods or Jobs in the service's namespace, mint a token for its ServiceAccount or impersonate it
   can act as the service. Keep these rights to the platform's operators.
 - A restore (Velero) writes as another account. Remove the admission policy's binding for its duration.

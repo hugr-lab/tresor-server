@@ -593,6 +593,12 @@ func testReseal(t *testing.T, open Opener) {
 		t.Fatalf("rotate: %s %v", active, err)
 	}
 
+	if n, err := rs.RowsBehind(ctx, active); err != nil || n < 5 {
+		t.Fatalf("rows behind the active key before the reseal: %d %v", n, err)
+	}
+	if status, err := env.Status(ctx); err != nil || len(status.IDs) != 3 || status.ActiveID != active || status.Oldest.After(status.Active) {
+		t.Fatalf("the data keys' status: %+v %v", status, err)
+	}
 	moved, skipped, err := rs.Reseal(ctx)
 	if err != nil || skipped != 0 || moved < 5 {
 		t.Fatalf("reseal: moved %d, skipped %d, %v", moved, skipped, err)
@@ -666,6 +672,9 @@ func testReseal(t *testing.T, open Opener) {
 		t.Fatal(err)
 	}
 	retire()
+	if n, err := rs.RowsBehind(ctx, active); err != nil || n != 0 {
+		t.Fatalf("rows behind once every key but the active one is gone: %d %v", n, err)
+	}
 	if !retired[first] || len(inUse) != 1 || !inUse[active] {
 		t.Fatalf("only the active key is used, the others retired: in use %v, retired %v", inUse, retired)
 	}
