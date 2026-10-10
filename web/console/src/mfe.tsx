@@ -10,6 +10,7 @@ import { Api, ApiError } from './lib/api'
 import type { ConsoleConfig } from './lib/config'
 import type { ServiceInfo, Whoami } from './lib/types'
 import { Toasts } from './components/ui'
+import { localPath } from './lib/paths'
 
 /** the contract this module implements (spec 016): an addition keeps it, a change that breaks a host raises it */
 export const contract = 1
@@ -66,7 +67,7 @@ function inner(basePath: string, path: string): string {
   const [p, q] = [path.split('?')[0], path.includes('?') ? path.slice(path.indexOf('?')) : '']
   if (base && p !== base && !p.startsWith(base + '/')) return '/secrets'
   const own = p.slice(base.length)
-  return own && own !== '/' ? own + q : '/secrets'
+  return own && own !== '/' && localPath(own) ? own + q : '/secrets'
 }
 
 /** the elements mounted: one console per element */

@@ -4,6 +4,7 @@
 // never in a hidden frame (the page's CSP has no frame-src).
 import { InMemoryWebStorage, UserManager, WebStorageStateStore, type User } from 'oidc-client-ts'
 import type { IssuerConfig } from './config'
+import { localPath } from './paths'
 
 const lastIssuer = 'tresor.issuer' // which issuer this tab signed in with: a URL, no secret
 const popupName = 'tresor-signin' // the window a sign-in again opens in
@@ -153,14 +154,4 @@ export class SessionEnded extends Error {
   constructor() {
     super('the session ended: sign in again')
   }
-}
-
-/** a path within the console to go back to after a sign-in, or undefined: one slash first, then neither a slash
- * nor a backslash - '//host' would leave the origin, and a browser reads a backslash as a slash - and no
- * backslash or control character anywhere. The router's own check is the second line. */
-export function localPath(p: string | undefined): string | undefined {
-  if (!p || !p.startsWith('/') || p.startsWith('//') || p.startsWith('/\\')) return undefined
-  // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f\u007f\\]/.test(p)) return undefined
-  return p
 }

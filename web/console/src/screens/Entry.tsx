@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { CircleAlert, LogIn } from 'lucide-react'
 import type { ConsoleConfig } from '../lib/config'
 import type { Session } from '../lib/auth'
+import { here } from '../lib/paths'
 import logo from '../assets/hugr-logo.svg'
 import logoOnDark from '../assets/hugr-logo-on-dark.svg'
 
@@ -35,7 +36,7 @@ export function SignIn({ config, session, theme, error: given }: { config: Conso
         <div className="flex flex-col gap-2.5">
           {config.issuers.map((is, i) => (
             <button key={is.issuer} type="button" className={i === 0 ? 'btn-primary justify-center py-3' : 'btn-secondary justify-center py-3'}
-              onClick={() => session.signIn(is, window.location.pathname.replace(new URL(document.baseURI).pathname.replace(/\/$/, ''), '') || '/secrets')
+              onClick={() => session.signIn(is, here())
                 .catch((e) => setFailed(`The identity provider did not answer: ${(e as Error).message}`))}>
               <LogIn size={18} aria-hidden /> Sign in with {new URL(is.issuer).host}
             </button>
