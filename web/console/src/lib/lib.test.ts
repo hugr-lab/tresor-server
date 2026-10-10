@@ -4,6 +4,7 @@ import { grantId, idFor } from './grants'
 import { buildRef, parseRef, allowed } from './refs'
 import { ident, sqlPreview } from './sql'
 import { ago } from './time'
+import { localPath } from './paths'
 import type { Source } from './types'
 
 const vault: Source = { name: 'vault-us', kind: 'vault', named: true, connection: '', allow: ['secret/duckdb/*'], cache_ttl: '0s' }
@@ -167,5 +168,18 @@ describe('sqlPreview', () => {
     const sql = sqlPreview('lake', 'ducklake', 'config', [], [map, opt])
     expect(sql).toContain("METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'user': 'o''k'}")
     expect(sql).not.toContain('DATA_PATH')
+  })
+})
+
+describe('localPath (the return after a sign-in)', () => {
+  it('keeps a path within the console, and nothing that could leave the origin', () => {
+    expect(localPath('/secrets/lake_s3?x=1')).toBe('/secrets/lake_s3?x=1')
+    expect(localPath('/variables')).toBe('/variables')
+    // encoded, they stay paths of this origin: the browser and the router never decode them into a host
+    for (const p of ['/%2F%2Fevil', '/%5Cevil', '/secrets/a%255Cb']) expect(localPath(p)).toBe(p)
+    for (const p of ['//evil.example', '/\\evil.example', '/\\/evil.example', 'https://evil.example', 'evil', '',
+      '/secrets/\\evil', '/a\nb', '/a\tb', '/a\u0000b', '/a\u007fb', undefined]) {
+      expect(localPath(p)).toBeUndefined()
+    }
   })
 })

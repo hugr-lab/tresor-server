@@ -4,6 +4,7 @@
 // never in a hidden frame (the page's CSP has no frame-src).
 import { InMemoryWebStorage, UserManager, WebStorageStateStore, type User } from 'oidc-client-ts'
 import type { IssuerConfig } from './config'
+import { localPath } from './paths'
 
 const lastIssuer = 'tresor.issuer' // which issuer this tab signed in with: a URL, no secret
 const popupName = 'tresor-signin' // the window a sign-in again opens in
@@ -79,7 +80,7 @@ export class Session {
 
   async signIn(issuer: IssuerConfig, returnTo: string): Promise<void> {
     sessionStorage.setItem(lastIssuer, issuer.issuer)
-    await this.manager(issuer).signinRedirect({ state: { returnTo } })
+    await this.manager(issuer).signinRedirect({ state: { returnTo: localPath(returnTo) ?? '/secrets' } })
   }
 
   /** completes a sign-in: a redirect's (the path to go back to), or a popup's (undefined: the window closes) */
@@ -100,7 +101,7 @@ export class Session {
     const user = await this.manager(issuer).signinRedirectCallback()
     this.set(user)
     const state = user.state as { returnTo?: string } | undefined
-    return state?.returnTo && state.returnTo.startsWith('/') ? state.returnTo : '/secrets'
+    return localPath(state?.returnTo) ?? '/secrets'
   }
 
   /** the issuer the returning sign-in began with: its stored state names it */

@@ -7,6 +7,7 @@ import { App } from './App'
 import { AppContext, type AppState, type Theme } from './context'
 import { Api, ApiError } from './lib/api'
 import { Session, SessionEnded } from './lib/auth'
+import { here } from './lib/paths'
 import { loadConfig, type ConsoleConfig } from './lib/config'
 import type { ServiceInfo, Whoami } from './lib/types'
 import { Toasts } from './components/ui'
@@ -67,7 +68,7 @@ function Console({ config, session }: { config: ConsoleConfig; session: Session 
     if (phase !== 'start') return
     const last = session.remembered()
     if (!session.signedIn && last && !state.error) {
-      session.signIn(last, window.location.pathname.slice(basename.length) || '/secrets').catch((e) => setState({ error: (e as Error).message }))
+      session.signIn(last, here()).catch((e) => setState({ error: (e as Error).message }))
     } else setPhase('ready')
   }, [phase, session, state.error])
 
