@@ -79,7 +79,7 @@ export class Session {
 
   async signIn(issuer: IssuerConfig, returnTo: string): Promise<void> {
     sessionStorage.setItem(lastIssuer, issuer.issuer)
-    await this.manager(issuer).signinRedirect({ state: { returnTo } })
+    await this.manager(issuer).signinRedirect({ state: { returnTo: localPath(returnTo) ?? '/secrets' } })
   }
 
   /** completes a sign-in: a redirect's (the path to go back to), or a popup's (undefined: the window closes) */
@@ -100,7 +100,7 @@ export class Session {
     const user = await this.manager(issuer).signinRedirectCallback()
     this.set(user)
     const state = user.state as { returnTo?: string } | undefined
-    return state?.returnTo && state.returnTo.startsWith('/') ? state.returnTo : '/secrets'
+    return localPath(state?.returnTo) ?? '/secrets'
   }
 
   /** the issuer the returning sign-in began with: its stored state names it */
@@ -153,4 +153,14 @@ export class SessionEnded extends Error {
   constructor() {
     super('the session ended: sign in again')
   }
+}
+
+/** a path within the console to go back to after a sign-in, or undefined: one slash first, then neither a slash
+ * nor a backslash - '//host' would leave the origin, and a browser reads a backslash as a slash - and no
+ * backslash or control character anywhere. The router's own check is the second line. */
+export function localPath(p: string | undefined): string | undefined {
+  if (!p || !p.startsWith('/') || p.startsWith('//') || p.startsWith('/\\')) return undefined
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f\\]/.test(p)) return undefined
+  return p
 }
