@@ -48,6 +48,19 @@ email="$gsa@$project.iam.gserviceaccount.com"
 ring="projects/$project/locations/$region/keyRings/tresor"
 g() { gcloud --project "$project" --quiet "$@"; }
 
+# ours: a project this script made carries its label - never another (up opens Cloud SQL, down deletes it all)
+ours() { [ "$(gcloud projects describe "$project" --format 'value(labels.purpose)' 2>/dev/null)" = tresor-server-live ]; }
+
+# pg_password <password on stdin>: postgres's password through the Admin API - in no command line or log
+pg_password() {
+	local auth="$work/auth"
+	(umask 077; printf 'Authorization: Bearer %s\n' "$(gcloud auth print-access-token)" >"$auth")
+	curl -sf -o /dev/null -X PUT -H @"$auth" -H 'Content-Type: application/json' --data-binary @- \
+		"https://sqladmin.googleapis.com/v1/projects/$project/instances/$sql/users?name=postgres" \
+		< <(python3 -c 'import json,sys; print(json.dumps({"password": sys.stdin.read()}))')
+	rm -f "$auth"
+}
+
 build_kindcheck() { (cd "$root" && GOWORK=off CGO_ENABLED=0 go build -o "$work/kindcheck" ./scripts/ci/kindcheck); }
 
 # retry <tries> <command...>: IAM takes a while to reach the services
@@ -61,7 +74,11 @@ up() {
 	[ -n "${TRESOR_GCP_BILLING:-}" ] || { echo "gke_live: TRESOR_GCP_BILLING (the billing account) is not set" >&2; exit 1; }
 	build_kindcheck
 	echo "gke_live: the project $project, its billing, the APIs"
-	gcloud projects describe "$project" >/dev/null 2>&1 || gcloud projects create "$project" --name "tresor live" --labels purpose=tresor-server-live
+	if gcloud projects describe "$project" >/dev/null 2>&1; then
+		ours || { echo "gke_live: project $project exists and is not this script's (label purpose=tresor-server-live)" >&2; exit 1; }
+	else
+		gcloud projects create "$project" --name "tresor live" --labels purpose=tresor-server-live
+	fi
 	gcloud billing projects link "$project" --billing-account "$TRESOR_GCP_BILLING" >/dev/null
 	g services enable container.googleapis.com cloudkms.googleapis.com secretmanager.googleapis.com \
 		sqladmin.googleapis.com iam.googleapis.com compute.googleapis.com dns.googleapis.com
@@ -70,8 +87,7 @@ up() {
 	if ! g sql instances describe "$sql" >/dev/null 2>&1; then
 		g sql instances create "$sql" --database-version POSTGRES_16 --edition ENTERPRISE --tier db-f1-micro \
 			--region "$region" --server-ca-mode GOOGLE_MANAGED_CAS_CA --ssl-mode ENCRYPTED_ONLY \
-			--database-flags cloudsql.iam_authentication=on --authorized-networks 0.0.0.0/0 \
-			--root-password "$(openssl rand -hex 24)" --async >/dev/null
+			--database-flags cloudsql.iam_authentication=on --authorized-networks 0.0.0.0/0 --async >/dev/null
 	fi
 
 	echo "gke_live: GKE Autopilot (Workload Identity) - several minutes"
@@ -102,17 +118,22 @@ up() {
 		g sql users create "$gsa@$project.iam" --instance "$sql" --type cloud_iam_service_account >/dev/null
 	g sql databases list --instance "$sql" --format 'value(name)' | grep -qx tresor || g sql databases create tresor --instance "$sql" >/dev/null
 	local pw ip dns
-	pw="$(openssl rand -hex 24)" # postgres's, once: the ownership; then replaced and never kept
-	g sql users set-password postgres --instance "$sql" --password "$pw" >/dev/null
 	ip="$(g sql instances describe "$sql" --format 'value(ipAddresses[0].ipAddress)')"
 	dns="$(g sql instances describe "$sql" --format 'value(dnsName)')"
 	dns="${dns%.}"
+	# the CA and the next one (a rotation keeps working): the file sslrootcert names
 	g sql instances describe "$sql" --format 'value(serverCaCert.cert)' >"$work/server-ca.pem"
 	g sql ssl server-ca-certs list --instance "$sql" --format 'value(cert)' >>"$work/server-ca.pem" 2>/dev/null || true
-	PGPASSWORD="$pw" docker run --rm -e PGPASSWORD postgres:16-alpine psql "host=$ip user=postgres dbname=tresor sslmode=require" -q \
+	# postgres's password, once, for the ownership: replaced whatever happens, and kept by no one
+	pw="$(openssl rand -hex 24)"
+	trap 'openssl rand -hex 24 | tr -d "\n" | pg_password; for p in ${pids[@]+"${pids[@]}"}; do kill "$p" 2>/dev/null || true; done' EXIT
+	printf '%s' "$pw" | pg_password
+	PGPASSWORD="$pw" docker run --rm -e PGPASSWORD -v "$work/server-ca.pem:/ca.pem:ro" postgres:16-alpine \
+		psql "host=$ip user=postgres dbname=tresor sslmode=verify-ca sslrootcert=/ca.pem" -q \
 		-c "GRANT \"$gsa@$project.iam\" TO postgres; ALTER DATABASE tresor OWNER TO \"$gsa@$project.iam\";"
-	g sql users set-password postgres --instance "$sql" --password "$(openssl rand -hex 24)" >/dev/null
 	unset pw
+	openssl rand -hex 24 | tr -d '\n' | pg_password
+	trap 'for p in ${pids[@]+"${pids[@]}"}; do kill "$p" 2>/dev/null || true; done' EXIT
 	[ -n "$dns" ] || { echo "gke_live: the instance has no DNS name (a Google-managed CA gives one)" >&2; exit 1; }
 	# the instance's DNS name resolves in the VPC only through a private zone of one's own (Cloud SQL makes none for
 	# a public IP): the pods connect by the name its certificate carries - verify-full
@@ -196,9 +217,10 @@ check() {
 }
 
 down() {
+	ours || { echo "gke_live: project $project is not this script's (label purpose=tresor-server-live): not deleted" >&2; exit 1; }
 	echo "gke_live: deleting the project $project (everything in it; 30 days pending, not billed)"
-	gcloud projects delete "$project" --quiet || true
-	rm -rf "$work"
+	gcloud projects delete "$project" --quiet
+	rm -rf "$work" # only once deleted: the state names a project still billed otherwise
 	echo "gke_live: deleted"
 }
 

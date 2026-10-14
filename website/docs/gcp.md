@@ -101,8 +101,8 @@ state:
   - The DNS name resolves only through a **private Cloud DNS zone of your own** in the VPC the service runs in:
     a zone for the instance's DNS name, an A record to the address the service reaches it at. Cloud SQL makes
     none.
-  - `sslrootcert` is the instance's CA (`gcloud sql instances describe <instance> --format
-    'value(serverCaCert.cert)'`), mounted as a file.
+  - `sslrootcert` is the instance's CA and the next one, so that a CA rotation keeps working
+    (`gcloud sql ssl server-ca-certs list --instance <instance> --format 'value(cert)'`), mounted as a file.
 - The user owns the database: an IAM user has no rights on a database it did not make. Once, as `postgres`:
   `GRANT "<user>" TO postgres; ALTER DATABASE tresor OWNER TO "<user>";` - then set a new `postgres` password,
   kept by no one.

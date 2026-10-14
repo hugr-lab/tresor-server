@@ -99,7 +99,8 @@ func TestPostgresRefusesAPasswordInTheDSN(t *testing.T) {
 // off this machine the password (an Entra token) goes only over TLS with the certificate checked
 func TestPostgresRequiresVerifiedTLS(t *testing.T) {
 	for _, dsn := range []string{"host=db.example user=u dbname=d", "host=db.example user=u dbname=d sslmode=require",
-		"postgres://u@db.example/d?sslmode=prefer", "postgres://u@db.example/d"} {
+		"postgres://u@db.example/d?sslmode=prefer", "postgres://u@db.example/d",
+		"host=127.0.0.1,db.example user=u dbname=d sslmode=require"} { // every host: pgx falls back to the next
 		_, err := OpenPostgres(ctx, dsn, PasswordLogin{Env: "X"}, 1, kek(t, 1), Options{})
 		if err == nil || !strings.Contains(err.Error(), "verify-full") {
 			t.Errorf("%s: %v", dsn, err)
