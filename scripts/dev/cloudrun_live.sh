@@ -78,7 +78,7 @@ check() {
 		printf '%s' run-live-from-secret-manager | gcloud --project "$project" secrets create duckdb-run-live --data-file=- --quiet >/dev/null
 	tok="$(token)"
 	[ -n "$tok" ] || { echo "cloudrun_live: no token for the node" >&2; exit 1; }
-	me="client:$ENTRA_NODE_CLIENT_ID"
+	me="role:${ENTRA_NODE_ROLE:-nodes}" # a grant names a role or a group: the node's app role
 	api() { curl -s -o "$work/out" -w '%{http_code}' -X "$1" -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' "$url$2" ${3:+-d "$3"}; }
 	local code ok=0
 	api DELETE /v1/secrets/run_live >/dev/null
