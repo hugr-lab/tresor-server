@@ -51,9 +51,10 @@ command run with `aws ecs run-task` (spec 019). The same structure and README as
 - **KMS**: `kek` (SYMMETRIC_DEFAULT, rotation on - KMS keeps the key id: no `rewrap` needed), `root` (HMAC_256,
   not rotated). Key policies naming the task role; deletion window 30 days.
 - **RDS**: PostgreSQL 16, `iam_database_authentication_enabled`, `rds.force_ssl`, in the private subnets, **not
-  publicly accessible**, a security group admitting only the service's; encrypted storage, backups. The DSN to the
-  instance's endpoint with `sslmode=verify-full` and the RDS CA bundle (in the image's trust? no - mounted:
-  shipped in a secret, as spec 020's CA).
+  publicly accessible**, a security group admitting only the service's; encrypted storage, backups. The DSN to the instance's endpoint with `sslmode=verify-full` and the RDS CA bundle, which no
+  system trust store holds: Fargate mounts no secret as a file, so a non-essential init container writes the bundle
+  (from an SSM parameter the recipe fills with AWS's published bundle) to a shared ephemeral volume, and the
+  service's container starts once it has (`dependsOn: SUCCESS`).
 - **The database user and its ownership**: an IAM user in PostgreSQL is a role granted `rds_iam`; the master user
   (its password in Secrets Manager, RDS-managed: `manage_master_user_password`) creates it once - `CREATE ROLE
   "<user>" LOGIN; GRANT rds_iam TO "<user>"; ALTER DATABASE tresor OWNER TO "<user>";` - in a one-time
