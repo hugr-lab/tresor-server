@@ -1,6 +1,6 @@
 # Spec 022: release 0.4.0 - tresor's browsers, the MAC on by default, signed artifacts
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-14
 - **Author**: hugr lab
 
