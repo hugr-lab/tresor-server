@@ -212,6 +212,22 @@ Origins are written as a browser sends them: `https://host[:port]`, no path, no 
 People sign in with the issuers that have a `client_id`: register `<public_url>/ui/callback` as a redirect
 URI of that client.
 
+### `cors`
+
+Web pages that run tresor in DuckDB-wasm call the service from the browser, across origins (tresor's protocol,
+*Browsers*; spec 022).
+
+| Setting | |
+| --- | --- |
+| `cors.allowed_origins` | The pages' origins (`https://notebook.example`): CORS on discovery (`/.well-known/duckdb-secrets`) and `/v1`, for them only. |
+
+- The preflight allows the protocol's methods and the headers `Authorization`, `Content-Type`, `Accept`,
+  `Delegation`, `If-Match`, `If-None-Match`, `traceparent`; answers expose `ETag`. No credentials: no cookie is
+  sent or honoured, the bearer token is the only one.
+- Separate from `ui.allowed_origins` (the console's hosts): neither list implies the other.
+- An origin as a browser sends it: `https://host[:port]` (http only to this machine), no path, no wildcard.
+- The page's sign-in is the IdP's: register the page's origin there too (a SPA client, CORS on its token endpoint).
+
 ### `audit`, `telemetry`
 
 See [Observability](observability.md).

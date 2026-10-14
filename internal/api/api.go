@@ -122,8 +122,12 @@ func (s *Server) Handler() http.Handler {
 		problem(w, http.StatusNotFound, "not_found", "no such resource: "+r.Method+" "+r.URL.Path)
 	})
 	var h http.Handler = mux
-	if s.console != nil && len(s.cfg.UI.AllowedOrigins) > 0 {
-		h = cors(s.cfg.UI.AllowedOrigins, h) // the console as a microfrontend, on its hosts (spec 010)
+	var console []string // the console as a microfrontend, on its hosts (spec 010)
+	if s.console != nil {
+		console = s.cfg.UI.AllowedOrigins
+	}
+	if len(console) > 0 || len(s.cfg.CORS.AllowedOrigins) > 0 {
+		h = cors(console, s.cfg.CORS.AllowedOrigins, h) // and web pages with tresor in DuckDB-wasm (spec 022)
 	}
 	if u, err := url.Parse(s.cfg.PublicURL); err == nil && strings.TrimRight(u.Path, "/") != "" {
 		h = http.StripPrefix(strings.TrimRight(u.Path, "/"), h)

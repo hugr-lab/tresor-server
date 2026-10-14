@@ -30,6 +30,9 @@ config:
   #   environment: prod                              # a badge in the console's top bar
   #   allowed_origins: [https://platform.example]    # shells mounting it as a microfrontend (CORS)
   #   enabled: false                                 # no /ui/, no /admin/v1
+  # web pages with tresor in DuckDB-wasm (docs: Getting started): CORS on discovery and /v1
+  # cors:
+  #   allowed_origins: [https://notebook.example]
 
 # A local KEK from a Secret (32 bytes, base64): mounted at /var/run/tresor/kek/<key>, and config.keys set to
 # it when unset. A static secret, for clusters with no KMS.
