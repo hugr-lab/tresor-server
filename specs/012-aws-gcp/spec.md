@@ -127,6 +127,11 @@ keys:
   (moto 5.1's GenerateMac fails). RDS IAM authentication: the token's shape, signed offline.
 - Live, by hand, after the owner agrees: EKS with IRSA, KMS, Secrets Manager, RDS IAM auth; GKE with Workload
   Identity, Cloud KMS, Secret Manager, Cloud SQL IAM auth. Resources deleted afterwards.
+  - **GCP: done 2026-10-14** (`scripts/dev/gke_live.sh`, a project of its own, deleted): GKE Autopilot by Workload
+    Identity, the KEK in Cloud KMS, `ref+gcp`, Cloud SQL by IAM over `verify-full`, the chart's jobs. It found that
+    Cloud SQL's certificates name the instance with a trailing dot, which Go's hostname check never matches: the
+    PostgreSQL store now matches it as the same name; and that the instance's DNS name needs a private zone.
+  - AWS: at the end.
 
 ## Alternatives considered
 
