@@ -1,6 +1,6 @@
 # Spec 001: tresor-server — a duckdb-secrets/1 service for the enterprise
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-09-30
 - **Author**: hugr lab
 
@@ -190,7 +190,8 @@ HTTPS: tresor requires https.
    workload identity.
 4. **AWS and GCP** (Secrets Manager and KMS), then HashiCorp Vault.
 
-Each phase gets its own spec here.
+Each phase gets its own spec here. All four are done (0.4.0, spec 022): phases 1 and 2 spec 002 (it took PostgreSQL and SQL
+Server in), phase 3 spec 003, phase 4 specs 007, 012, 020 and 021.
 
 ## Enforcement & security
 

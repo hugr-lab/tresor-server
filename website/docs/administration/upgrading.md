@@ -73,9 +73,14 @@ needs nothing. One with rows from before 0.2 (no MAC) makes the start stop, nami
 
 ### Upgrading to 0.4 (spec 022)
 
-- `state.mac` on by default (above).
+- **`state.mac` on by default** on the SQL stores (above): a database with rows from before 0.2 needs `mac` once,
+  or the start stops and says so. See [State](../state.md#the-sql-stores-mac-statemac).
+- **`cors.allowed_origins`, new**: web pages running tresor in DuckDB-wasm, apart from the console's
+  `ui.allowed_origins` ([Configuration](../configuration.md#cors)). Nothing changes until it is set.
+- **Signed artifacts**: the image and the chart can be verified before an upgrade
+  ([Security](../security.md#verifying-the-artifacts)).
 
-See [State](../state.md#the-sql-stores-mac-statemac).
+Nothing else: no migration of the Kubernetes store, no CRD changed, no setting renamed.
 
 ## Check
 
