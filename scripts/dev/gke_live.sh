@@ -30,6 +30,8 @@ sql=tresor-pg
 issuer=https://idp.idp.svc/realms/t
 mkdir -p "$work" && chmod 700 "$work"
 export KUBECONFIG="$work/kubeconfig"
+# kubectl logs in to GKE with gcloud's plugin (gcloud components install gke-gcloud-auth-plugin)
+PATH="$PATH:$(dirname "$(readlink -f "$(command -v gcloud)")")"
 pids=()
 trap 'for p in ${pids[@]+"${pids[@]}"}; do kill "$p" 2>/dev/null || true; done' EXIT
 . "$root/scripts/ci/incluster.sh"
@@ -62,7 +64,7 @@ up() {
 	gcloud projects describe "$project" >/dev/null 2>&1 || gcloud projects create "$project" --name "tresor live" --labels purpose=tresor-server-live
 	gcloud billing projects link "$project" --billing-account "$TRESOR_GCP_BILLING" >/dev/null
 	g services enable container.googleapis.com cloudkms.googleapis.com secretmanager.googleapis.com \
-		sqladmin.googleapis.com iam.googleapis.com compute.googleapis.com
+		sqladmin.googleapis.com iam.googleapis.com compute.googleapis.com dns.googleapis.com
 
 	echo "gke_live: Cloud SQL (PostgreSQL, IAM authentication, a Google-managed CA: a DNS name) - in the background"
 	if ! g sql instances describe "$sql" >/dev/null 2>&1; then
@@ -111,8 +113,16 @@ up() {
 		-c "GRANT \"$gsa@$project.iam\" TO postgres; ALTER DATABASE tresor OWNER TO \"$gsa@$project.iam\";"
 	g sql users set-password postgres --instance "$sql" --password "$(openssl rand -hex 24)" >/dev/null
 	unset pw
-	echo "$dns" >"$work/dns"
-	echo "gke_live: the instance's DNS name: $( [ -n "$dns" ] && echo set || echo NONE ); it resolves to: $(dig +short "$dns" 2>/dev/null | head -1)"
+	[ -n "$dns" ] || { echo "gke_live: the instance has no DNS name (a Google-managed CA gives one)" >&2; exit 1; }
+	# the instance's DNS name resolves in the VPC only through a private zone of one's own (Cloud SQL makes none for
+	# a public IP): the pods connect by the name its certificate carries - verify-full
+	if ! g dns managed-zones describe cloudsql >/dev/null 2>&1; then
+		g dns managed-zones create cloudsql --dns-name "$dns." --visibility private --networks default \
+			--description "Cloud SQL's DNS name, for verify-full (gke_live)" >/dev/null
+	fi
+	g dns record-sets describe "$dns." --zone cloudsql --type A >/dev/null 2>&1 ||
+		g dns record-sets create "$dns." --zone cloudsql --type A --ttl 300 --rrdatas "$ip" >/dev/null
+	echo "gke_live: the instance's DNS name in a private zone of the VPC"
 
 	echo "gke_live: in the cluster, a CA and an OIDC issuer for the check"
 	if [ ! -f "$work/ca.crt" ] || [ ! -f "$work/idp/key.pem" ]; then
