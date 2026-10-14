@@ -10,8 +10,10 @@
 # down, and checked gone through Graph.
 #
 #   set -a; . ~/projects/hugr-lab/tresor/.env; set +a
-#   TRESOR_DUCKDB_IMAGE=ghcr.io/hugr-lab/...@sha256:... scripts/dev/logins_live.sh up
-#   scripts/dev/logins_live.sh check      # the three logins (the commands: TRESOR_LOGIN_CMD_MI, _FED, _AKS)
+#   scripts/dev/logins_live.sh up         # the service, the identity, the tenant's grants, AKS (no image needed)
+#   TRESOR_DUCKDB_IMAGE=ghcr.io/...@sha256:... scripts/dev/logins_live.sh check
+#                                         # the three logins: tresor's /live/check.sh mi|fed|aks (or
+#                                         # TRESOR_LOGIN_CMD_MI, _FED, _AKS)
 #   scripts/dev/logins_live.sh down       # the group deleted, the tenant as it was
 #
 # ENTRA_TENANT, ENTRA_API_CLIENT_ID, ENTRA_API_URI, ENTRA_PEOPLE_CLIENT_ID, ENTRA_NODE_CLIENT_ID, ENTRA_NODE_SECRET
@@ -54,8 +56,24 @@ federated() {
 	fi
 }
 
+# jobs: the Container Apps jobs (manual) with tresor's image - DuckDB as the identity, and as acl-node by it
+jobs() {
+	local env url principal
+	env="$(az containerapp env list -g "$rg" --query '[0].name' -o tsv)"
+	url="$(service_url)"
+	for job in mi fed; do
+		local cmd_var; cmd_var="TRESOR_LOGIN_CMD_$(tr a-z A-Z <<<"$job")"
+		az containerapp job delete -g "$rg" -n "tresor-login-$job" --yes -o none 2>/dev/null || true
+		az containerapp job create -g "$rg" -n "tresor-login-$job" --environment "$env" -o none \
+			--trigger-type Manual --replica-timeout 600 --replica-retry-limit 0 --parallelism 1 --replica-completion-count 1 \
+			--image "$TRESOR_DUCKDB_IMAGE" --cpu 0.5 --memory 1Gi --mi-user-assigned "$(mi_field id)" \
+			--env-vars "TRESOR_URL=$url" "TRESOR_ISSUER=$issuer" "TRESOR_AUDIENCE=$ENTRA_API_CLIENT_ID" \
+			"TRESOR_API_URI=$ENTRA_API_URI" "TRESOR_MI_CLIENT_ID=$(mi_field clientId)" "TRESOR_ACL_CLIENT_ID=$(acl_app)" \
+			--command "${TRESOR_LOGIN_SHELL:-/bin/sh}" --args "-c" "${!cmd_var:-/live/check.sh $job}"
+	done
+}
+
 up() {
-	[ -n "${TRESOR_DUCKDB_IMAGE:-}" ] || { echo "logins_live: TRESOR_DUCKDB_IMAGE (tresor's DuckDB image) is not set" >&2; exit 1; }
 	echo "logins_live: the service (the Container Apps recipe, postgres) in $rg, $location"
 	TRESOR_LIVE_RG="$rg" TRESOR_LIVE_LOCATION="$location" "$root/scripts/dev/aca_live.sh" up postgres
 
@@ -75,21 +93,6 @@ up() {
 
 	echo "logins_live: acl-node trusts the identity (a federated credential)"
 	federated "$fic_mi" "$issuer" "$principal"
-
-	echo "logins_live: the jobs (Container Apps, manual): DuckDB as the identity, and as acl-node by the identity"
-	local env url
-	env="$(az containerapp env list -g "$rg" --query '[0].name' -o tsv)"
-	url="$(service_url)"
-	for job in mi fed; do
-		local cmd_var; cmd_var="TRESOR_LOGIN_CMD_$(tr a-z A-Z <<<"$job")"
-		[ -n "${!cmd_var:-}" ] || { echo "logins_live: $cmd_var (the job's command, tresor's script) is not set" >&2; exit 1; }
-		az containerapp job create -g "$rg" -n "tresor-login-$job" --environment "$env" -o none \
-			--trigger-type Manual --replica-timeout 600 --replica-retry-limit 0 --parallelism 1 --replica-completion-count 1 \
-			--image "$TRESOR_DUCKDB_IMAGE" --cpu 0.5 --memory 1Gi --mi-user-assigned "$(mi_field id)" \
-			--env-vars "TRESOR_URL=$url" "TRESOR_ISSUER=$issuer" "TRESOR_AUDIENCE=$ENTRA_API_CLIENT_ID" \
-			"TRESOR_API_URI=$ENTRA_API_URI" "TRESOR_MI_CLIENT_ID=$(mi_field clientId)" "TRESOR_ACL_CLIENT_ID=$(acl_app)" \
-			--command "${TRESOR_LOGIN_SHELL:-/bin/sh}" --args "-c" "${!cmd_var}"
-	done
 
 	echo "logins_live: AKS (1 node, $vm, OIDC issuer, workload identity) - several minutes"
 	az aks create -g "$rg" -n "$cluster" -l "$location" --tier free --node-count 1 -s "$vm" \
@@ -119,7 +122,9 @@ runjob() {
 
 check() {
 	local ok=0 url
+	[ -n "${TRESOR_DUCKDB_IMAGE:-}" ] || { echo "logins_live: TRESOR_DUCKDB_IMAGE (tresor's DuckDB image) is not set" >&2; exit 1; }
 	url="$(service_url)"
+	jobs
 	runjob mi || ok=1
 	runjob fed || ok=1
 	echo "logins_live: aks: DuckDB in a pod, its projected token the assertion"
@@ -136,7 +141,7 @@ spec:
   containers:
     - name: duckdb
       image: $TRESOR_DUCKDB_IMAGE
-      command: ["${TRESOR_LOGIN_SHELL:-/bin/sh}", "-c", "${TRESOR_LOGIN_CMD_AKS:-}"]
+      command: ["${TRESOR_LOGIN_SHELL:-/bin/sh}", "-c", "${TRESOR_LOGIN_CMD_AKS:-/live/check.sh aks}"]
       env:
         - {name: TRESOR_URL, value: "$url"}
         - {name: TRESOR_ISSUER, value: "$issuer"}
