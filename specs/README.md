@@ -14,7 +14,7 @@ Research lives in the local, gitignored `design/` folder.
 
 | Spec | Title | Status |
 | --- | --- | --- |
-| [001](001-architecture/spec.md) | tresor-server - state stores, KEK, material by reference, deployment, phases | accepted |
+| [001](001-architecture/spec.md) | tresor-server - state stores, KEK, material by reference, deployment, phases | implemented |
 | [002](002-phase1-azure-mvp/spec.md) | phase 1 - the Azure MVP | implemented |
 | [003](003-kubernetes/spec.md) | phase 3 - Kubernetes: the CRD store, ref+k8s, workload identity, the Helm chart | implemented |
 | [004](004-variables/spec.md) | variables (tresor spec 018): a second namespace on every store, sealed | implemented |
@@ -35,4 +35,4 @@ Research lives in the local, gitignored `design/` folder.
 | [019](019-administration/spec.md) | administration: the commands as jobs, the runbooks, the data keys in view | implemented |
 | [020](020-gcp-cloud-run/spec.md) | a GCP recipe: Cloud Run, Cloud SQL by Private Service Connect, in Terraform | implemented |
 | [021](021-aws-ecs/spec.md) | an AWS recipe: ECS on Fargate, RDS by IAM in private subnets, in Terraform | implemented |
-| [022](022-release-0.4/spec.md) | release 0.4.0: tresor's browsers (CORS), the MAC on by default, signed artifacts | accepted |
+| [022](022-release-0.4/spec.md) | release 0.4.0: tresor's browsers (CORS), the MAC on by default, signed artifacts | implemented |

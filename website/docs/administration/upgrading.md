@@ -75,6 +75,9 @@ needs nothing. One with rows from before 0.2 (no MAC) makes the start stop, nami
 
 - **`state.mac` on by default** on the SQL stores (above): a database with rows from before 0.2 needs `mac` once,
   or the start stops and says so. See [State](../state.md#the-sql-stores-mac-statemac).
+- **A row whose MAC does not verify is refused** (a read fails, a list leaves it out), where before, with the
+  setting unset, it was served and logged: before the upgrade, 0.3's log warns `a row's MAC does not verify`
+  for each; after, `tresor.state.left_out` counts them. `mac` gives them a MAC again, if you vouch for them.
 - **`cors.allowed_origins`, new**: web pages running tresor in DuckDB-wasm, apart from the console's
   `ui.allowed_origins` ([Configuration](../configuration.md#cors)). Nothing changes until it is set.
 - **Signed artifacts**: the image and the chart can be verified before an upgrade

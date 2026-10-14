@@ -62,7 +62,7 @@ default, and signs what it ships:
 - **Scan**: Trivy on the image in CI (a PR builds it without pushing) - a finding of severity HIGH or CRITICAL with a
   fix available fails the job; unfixed ones are reported, not failing. Pinned action versions.
 - **Docs**: a *Verifying* section - `cosign verify ghcr.io/hugr-lab/tresor-server:<v>
-  --certificate-identity-regexp '^https://github.com/hugr-lab/tresor-server/\.github/workflows/' 
+  --certificate-identity https://github.com/hugr-lab/tresor-server/.github/workflows/image.yml@refs/tags/<v>
   --certificate-oidc-issuer https://token.actions.githubusercontent.com`, the same for the chart; the SBOM and
   provenance through `docker buildx imagetools inspect`.
 

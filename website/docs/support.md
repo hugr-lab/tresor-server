@@ -19,9 +19,9 @@ version of the same product is expected to work; it has not been run.
 | SQLite | `modernc.org/sqlite` (built in), one replica |
 | PostgreSQL | 17, two replicas behind a round-robin proxy |
 | SQL Server | 2022, two replicas |
-| The Kubernetes store | kube-apiserver and etcd (envtest), two replicas |
+| The Kubernetes store | kube-apiserver and etcd 1.37.0 (envtest), two replicas |
 | The chart | kind v0.31.0 (Kubernetes 1.35.0): the Kubernetes store with its admission policy, PostgreSQL in the cluster, OpenBao, Keycloak; its manifests checked against the 1.30.0 schemas (kubeconform) |
-| Identity providers | Keycloak 26.6 (federated client authentication), ZITADEL v4.19 (token exchange, `key_file`) |
+| Identity providers | Keycloak 26.6 in kind (federated client authentication), 26.4 for the console's end to end; ZITADEL v4.19 (token exchange, `key_file`) |
 | OpenBao, Vault | OpenBao 2.4.1 and Vault 2.1.1 (the Go tests); OpenBao in kind: Kubernetes login, the KEK in Transit, references |
 | AWS | KMS and Secrets Manager through moto (emulated) |
 | Recipes | Bicep built; Terraform (Cloud Run, ECS) formatted and validated |
@@ -29,7 +29,8 @@ version of the same product is expected to work; it has not been run.
 
 ## On the clouds (by hand)
 
-Run live with the scripts in `scripts/dev/`, on the provider's default Kubernetes version of the day:
+Run live with the scripts in `scripts/dev/`, on the provider's default Kubernetes version of the day. These ran
+0.1-0.3 images, before the MAC's default and `cors`; what 0.4 changed is covered by CI above.
 
 | Platform | What ran | When |
 | --- | --- | --- |
@@ -38,11 +39,11 @@ Run live with the scripts in `scripts/dev/`, on the provider's default Kubernete
 | Entra ID | On-Behalf-Of (`token_exchange`), service logins (managed identity, federated credential) | 2026-10-08, 2026-10-14 |
 | GKE Autopilot | the chart, Workload Identity, Cloud KMS, Secret Manager, Cloud SQL PostgreSQL 16 by IAM | 2026-10-14 |
 | Cloud Run | the recipe: Cloud SQL over Private Service Connect, the jobs | 2026-10-14 |
-| EKS | the chart, IRSA, KMS, Secrets Manager, RDS PostgreSQL by IAM | 2026-10-14 |
+| EKS | the chart (the Kubernetes store), IRSA, KMS (an encrypt key and an HMAC key), Secrets Manager, the maintenance jobs | 2026-10-14 |
 | ECS Fargate | the recipe: ALB, RDS PostgreSQL 16 by IAM, the commands' task | 2026-10-14 |
 
 ## The artifacts
 
 - **The image**: `ghcr.io/hugr-lab/tresor-server`, linux/amd64 and linux/arm64, distroless, non-root.
-- **The chart**: `oci://ghcr.io/hugr-lab/charts/tresor-server`; Helm 3.
+- **The chart**: `oci://ghcr.io/hugr-lab/charts/tresor-server`; CI lints and installs it with the latest Helm (4.x).
 - Both signed from 0.4, the image with an SBOM and provenance: [Verifying the artifacts](security.md#verifying-the-artifacts).

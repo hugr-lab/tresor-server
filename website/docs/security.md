@@ -29,27 +29,31 @@ page covers what the service adds.
 - **The identity providers** it is configured with, and their signing keys.
 - **Whoever can write its database.** The sealed values are bound to their rows, but a secret's grants, a
   delegation grant's user and expiries are not sealed: write access to the database can change who may use
-  what. Protect it as the service itself. These rows carry a MAC, checked on every store by default (on the SQL
-  stores since 0.4, [`state.mac`](state.md#the-sql-stores-mac-statemac)): a change by hand is refused, but a
-  deleted row, or a whole older row put back (a rollback), is not - only the service's account should write
-  them.
+  what. Protect it as the service itself. These rows carry a MAC, checked by default on the Kubernetes store and
+  (since 0.4, [`state.mac`](state.md#the-sql-stores-mac-statemac)) on the SQL stores: a change by hand is
+  refused - a secret's grants are inside its MAC - but a whole secret, delegation or token deleted, or an older
+  one put back (a rollback), is not. Only the service's account should write them.
 - **Whoever holds the KEK**, with the database, holds the material.
 - **Administrators**: they write secrets and references. The allowlist bounds what a reference can read.
 
 ## Verifying the artifacts
 
 From 0.4 the image and the chart are signed keylessly (cosign, spec 022): by the workflow that built them, with
-its GitHub OIDC identity - no key exists to steal. Check the identity, with cosign v3 or later:
+its GitHub OIDC identity - no key exists to steal. Check the exact identity - the workflow and the tag - with
+cosign v3 or later:
 
 ```sh
 cosign verify ghcr.io/hugr-lab/tresor-server:v0.4.0 \
-  --certificate-identity-regexp '^https://github.com/hugr-lab/tresor-server/\.github/workflows/' \
+  --certificate-identity https://github.com/hugr-lab/tresor-server/.github/workflows/image.yml@refs/tags/v0.4.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 cosign verify ghcr.io/hugr-lab/charts/tresor-server:0.4.0 \
-  --certificate-identity-regexp '^https://github.com/hugr-lab/tresor-server/\.github/workflows/' \
+  --certificate-identity https://github.com/hugr-lab/tresor-server/.github/workflows/chart.yml@refs/tags/v0.4.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+`:edge` is signed from main: `image.yml@refs/heads/main`. A looser check (any workflow of the repository) would
+also accept a signature made from a branch.
 
 - **Verify a digest, deploy that digest**: a tag can move; `image.tag: v0.4.0@sha256:…` on the chart (the same
   reference in a recipe's image) pins what was verified. A policy controller (Kyverno, Sigstore's policy-controller) can require the
@@ -61,8 +65,9 @@ cosign verify ghcr.io/hugr-lab/charts/tresor-server:0.4.0 \
   docker buildx imagetools inspect ghcr.io/hugr-lab/tresor-server:v0.4.0 --format '{{ json .Provenance }}'
   ```
 
-- **The scan**: every image is scanned (Trivy) before it is pushed; a HIGH or CRITICAL finding with a fix stops
-  the release. `:edge` (main) is signed the same way.
+- **The scan**: the linux/amd64 image is scanned (Trivy) before anything is pushed; a HIGH or CRITICAL finding
+  with a fix stops the image's push (the arm64 image is the same Go binary on the same base, not scanned apart).
+  The chart is published by its own workflow.
 
 Report a vulnerability as [SECURITY.md](https://github.com/hugr-lab/tresor-server/blob/main/SECURITY.md) says.
 
