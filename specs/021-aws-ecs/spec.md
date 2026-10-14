@@ -1,6 +1,6 @@
 # Spec 021: an AWS recipe - ECS on Fargate, RDS by IAM in private subnets, in Terraform
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-14
 - **Author**: hugr lab
 
@@ -103,5 +103,7 @@ recipe) at the end, with the owner's yes: an account and its credentials (the AW
 
 ## Open questions
 
-- A domain for the live run: the owner's Route 53 zone, or a certificate for a domain elsewhere (DNS validation by
-  hand). To decide before the run.
+- ~~A domain for the live run~~: a subdomain of the owner's `hugr-lab.com` (Cloudflare) delegated to a Route 53
+  zone by NS records, so the recipe validates its certificate and points the name at the load balancer by itself;
+  a domain elsewhere works without delegation too - the recipe outputs the validation record and the target to add
+  by hand (the owner, 2026-10-14).
