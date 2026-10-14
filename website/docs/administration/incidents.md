@@ -39,7 +39,7 @@ Transit key that does not answer at start, the CRDs not served, no identity inje
 
 ## Rows refused
 
-A row (a SQL store with `state.mac: true`) or a resource (the Kubernetes store) whose MAC does not verify is
+A row (a SQL store with the checks on, the default) or a resource (the Kubernetes store) whose MAC does not verify is
 refused: a read fails (`500` to an administrator, `404` to anyone else on the Kubernetes store), a list leaves it
 out, a delete passes. `tresor.state.left_out` counts them; the log names each.
 

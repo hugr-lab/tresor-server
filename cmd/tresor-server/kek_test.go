@@ -101,7 +101,7 @@ func TestMoveToAnotherKEK(t *testing.T) {
 	}
 }
 
-// tresor-server mac (spec 014): rows written before get a MAC; then state.mac: true reads them, and refuses one
+// tresor-server mac (spec 014): rows written before get a MAC; then, the checks on (the default, spec 022), they read, and one is refused
 // changed behind the store
 func TestMACCommand(t *testing.T) {
 	dir := t.TempDir()

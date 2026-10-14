@@ -81,11 +81,11 @@ type State struct {
 	Instance string `yaml:"instance"`
 }
 
-// sql says whether the store is a SQL one (SQLite, PostgreSQL, SQL Server).
-func (s State) sql() bool { return s.Kind == "sqlite" || s.Kind == "postgres" || s.Kind == "sqlserver" }
+// SQL says whether the store is a SQL one (SQLite, PostgreSQL, SQL Server).
+func (s State) SQL() bool { return s.Kind == "sqlite" || s.Kind == "postgres" || s.Kind == "sqlserver" }
 
 // MACOn says whether a SQL store checks every row's MAC (spec 014): on unless state.mac is false (spec 022).
-func (s State) MACOn() bool { return s.sql() && (s.MAC == nil || *s.MAC) }
+func (s State) MACOn() bool { return s.SQL() && (s.MAC == nil || *s.MAC) }
 
 // Audit is what the audit records (spec 005): all (the default), changes (no successful read) or off.
 type Audit struct {
@@ -743,7 +743,7 @@ func (c *Config) validate() error {
 	if err := c.State.validateServer(c.Azure.Identity, c.AWS.Region != ""); err != nil {
 		return err
 	}
-	if c.State.MAC != nil && *c.State.MAC && !c.State.sql() {
+	if c.State.MAC != nil && *c.State.MAC && !c.State.SQL() {
 		return fmt.Errorf("state.mac is for the SQL stores: %s %s", c.State.Kind,
 			map[bool]string{true: "always has one (spec 003)", false: "keeps nothing at rest"}[c.State.Kind == "kubernetes"])
 	}

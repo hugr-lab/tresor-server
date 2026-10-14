@@ -66,6 +66,11 @@ needs nothing. One with rows from before 0.2 (no MAC) makes the start stop, nami
 2. Start the service. To start first and fill later: `state.mac: false` for now
    ([Changing the configuration](configuration.md)), then remove it after `mac`.
 
+- The refused start has already migrated the database (the MAC's columns come with it): going back to a version
+  before 0.2 means restoring the backup.
+- `rewrap` and `reseal` open the store as the service does: on such a database they stop with the same message -
+  `mac` first, or `TRESOR_STATE__MAC=false` for that run.
+
 ### Upgrading to 0.4 (spec 022)
 
 - `state.mac` on by default (above).

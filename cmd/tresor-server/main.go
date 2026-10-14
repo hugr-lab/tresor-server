@@ -207,9 +207,9 @@ func fillMACs(configPath string, log *slog.Logger) error {
 	}
 	log.Info("rows given a MAC", "filled", filled, "skipped", skipped)
 	if skipped > 0 {
-		return fmt.Errorf("%d rows could not be given a MAC (named above): they are refused with state.mac: true", skipped)
+		return fmt.Errorf("%d rows could not be given a MAC (named above): with the checks on (the default), the start is refused", skipped)
 	}
-	log.Info("set state.mac: true now")
+	log.Info("start the service: the checks are on by default (state.mac)")
 	return nil
 }
 
@@ -730,7 +730,7 @@ func serve(configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if cfg.State.MAC != nil && !*cfg.State.MAC && (cfg.State.Kind == "sqlite" || cfg.State.Kind == "postgres" || cfg.State.Kind == "sqlserver") {
+	if cfg.State.MAC != nil && !*cfg.State.MAC && cfg.State.SQL() {
 		log.Warn("state.mac is false: the rows' MACs are not checked - a database writer can change who may use what unseen (spec 014)")
 	}
 	defer st.Close()

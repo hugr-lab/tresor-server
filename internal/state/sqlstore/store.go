@@ -72,6 +72,10 @@ func open(ctx context.Context, db *sql.DB, d Dialect, wrapper keys.KeyWrapper, o
 		if err := schemaCurrent(ctx, db, d); err != nil {
 			return nil, err
 		}
+		// refs too: with the checks on, MAC-less rows would be left out of its list unseen
+		if err := s.macsComplete(ctx); err != nil {
+			return nil, err
+		}
 		s.migrated.Store(true)
 		return s, nil
 	}
@@ -91,7 +95,7 @@ func open(ctx context.Context, db *sql.DB, d Dialect, wrapper keys.KeyWrapper, o
 	}
 	s.lease = l
 	if err := l.start(ctx); err != nil {
-		l.stop() // let it go: a command (tresor-server mac) may take it next
+		l.stop()        // let it go: a command (tresor-server mac) may take it next
 		return nil, err // held at once, and the database cannot be migrated: nothing to serve
 	}
 	return s, nil
