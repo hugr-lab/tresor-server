@@ -79,6 +79,9 @@ func open(ctx context.Context, db *sql.DB, d Dialect, wrapper keys.KeyWrapper, o
 		if err := migrate(ctx, db, d); err != nil {
 			return nil, err
 		}
+		if err := s.macsComplete(ctx); err != nil {
+			return nil, err
+		}
 		s.migrated.Store(true)
 		return s, nil
 	}
@@ -88,6 +91,7 @@ func open(ctx context.Context, db *sql.DB, d Dialect, wrapper keys.KeyWrapper, o
 	}
 	s.lease = l
 	if err := l.start(ctx); err != nil {
+		l.stop() // let it go: a command (tresor-server mac) may take it next
 		return nil, err // held at once, and the database cannot be migrated: nothing to serve
 	}
 	return s, nil
@@ -99,6 +103,9 @@ func (s *Store) migrateOnce(ctx context.Context) error {
 		return nil
 	}
 	if err := migrate(ctx, s.db, s.d); err != nil {
+		return err
+	}
+	if err := s.macsComplete(ctx); err != nil {
 		return err
 	}
 	s.migrated.Store(true)

@@ -91,13 +91,14 @@ azure: {identity: managed}
 
 The material is sealed, but the columns around it - a secret's type and scope, its **grants**, a delegation
 grant's actor and user, a minted token's failure - are plain. Whoever can write the database (a DBA, a stolen
-database credential) could add a grant row, and the service would serve the material to that role. With
-`state.mac: true` every such row carries a MAC under a data key, which only the KEK's holder can make (spec 014):
+database credential) could add a grant row, and the service would serve the material to that role. Every such
+row carries a MAC under a data key, which only the KEK's holder can make (spec 014), and the service checks it -
+on by default since 0.4 (spec 022):
 
 ```yaml
 state:
   kind: postgres
-  mac: true
+  mac: false     # the checks off (a warning at start); unset or true: on
 ```
 
 - **A row that does not verify** is refused: a read fails, a list leaves it out (`tresor.state.left_out`,
@@ -105,14 +106,15 @@ state:
 - **The MAC is written always**, whatever the setting; the setting turns the checks on. With it off, a row
   whose MAC does not verify is still served, but logged and counted - and the service's next write of it gives
   it a valid MAC again: until the checks are on, the database is trusted as it is.
-- **Turning it on, at an upgrade**: rows written before have none, and a replica still on the older binary
-  writes without one. Once every replica runs the new version (on SQLite: with the service stopped):
+- **A database with rows that have no MAC** (written before 0.2): with the checks on, the service does not start,
+  and says so - run `tresor-server mac` once, or set `state.mac: false` for now. A replica still on a binary
+  before 0.2 writes rows without one. Once every replica runs 0.2 or later (on SQLite: with the service stopped):
 
   ```bash
   tresor-server mac -config server.yaml     # rows with no MAC, or a stale one, get one: you vouch for the database
   ```
 
-  then `state.mac: true`, and deploy. Minted tokens with none are dropped (they are minted again); a row that
+  then start it with the checks on. Minted tokens with none are dropped (they are minted again); a row that
   cannot be given one (its data key gone) is named, and the command fails.
 - **The installation's id** (in every MAC, so a row copied from another database does not verify) is made by the
   migration, in the `installation` table. Keep it with the backups: if it is lost, every row is refused, and the

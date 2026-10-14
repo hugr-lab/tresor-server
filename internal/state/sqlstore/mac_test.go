@@ -169,13 +169,20 @@ func TestMACUpgrade(t *testing.T) {
 		t.Fatalf("checks off: %v", err)
 	}
 	plain.Close()
-	checked := openAt(t, path, kek(t, 1))
-	if _, err := checked.Get(ctx, "lake"); !errors.Is(err, keys.ErrSealed) {
+	// checks on (the default since 0.4, spec 022): the start refuses, with what to do - never a quiet ErrSealed
+	if s, err := OpenSQLite(ctx, path, kek(t, 1), Options{MAC: true}); err == nil || !strings.Contains(err.Error(), "tresor-server mac") ||
+		!strings.Contains(err.Error(), "2 rows") {
+		if s != nil {
+			s.Close()
+		}
 		t.Fatalf("checks on, no MAC: %v", err)
 	}
-	if n, skipped, err := checked.FillMACs(ctx); err != nil || n != 2 || skipped != 0 {
+	filler := openWith(t, path, kek(t, 1), Options{}) // tresor-server mac opens with the checks off
+	if n, skipped, err := filler.FillMACs(ctx); err != nil || n != 2 || skipped != 0 {
 		t.Fatalf("filled: %d (%d skipped) %v", n, skipped, err)
 	}
+	filler.Close()
+	checked := openAt(t, path, kek(t, 1))
 	if _, err := checked.Get(ctx, "lake"); err != nil {
 		t.Fatalf("after FillMACs: %v", err)
 	}

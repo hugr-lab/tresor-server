@@ -191,7 +191,8 @@ func fillMACs(configPath string, log *slog.Logger) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	cfg.State.MAC = false // the rows with none are read, to be filled
+	off := false
+	cfg.State.MAC = &off // the rows with none are read, to be filled
 	st, _, err := openState(ctx, cfg, log, false)
 	if err != nil {
 		return err
@@ -335,7 +336,7 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger, readOn
 			return nil, nil, err
 		}
 		st, err := sqlstore.OpenSQLite(ctx, cfg.State.Path, wrapper, sqlstore.Options{Log: log,
-			Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}, ReadOnly: readOnly, MAC: cfg.State.MAC})
+			Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}, ReadOnly: readOnly, MAC: cfg.State.MACOn()})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -354,7 +355,7 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger, readOn
 			return nil, nil, err
 		}
 		st, err := open(ctx, cfg.State.DSN, login, cfg.State.MaxOpenConns, wrapper, sqlstore.Options{
-			Log: log, Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}, ReadOnly: readOnly, MAC: cfg.State.MAC})
+			Log: log, Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}, ReadOnly: readOnly, MAC: cfg.State.MACOn()})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -728,6 +729,9 @@ func serve(configPath string, log *slog.Logger) error {
 	st, stateChecks, err := openState(ctx, cfg, log, false)
 	if err != nil {
 		return err
+	}
+	if cfg.State.MAC != nil && !*cfg.State.MAC && (cfg.State.Kind == "sqlite" || cfg.State.Kind == "postgres" || cfg.State.Kind == "sqlserver") {
+		log.Warn("state.mac is false: the rows' MACs are not checked - a database writer can change who may use what unseen (spec 014)")
 	}
 	defer st.Close()
 	verifier := auth.NewVerifier(cfg.Issuers)

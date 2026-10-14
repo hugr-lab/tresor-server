@@ -48,7 +48,7 @@ out, a delete passes. `tresor.state.left_out` counts them; the log names each.
 - **From another installation**, or `state.instance` / the installation id changed: restore the right one
   ([Backup and restore](backup-restore.md)).
 - **A SQL row with no MAC** (written by an older replica): `mac`, once every replica runs the new version
-  ([Upgrading](upgrading.md#the-sql-stores-mac-spec-014)).
+  ([Upgrading](upgrading.md#the-sql-stores-mac-spec-014-on-by-default-since-04)).
 - **With `state.mac` off**, a row that does not verify is served, logged and counted.
 
 ## The SQLite store held

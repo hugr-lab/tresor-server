@@ -55,13 +55,20 @@ Once, with the new version:
    tresor-server rewrap -tag-untagged -config server.yaml
    ```
 
-### The SQL stores' MAC (spec 014)
+### The SQL stores' MAC (spec 014; on by default since 0.4)
 
-1. Once every replica runs the new version, `mac` (`<fullname>-mac`, `<prefix>-mac`; on SQLite with the service
-   stopped). Rows with no MAC, or a stale one, get one: you vouch for the database. A row that cannot be given
-   one (its data key gone) is named, and the command exits `1`.
-2. Then `state.mac: true`, and deploy ([Changing the configuration](configuration.md)). On Container Apps the
-   recipe has no parameter for it: `TRESOR_STATE__MAC` in the `serviceEnv` variable of your copy of `main.bicep`.
+From 0.4 the checks are on unless `state.mac: false`. A database whose rows were all written by 0.2 or later
+needs nothing. One with rows from before 0.2 (no MAC) makes the start stop, naming how many:
+
+1. `mac` (`<fullname>-mac`, `<prefix>-mac`; on SQLite with the service stopped) with the new version. Rows with no
+   MAC, or a stale one, get one: you vouch for the database. A row that cannot be given one (its data key gone) is
+   named, and the command exits `1`.
+2. Start the service. To start first and fill later: `state.mac: false` for now
+   ([Changing the configuration](configuration.md)), then remove it after `mac`.
+
+### Upgrading to 0.4 (spec 022)
+
+- `state.mac` on by default (above).
 
 See [State](../state.md#the-sql-stores-mac-statemac).
 
@@ -77,4 +84,4 @@ See [State](../state.md#the-sql-stores-mac-statemac).
 - **Before a migration**: the old image.
 - **After one**: the old binary refuses the database. Roll forward, or restore the backup from step 2 with the
   old image - writes made since are lost.
-- **`state.mac: true`**: turn it off and deploy; the MACs stay written.
+- **The MAC checks**: `state.mac: false` and deploy; the MACs stay written.
