@@ -13,7 +13,7 @@ on:
 
 concurrency:
   group: chart-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }} # a tag's push runs to its end
 
 permissions:
   contents: read
@@ -69,20 +69,32 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # cosign's keyless signature (spec 022)
     steps:
       - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v5
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: helm lint
         run: helm lint --strict deploy/helm/tresor-server -f deploy/helm/tresor-server/ci/test-values.yaml
       # the image of the same tag (image.yml) is built beside this: the chart names it before it may exist, so a
       # release is installed once both runs passed
       - name: helm package and push
+        shell: bash # -eo pipefail: a failed helm push fails the step, tee or not
         env:
           TAG: ${{ github.ref_name }}
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
+          IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/chart.yml@${{ github.ref }}
         run: |
           version="${TAG#v}"
           echo "$TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
           helm package deploy/helm/tresor-server --version "$version" --app-version "$TAG" -d out
-          helm push "out/tresor-server-$version.tgz" oci://ghcr.io/hugr-lab/charts
+          helm push "out/tresor-server-$version.tgz" oci://ghcr.io/hugr-lab/charts 2>&1 | tee push.log
+          digest="$(grep -oE 'sha256:[0-9a-f]{64}' push.log | head -1)"
+          [ -n "$digest" ] || { echo "no digest from helm push" >&2; exit 1; }
+          # the signature, keyless: this workflow's OIDC identity (spec 022); cosign logs in as helm did
+          echo "$TOKEN" | cosign login ghcr.io -u "$ACTOR" --password-stdin
+          cosign sign --yes "ghcr.io/hugr-lab/charts/tresor-server@$digest"
+          cosign verify "ghcr.io/hugr-lab/charts/tresor-server@$digest" \
+            --certificate-identity "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
