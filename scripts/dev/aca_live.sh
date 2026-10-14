@@ -33,7 +33,7 @@ up() {
 	[ -n "${TRESOR_LIVE_OBO:-}" ] && exchange=", exchange: {client_id: '$ENTRA_API_CLIENT_ID', client_auth: azure, grant: on_behalf_of}"
 	az deployment group create -g "$rg" -n "$deployment" -f "$root/deploy/azure-container-apps/main.bicep" -o none \
 		-p database="$database" \
-		-p issuers="[{issuer: '$issuer', audience: '$ENTRA_API_CLIENT_ID', client_id: '$ENTRA_PEOPLE_CLIENT_ID', scopes: [openid, offline_access, '$ENTRA_API_URI/access_as_user'], human_flows: [authorization_code, device_code], service_flows: [client_credentials, private_key_jwt], roles_claim: roles, service: {claim: idtyp, equals: app, client_claim: azp}$exchange}]" \
+		-p issuers="[{issuer: '$issuer', audience: '$ENTRA_API_CLIENT_ID', client_id: '$ENTRA_PEOPLE_CLIENT_ID', scopes: [openid, offline_access, '$ENTRA_API_URI/access_as_user'], human_flows: [authorization_code, device_code], service_flows: [client_credentials, private_key_jwt, federated, managed_identity], roles_claim: roles, service: {claim: idtyp, equals: app, client_claim: azp}$exchange}]" \
 		-p admins="[role:secrets_admin, 'client:$ENTRA_NODE_CLIENT_ID']"
 }
 
