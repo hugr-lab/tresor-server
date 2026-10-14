@@ -14,8 +14,8 @@ variable "prefix" {
   type        = string
   default     = "tresor"
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{1,14}$", var.prefix))
-    error_message = "prefix: lower-case letters, digits and dashes, a letter first, at most 15 characters."
+    condition     = can(regex("^[a-z]([a-z0-9-]{0,13}[a-z0-9])$", var.prefix)) && !strcontains(var.prefix, "--")
+    error_message = "prefix: lower-case letters, digits and dashes, a letter first, no dash last or doubled, at most 15 characters."
   }
 }
 
@@ -31,10 +31,16 @@ variable "subnetwork" {
   default     = ""
 }
 
-variable "image" {
-  description = "tresor-server's image: a version, never edge."
+variable "image_tag" {
+  description = "tresor-server's version (its image's tag on ghcr.io), never edge."
   type        = string
-  default     = "ghcr.io/hugr-lab/tresor-server:v0.3.2"
+  default     = "v0.3.2"
+}
+
+variable "image" {
+  description = "An image of your own (Artifact Registry or Docker Hub: Cloud Run takes no other); empty - ghcr.io's, through an Artifact Registry remote repository the recipe makes."
+  type        = string
+  default     = ""
 }
 
 variable "issuers" {

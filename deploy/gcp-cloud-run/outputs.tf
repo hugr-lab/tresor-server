@@ -1,6 +1,6 @@
 output "url" {
-  description = "The service's public_url."
-  value       = google_cloud_run_v2_service.svc.uri
+  description = "The service's public_url: give it to the IdP and the clients."
+  value       = local.url
 }
 
 output "service_account" {
@@ -18,6 +18,10 @@ output "mac_key" {
 
 output "database_dns_name" {
   value = trimsuffix(google_sql_database_instance.db.dns_name, ".")
+}
+
+output "image" {
+  value = local.image
 }
 
 output "jobs" {

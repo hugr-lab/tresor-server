@@ -5,15 +5,19 @@
 data "google_project" "this" {}
 
 locals {
-  name     = var.prefix
-  number   = data.google_project.this.number
-  url      = "https://${local.name}-${local.number}.${var.region}.run.app"
-  allow    = length(var.material_allow) > 0 ? var.material_allow : [{ project = var.project, prefixes = ["duckdb-"] }]
-  own_vpc  = var.network == ""
-  network  = local.own_vpc ? google_compute_network.vpc[0].id : var.network
-  subnet   = local.own_vpc ? google_compute_subnetwork.subnet[0].id : var.subnetwork
-  sql_user = trimsuffix(google_service_account.svc.email, ".gserviceaccount.com")
-  ring     = google_kms_key_ring.ring.id
+  name   = var.prefix
+  number = data.google_project.this.number
+  # Cloud Run pulls from Artifact Registry or Docker Hub only: ghcr.io's image through a remote repository
+  image = var.image != "" ? var.image : "${var.region}-docker.pkg.dev/${var.project}/${google_artifact_registry_repository.ghcr[0].repository_id}/hugr-lab/tresor-server:${var.image_tag}"
+  url   = "https://${local.name}-${local.number}.${var.region}.run.app"
+  allow = length(var.material_allow) > 0 ? var.material_allow : [{ project = var.project, prefixes = ["duckdb-"] }]
+  # per project, its prefixes together (none: every secret of it)
+  allow_by_project = { for p in distinct([for a in local.allow : a.project]) : p => flatten([for a in local.allow : a.prefixes if a.project == p]) }
+  own_vpc          = var.network == ""
+  network          = local.own_vpc ? google_compute_network.vpc[0].id : var.network
+  subnet           = local.own_vpc ? google_compute_subnetwork.subnet[0].id : var.subnetwork
+  sql_user         = trimsuffix(google_service_account.svc.email, ".gserviceaccount.com")
+  ring             = google_kms_key_ring.ring.id
   commands = {
     reseal          = ["reseal", "-retire"]
     "reseal-rotate" = ["reseal", "-rotate", "-retire"]
@@ -41,9 +45,29 @@ locals {
 
 resource "google_project_service" "apis" {
   for_each = toset(["run.googleapis.com", "sqladmin.googleapis.com", "cloudkms.googleapis.com",
-  "secretmanager.googleapis.com", "compute.googleapis.com", "dns.googleapis.com", "iam.googleapis.com"])
+    "secretmanager.googleapis.com", "compute.googleapis.com", "dns.googleapis.com", "iam.googleapis.com",
+  "artifactregistry.googleapis.com"])
   service            = each.value
   disable_on_destroy = false
+}
+
+# --- the image: ghcr.io's, through a remote repository (Cloud Run pulls from Artifact Registry or Docker Hub) ---
+
+resource "google_artifact_registry_repository" "ghcr" {
+  count         = var.image == "" ? 1 : 0
+  repository_id = "${local.name}-ghcr"
+  location      = var.region
+  format        = "DOCKER"
+  mode          = "REMOTE_REPOSITORY"
+  description   = "ghcr.io, for tresor-server's image"
+  remote_repository_config {
+    docker_repository {
+      custom_repository {
+        uri = "https://ghcr.io"
+      }
+    }
+  }
+  depends_on = [google_project_service.apis]
 }
 
 # --- the network: the service's egress and the database's endpoint, private ----------------------------------
@@ -61,7 +85,7 @@ resource "google_compute_subnetwork" "subnet" {
   network                  = google_compute_network.vpc[0].id
   region                   = var.region
   ip_cidr_range            = "10.10.0.0/24"
-  private_ip_google_access = true # Cloud KMS, Secret Manager, Cloud SQL's API: Google's own addresses, privately
+  private_ip_google_access = true # for workloads that egress all traffic through the VPC; harmless here
 }
 
 # --- the service's identity: no key ---------------------------------------------------------------------------
@@ -118,13 +142,16 @@ data "google_project" "allowed" {
 }
 
 resource "google_project_iam_member" "secrets" {
-  for_each = { for a in local.allow : a.project => a }
+  for_each = local.allow_by_project
   project  = each.key
   role     = "roles/secretmanager.secretAccessor"
   member   = google_service_account.svc.member
-  condition {
-    title      = "${local.name}-allowlist"
-    expression = join(" || ", [for p in each.value.prefixes : "resource.name.startsWith(\"projects/${data.google_project.allowed[each.key].number}/secrets/${p}\")"])
+  dynamic "condition" {
+    for_each = length(each.value) > 0 ? [1] : [] # no prefix: every secret of the project
+    content {
+      title      = "${local.name}-allowlist"
+      expression = join(" || ", [for p in each.value : "resource.name.startsWith(\"projects/${data.google_project.allowed[each.key].number}/secrets/${p}\")"])
+    }
   }
 }
 
@@ -166,15 +193,21 @@ resource "google_sql_database" "tresor" {
 }
 
 resource "google_sql_user" "svc" {
-  name     = local.sql_user
-  instance = google_sql_database_instance.db.name
-  type     = "CLOUD_IAM_SERVICE_ACCOUNT"
+  name            = local.sql_user
+  instance        = google_sql_database_instance.db.name
+  type            = "CLOUD_IAM_SERVICE_ACCOUNT"
+  deletion_policy = "ABANDON" # it owns the database: Cloud SQL refuses to delete it; the instance goes with it
 }
 
+# cloudsql.instances.login (IAM authentication over PSC; cloudsql.client is the connector's), on this instance only
 resource "google_project_iam_member" "sql" {
   project = var.project
   role    = "roles/cloudsql.instanceUser"
   member  = google_service_account.svc.member
+  condition {
+    title      = "${local.name}-pg"
+    expression = "resource.name == \"projects/${var.project}/instances/${local.name}-pg\""
+  }
 }
 
 # the endpoint: an internal address in the subnet, to the instance's service attachment
@@ -243,9 +276,13 @@ resource "random_password" "postgres" {
 }
 
 resource "google_sql_user" "postgres" {
-  name     = "postgres"
-  instance = google_sql_database_instance.db.name
-  password = random_password.postgres.result # replaced by the job below: dead once it ran
+  name            = "postgres"
+  instance        = google_sql_database_instance.db.name
+  password        = random_password.postgres.result # replaced by the job below: dead once it ran
+  deletion_policy = "ABANDON"                       # the built-in user: never deleted
+  lifecycle {
+    ignore_changes = all # an update would set the dead password again
+  }
 }
 
 resource "google_secret_manager_secret" "init" {
@@ -277,7 +314,7 @@ resource "google_cloud_run_v2_job" "db_init" {
       max_retries     = 0
       timeout         = "300s"
       containers {
-        image   = "postgres:16-alpine"
+        image   = "docker.io/library/postgres:16-alpine"
         command = ["psql"]
         args = [
           "host=${google_compute_address.db.address} user=postgres dbname=tresor sslmode=verify-ca sslrootcert=/etc/cloudsql/server-ca.pem",
@@ -322,11 +359,22 @@ resource "google_cloud_run_v2_job" "db_init" {
   google_dns_record_set.db, google_compute_forwarding_rule.db]
 }
 
-# runs the job once (again only when the instance is replaced): gcloud where Terraform runs
+# runs the job once (again when the instance, the database or the user is replaced): gcloud where Terraform runs.
+# Retried: the job's grants on its secrets take a while to reach Secret Manager. Then the first password's
+# version is disabled - it is dead anyway.
 resource "terraform_data" "db_init" {
-  triggers_replace = [google_sql_database_instance.db.id]
+  triggers_replace = [google_sql_database_instance.db.id, google_sql_database.tresor.id, google_sql_user.svc.id]
   provisioner "local-exec" {
-    command = "gcloud run jobs execute ${google_cloud_run_v2_job.db_init.name} --project ${var.project} --region ${var.region} --wait"
+    command = <<-EOT
+      for i in 1 2 3 4 5 6; do
+        if gcloud run jobs execute ${google_cloud_run_v2_job.db_init.name} --project ${var.project} --region ${var.region} --wait; then
+          gcloud secrets versions disable latest --secret ${google_secret_manager_secret.init.secret_id} --project ${var.project} --quiet
+          exit 0
+        fi
+        sleep 20
+      done
+      exit 1
+    EOT
   }
 }
 
@@ -337,6 +385,9 @@ resource "google_cloud_run_v2_service" "svc" {
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_ALL"
   deletion_protection = false
+  # the service authenticates every request itself (its issuers' tokens): no Cloud Run invoker check - and no
+  # allUsers binding, which an organization's domain-restricted sharing refuses
+  invoker_iam_disabled = true
   template {
     service_account = google_service_account.svc.email
     scaling {
@@ -351,7 +402,7 @@ resource "google_cloud_run_v2_service" "svc" {
       egress = "PRIVATE_RANGES_ONLY"
     }
     containers {
-      image = var.image
+      image = local.image
       ports {
         container_port = 8080
       }
@@ -399,14 +450,6 @@ resource "google_cloud_run_v2_service" "svc" {
   google_project_iam_member.sql, google_secret_manager_secret_iam_member.ca]
 }
 
-# the service authenticates every request itself (tokens of its issuers): Cloud Run lets everyone reach it
-resource "google_cloud_run_v2_service_iam_member" "public" {
-  name     = google_cloud_run_v2_service.svc.name
-  location = var.region
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
-
 # --- the commands as jobs (spec 019): gcloud run jobs execute <prefix>-reseal --region <region> --wait --------
 
 resource "google_cloud_run_v2_job" "commands" {
@@ -420,7 +463,7 @@ resource "google_cloud_run_v2_job" "commands" {
       max_retries     = 0 # a command is not retried: its log says what to do
       timeout         = "3600s"
       containers {
-        image = var.image
+        image = local.image
         args  = each.value
         resources {
           limits = { cpu = "1", memory = "512Mi" }

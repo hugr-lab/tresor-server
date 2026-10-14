@@ -8,8 +8,7 @@
 
 Azure has a recipe a user deploys and edits (`deploy/azure-container-apps`, Bicep); Kubernetes, GKE included, has
 the chart. GCP's serverless path has nothing: the GCP page lists what to grant, and each user assembles it. This is
-`deploy/gcp-cloud-run`, a Terraform module (OpenTofu works too; Google's Infrastructure Manager runs it with no
-local install): the service on Cloud Run with an identity of its own and no key, the KEK in Cloud KMS, references
+`deploy/gcp-cloud-run`, a Terraform module (OpenTofu works too): the service on Cloud Run with an identity of its own and no key, the KEK in Cloud KMS, references
 in Secret Manager, PostgreSQL in Cloud SQL by IAM authentication over **Private Service Connect** - no public
 address - and a Cloud Run job per command (spec 019). The AWS recipe (ECS on Fargate) follows as spec 021, the
 same way.
@@ -28,7 +27,8 @@ same way.
 ### The module
 
 `deploy/gcp-cloud-run/` - `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`, a `README.md` (deploy, what each
-variable does, for production), an `examples/` tfvars. Providers: `hashicorp/google` only.
+variable does, for production), an `examples/` tfvars. Providers: `hashicorp/google` and `hashicorp/random`; `gcloud` where Terraform runs (the
+`db-init` job).
 
 | Input | Default | |
 | --- | --- | --- |
@@ -36,7 +36,7 @@ variable does, for production), an `examples/` tfvars. Providers: `hashicorp/goo
 | `region` | `europe-west1` | |
 | `prefix` | `tresor` | every resource's name |
 | `network`, `subnetwork` | (none: made) | an existing VPC and subnet for the service's egress and the PSC endpoint; none - a minimal VPC of the recipe's own |
-| `image` | the release's tag | a version, never `edge` |
+| `image_tag`, `image` | the release's tag; none | Cloud Run pulls from Artifact Registry or Docker Hub only: ghcr.io's image through a remote repository the recipe makes, or an image of the user's own |
 | `issuers`, `admins`, `actors` | (required: issuers, admins) | as the Bicep recipe: YAML in `TRESOR_*` |
 | `material_allow` | `[{project: <project>, prefixes: [duckdb-]}]` | `material.gcp.allow` |
 | `min_instances`, `max_instances` | 1, 3 | |
@@ -47,8 +47,8 @@ variable does, for production), an `examples/` tfvars. Providers: `hashicorp/goo
 
 - **The service's account** (`<prefix>-svc`): no key. Its bindings, each on its own resource, never the project:
   `cloudkms.cryptoKeyEncrypterDecrypter` and `cloudkms.viewer` on the KEK, `cloudkms.signer` on the MAC key,
-  `secretmanager.secretAccessor` on the allowlisted secrets' project (or the secrets the user lists),
-  `cloudsql.instanceUser` and `cloudsql.client` scoped by condition to the instance.
+  `secretmanager.secretAccessor` on the allowlisted projects with a condition per prefix,
+  `cloudsql.instanceUser` scoped by condition to the instance (`cloudsql.client` is the connector's).
 - **Cloud KMS**: a key ring, `kek` (ENCRYPT_DECRYPT, a rotation period - `rewrap` moves the data keys), `root` (MAC,
   HMAC_SHA256: the root; not rotated). Terraform cannot make `prevent_destroy` a variable, and a trial must go:
   the README says to keep the keys (a destroy schedules their versions' destruction; until then they restore).
@@ -67,12 +67,13 @@ variable does, for production), an `examples/` tfvars. Providers: `hashicorp/goo
   Bicep), the DSN `host=<dns name> user=<svc>@<project>.iam dbname=tresor sslmode=verify-full
   sslrootcert=<the instance's CA>` (the CA from Secret Manager, mounted as a file), `state.auth: gcp`;
   **Direct VPC egress** to the subnet (private ranges only); CPU always allocated and `min_instances` ≥ 1 (the
-  service purges, renews and checks in the background); startup and liveness probes on `/healthz`, `/readyz`;
-  ingress all, the URL its `public_url` (a custom domain: a variable).
+  service purges, renews and checks in the background); startup and liveness probes on `/healthz`; ingress all,
+  Cloud Run's invoker check off (the service authenticates every request; an `allUsers` binding is refused by a
+  domain-restricted organization); the deterministic URL its `public_url` (a custom domain: the README).
 - **Cloud Run jobs**, one per command - `<prefix>-reseal` (`reseal -retire`), `-reseal-rotate`, `-rewrap`, `-refs`
   (`refs -resolve`), `-mac` - the same image, account, settings and egress; no retries, a timeout. Run:
   `gcloud run jobs execute <prefix>-reseal --region <region> --wait`.
-- **Outputs**: the URL, the service account's email, the KEK's and the MAC key's names, the jobs' names.
+- **Outputs**: the URL (`public_url`), the image, the service account's email, the KEK's and the MAC key's names, the jobs' names.
 
 ### The docs
 
