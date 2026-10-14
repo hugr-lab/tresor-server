@@ -1,6 +1,6 @@
 # Spec 020: a GCP recipe - Cloud Run, Cloud SQL by Private Service Connect, in Terraform
 
-- **Status**: draft
+- **Status**: accepted
 - **Date**: 2026-10-14
 - **Author**: hugr lab
 
@@ -56,8 +56,12 @@ variable does, for production), an `examples/` tfvars. Providers: `hashicorp/goo
   for the project; a PSC endpoint (a forwarding rule on an internal address in the subnet); a **private DNS zone**
   for the instance's DNS name, its A record the endpoint. The IAM user for the service's account.
 - **The database's ownership**: Cloud SQL's IAM user has no rights on a database it did not make, and only SQL
-  gives them - the open question below decides how the recipe runs that one statement without a password left
-  behind.
+  gives them. A one-time Cloud Run job, `<prefix>-db-init`, runs `GRANT "<user>" TO postgres; ALTER DATABASE
+  tresor OWNER TO "<user>";` as `postgres` through the PSC endpoint (`verify-ca` against the instance's CA), then
+  sets `postgres` a new random password nobody keeps. The first password is Terraform's (`random_password`), in
+  Secret Manager for the job only - and in the Terraform state, which the README says to keep as a secret; it is
+  dead once the job ran. Terraform runs the job once (`terraform_data` with `local-exec`, re-run only when the
+  instance is replaced).
 - **Cloud Run** (`<prefix>`): the image, the service account, `TRESOR_*` from the inputs (as `serviceEnv` in
   Bicep), the DSN `host=<dns name> user=<svc>@<project>.iam dbname=tresor sslmode=verify-full
   sslrootcert=<the instance's CA>` (the CA from Secret Manager, mounted as a file), `state.auth: gcp`;
@@ -110,12 +114,8 @@ like the Bicep one. A live run by hand, with the owner's yes: a fresh project, `
 
 ## Open questions
 
-- **The database's ownership without a password**: the IAM user cannot own a database the recipe makes as
-  `postgres` without someone running SQL. Options: (a) the service creates its own database at its first start
-  (`CREATE DATABASE` - the IAM user would need `CREATEDB`: `ALTER ROLE … CREATEDB` needs SQL too); (b) the recipe
-  runs one SQL statement through a Cloud Run job with a generated `postgres` password kept in Secret Manager and
-  rotated after; (c) the schema `public` granted instead of ownership (`GRANT ALL ON SCHEMA public` - SQL again).
-  To decide while implementing, (b) the likely one.
+- ~~The database's ownership without a password~~: a one-time Cloud Run job with a password that dies with it
+  (the owner, 2026-10-14).
 
 ## Follow-ups
 
