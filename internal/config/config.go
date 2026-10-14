@@ -35,6 +35,8 @@ type Config struct {
 	Audit     Audit     `yaml:"audit"`
 	Telemetry Telemetry `yaml:"telemetry"`
 	UI        UI        `yaml:"ui"`
+	// CORS is for web pages that run tresor in DuckDB-wasm (tresor's protocol, Browsers; spec 022).
+	CORS CORS `yaml:"cors"`
 	// Store is the reference server's encrypted file: kept only to refuse a config that still has it (an
 	// empty `store:` too: see load)
 	Store any `yaml:"store"`
@@ -98,6 +100,23 @@ type UI struct {
 	// ConnectSrc are more origins the sign-in calls, beside the issuers' own (its CSP): an IdP whose token or
 	// user-info endpoint is on another host (Google: oauth2.googleapis.com; Entra: graph.microsoft.com).
 	ConnectSrc []string `yaml:"connect_src"`
+}
+
+// CORS: the web pages that call the service - tresor in DuckDB-wasm (spec 022). The console's hosts are
+// ui.allowed_origins; neither implies the other.
+type CORS struct {
+	// AllowedOrigins: CORS on discovery and /v1 for these origins.
+	AllowedOrigins []string `yaml:"allowed_origins"`
+}
+
+func (c CORS) validate() error {
+	for _, o := range c.AllowedOrigins {
+		if !IsOrigin(o) {
+			return fmt.Errorf("cors.allowed_origins: %q is not an origin - https://host[:port] (http only to this "+
+				"machine), no path, no wildcard", o)
+		}
+	}
+	return nil
 }
 
 // On says whether the console is served.
@@ -839,6 +858,9 @@ func (c *Config) validate() error {
 			"database's password through a reference - keep it in a namespace, a vault or a name no allowlist admits")
 	}
 	if err := c.UI.validate(); err != nil {
+		return err
+	}
+	if err := c.CORS.validate(); err != nil {
 		return err
 	}
 	switch c.Audit.Level {

@@ -356,3 +356,86 @@ func TestRecorderUnwraps(t *testing.T) {
 		t.Fatalf("SetWriteDeadline through the recorder: %v", got)
 	}
 }
+
+// tresor's protocol, Browsers (spec 022): web pages with tresor in DuckDB-wasm get CORS on discovery and /v1 -
+// the headers the protocol names - and nothing of the console's; the console's hosts nothing of discovery
+func TestCORSForPages(t *testing.T) {
+	cfg, err := config.Parse([]byte(`
+listen: 127.0.0.1:0
+public_url: http://127.0.0.1:8443
+state: {kind: memory}
+issuers: [{issuer: 'http://127.0.0.1:18080/realms/t', audience: duckdb-secrets}]
+policy: {admins: [role:secrets_admin]}
+ui: {allowed_origins: ['https://platform.example']}
+cors: {allowed_origins: ['https://notebook.example']}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := New(context.Background(), cfg, auth.NewVerifier(cfg.Issuers), memory.New(), slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithConsole(Console{UI: http.NotFoundHandler()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := srv.Handler()
+	call := func(method, path, origin string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Origin", origin)
+		if method == "OPTIONS" {
+			req.Header.Set("Access-Control-Request-Method", "PUT")
+			req.Header.Set("Access-Control-Request-Headers", "authorization, delegation, if-match")
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	allowed := func(w *httptest.ResponseRecorder, origin string) bool {
+		return w.Header().Get("Access-Control-Allow-Origin") == origin && w.Header().Get("Access-Control-Allow-Credentials") == ""
+	}
+	const page, host = "https://notebook.example", "https://platform.example"
+	// a page: discovery and /v1, preflight and request
+	if w := call("GET", "/.well-known/duckdb-secrets", page); w.Code != 200 || !allowed(w, page) {
+		t.Fatalf("discovery for a page: %d %v", w.Code, w.Header())
+	}
+	w := call("OPTIONS", "/v1/secrets/lake", page)
+	allowHeaders := w.Header().Get("Access-Control-Allow-Headers")
+	if w.Code != 204 || !allowed(w, page) || !strings.Contains(allowHeaders, "Delegation") || !strings.Contains(allowHeaders, "Accept") ||
+		!strings.Contains(allowHeaders, "If-None-Match") || !strings.Contains(w.Header().Get("Access-Control-Allow-Methods"), "PUT") {
+		t.Fatalf("a page's preflight: %d %v", w.Code, w.Header())
+	}
+	if w := call("GET", "/v1/secrets", page); !allowed(w, page) || !strings.Contains(w.Header().Get("Access-Control-Expose-Headers"), "ETag") {
+		t.Fatalf("a page's call: %d %v", w.Code, w.Header())
+	}
+	// a page: nothing of the console's
+	for _, p := range []string{"/admin/v1/service", "/ui/mfe/tresor.js"} {
+		if w := call("GET", p, page); w.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("%s for a page: %v", p, w.Header())
+		}
+	}
+	// the console's host: its own routes as before, not discovery
+	if w := call("GET", "/.well-known/duckdb-secrets", host); w.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("discovery for the console's host: %v", w.Header())
+	}
+	if w := call("GET", "/admin/v1/service", host); !allowed(w, host) {
+		t.Fatalf("the console's host on /admin/v1: %v", w.Header())
+	}
+	// another origin: nothing anywhere
+	for _, p := range []string{"/.well-known/duckdb-secrets", "/v1/secrets"} {
+		if w := call("GET", p, "https://evil.example"); w.Header().Get("Access-Control-Allow-Origin") != "" || !strings.Contains(w.Header().Get("Vary"), "Origin") {
+			t.Fatalf("%s for another origin: %v", p, w.Header())
+		}
+	}
+	// the setting's refusals: an origin exactly, https (http only to this machine), no wildcard, no path
+	for _, bad := range []string{"*", "https://*.example", "https://notebook.example/", "http://notebook.example", "notebook.example"} {
+		if _, err := config.Parse([]byte(strings.Replace(`
+listen: 127.0.0.1:0
+public_url: http://127.0.0.1:8443
+state: {kind: memory}
+issuers: [{issuer: 'http://127.0.0.1:18080/realms/t', audience: duckdb-secrets}]
+policy: {admins: [role:secrets_admin]}
+cors: {allowed_origins: ['X']}
+`, "X", bad, 1))); err == nil || !strings.Contains(err.Error(), "cors.allowed_origins") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+}

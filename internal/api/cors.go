@@ -6,23 +6,29 @@ import (
 	"strings"
 )
 
-// cors lets the console, mounted as a microfrontend on a configured host (ui.allowed_origins, spec 010), load its
-// module and fonts (/ui/mfe/, GET only) and call /v1 and /admin/v1 with its bearer token. No cookie is ever sent or honoured; any other origin gets no CORS
-// header, so a browser keeps its pages from reading an answer.
-func cors(origins []string, next http.Handler) http.Handler {
+// cors answers browsers (tresor's protocol, Browsers; spec 022) for two lists of origins, each its own owner's
+// choice:
+//   - console: the hosts that mount the console as a microfrontend (ui.allowed_origins, spec 010) - its module and
+//     fonts (/ui/mfe/, GET only), /v1 and /admin/v1;
+//   - pages: web pages running tresor in DuckDB-wasm (cors.allowed_origins) - discovery and /v1.
+//
+// No cookie is ever sent or honoured, and no credentials allowed: the bearer token is the only credential. Any
+// other origin gets no CORS header, so a browser keeps its pages from reading an answer.
+func cors(console, pages []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		mfe := strings.HasPrefix(r.URL.Path, "/ui/mfe/")
-		api := strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/admin/v1/") || mfe
-		if api {
+		p := r.URL.Path
+		mfe := strings.HasPrefix(p, "/ui/mfe/")
+		v1 := strings.HasPrefix(p, "/v1/")
+		admin := strings.HasPrefix(p, "/admin/v1/")
+		discovery := p == "/.well-known/duckdb-secrets"
+		if mfe || v1 || admin || discovery {
 			w.Header().Add("Vary", "Origin") // an answer depends on it, whether or not this request sent one
 		}
-		if origin == "" || !api {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if !slices.Contains(origins, origin) {
-			if r.Method == http.MethodOptions {
+		allowed := origin != "" && ((slices.Contains(console, origin) && (mfe || v1 || admin)) ||
+			(slices.Contains(pages, origin) && (v1 || discovery)))
+		if !allowed {
+			if origin != "" && (mfe || v1 || admin || discovery) && r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent) // a preflight answered without permission: the browser refuses
 				return
 			}
@@ -38,7 +44,7 @@ func cors(origins []string, next http.Handler) http.Handler {
 		h.Set("Access-Control-Expose-Headers", "ETag, X-Request-Id")
 		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 			h.Set("Access-Control-Allow-Methods", "GET, PUT, PATCH, POST, DELETE")
-			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, If-Match, If-None-Match, traceparent")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Delegation, If-Match, If-None-Match, traceparent")
 			h.Set("Access-Control-Max-Age", "600")
 			w.WriteHeader(http.StatusNoContent)
 			return
