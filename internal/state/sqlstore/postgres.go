@@ -2,10 +2,13 @@ package sqlstore
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -41,8 +44,16 @@ func OpenPostgres(ctx context.Context, dsn string, login Login, maxOpen int, wra
 	}
 	// the password - an Entra token - goes over this connection: off this machine, only over TLS with the
 	// server's certificate checked (pgx's default, prefer, falls back to plain text; require checks nothing)
-	if !config.IsLoopback(cfg.Host) && sslMode(dsn) != "verify-full" {
-		return nil, errors.New("state.dsn: sslmode=verify-full is required for a server off this machine")
+	if sslMode(dsn) != "verify-full" {
+		// every host the DSN names: pgx falls back to the next one, and the token goes with it
+		for _, host := range hostsOf(cfg) {
+			if !config.IsLoopback(host) {
+				return nil, errors.New("state.dsn: sslmode=verify-full is required for a server off this machine")
+			}
+		}
+	}
+	for _, tc := range tlsConfigs(cfg) {
+		fqdnTolerant(tc)
 	}
 	if cfg.ConnectTimeout == 0 {
 		cfg.ConnectTimeout = 10 * time.Second
@@ -71,4 +82,71 @@ func OpenPostgres(ctx context.Context, dsn string, login Login, maxOpen int, wra
 		return nil, fmt.Errorf("state: %w", err)
 	}
 	return s, nil
+}
+
+// tlsConfigs are the TLS configurations a connection may use: the DSN's, and its fallbacks'.
+func tlsConfigs(cfg *pgx.ConnConfig) []*tls.Config {
+	out := []*tls.Config{}
+	if cfg.TLSConfig != nil {
+		out = append(out, cfg.TLSConfig)
+	}
+	for _, f := range cfg.Fallbacks {
+		if f.TLSConfig != nil && f.TLSConfig != cfg.TLSConfig {
+			out = append(out, f.TLSConfig)
+		}
+	}
+	return out
+}
+
+// fqdnTolerant verifies a verify-full connection as Go does, but matches the server's name to a certificate's DNS
+// name written as an absolute one, with a trailing dot: Cloud SQL's certificates from a Google-managed CA name the
+// instance so ("….sql.goog."), which Go's own hostname check never matches. The chain is checked against the same
+// roots; only the dot is set aside - the same name, not a looser one.
+//
+// pgx builds verify-full as a config that verifies (InsecureSkipVerify false) and names the host; every other mode
+// skips Go's check and verifies its own way, or not at all - left as it is. Should pgx change that, nothing is
+// replaced: Go's own check stays, failing closed on the dotted name.
+func fqdnTolerant(tc *tls.Config) {
+	if tc.InsecureSkipVerify || tc.ServerName == "" || tc.VerifyConnection != nil {
+		return // not verify-full, or verified already
+	}
+	name, roots, now := tc.ServerName, tc.RootCAs, tc.Time
+	tc.InsecureSkipVerify = true // replaced by VerifyConnection below, which checks the chain and the name
+	tc.VerifyConnection = func(cs tls.ConnectionState) error {
+		at := time.Time{}
+		if now != nil {
+			at = now()
+		}
+		return verifyFQDN(cs.PeerCertificates, roots, name, at)
+	}
+}
+
+// hostsOf are the hosts a DSN names: the first, and its fallbacks'.
+func hostsOf(cfg *pgx.ConnConfig) []string {
+	hosts := []string{cfg.Host}
+	for _, f := range cfg.Fallbacks {
+		hosts = append(hosts, f.Host)
+	}
+	return hosts
+}
+
+// verifyFQDN checks a server's chain against roots (nil: the system's), and that its leaf names name - a DNS name
+// with a trailing dot counting as the same name.
+func verifyFQDN(certs []*x509.Certificate, roots *x509.CertPool, name string, at time.Time) error {
+	if len(certs) == 0 {
+		return errors.New("tls: the server sent no certificate")
+	}
+	opts := x509.VerifyOptions{Roots: roots, Intermediates: x509.NewCertPool(), CurrentTime: at} // server auth by default
+	for _, c := range certs[1:] {
+		opts.Intermediates.AddCert(c)
+	}
+	if _, err := certs[0].Verify(opts); err != nil {
+		return err
+	}
+	leaf := *certs[0]
+	leaf.DNSNames = make([]string, len(certs[0].DNSNames))
+	for i, n := range certs[0].DNSNames {
+		leaf.DNSNames[i] = strings.TrimSuffix(n, ".")
+	}
+	return leaf.VerifyHostname(name)
 }

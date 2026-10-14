@@ -96,6 +96,28 @@ state:
   (`roles/cloudsql.client` is for the connector and the Auth Proxy, not used here.)
 - TLS with `verify-full` needs a server certificate naming the host: give the instance a DNS name (a
   Google-managed CA, `GOOGLE_MANAGED_CAS_CA`) and connect to it. The Cloud SQL connector is not used.
+  - The certificate names the instance as an absolute name, with a trailing dot (`….sql.goog.`): the service
+    matches it as the same name (Go's own check would not).
+  - The DNS name resolves only through a **private Cloud DNS zone of your own** in the VPC the service runs in:
+    a zone for the instance's DNS name, an A record to the address the service reaches it at. Cloud SQL makes
+    none.
+  - `sslrootcert` is the instance's CA and the next one, so that a CA rotation keeps working
+    (`gcloud sql ssl server-ca-certs list --instance <instance> --format 'value(cert)'`), mounted as a file.
+- The user owns the database: an IAM user has no rights on a database it did not make. Once, as `postgres`:
+  `GRANT "<user>" TO postgres; ALTER DATABASE tresor OWNER TO "<user>";` - then set a new `postgres` password,
+  kept by no one.
+
+### The network: no public address
+
+The instance is reached on a private address, never a public IP open to the internet:
+
+- **Private Service Connect** (recommended): the instance with PSC enabled and no public IP; a PSC endpoint (an
+  internal address in the service's subnet); the private zone's A record to it.
+- **A private IP** by Private Services Access (the VPC peered with Google's): the private zone's A record to it.
+- **GKE**: the cluster's VPC is the one the zone and the address are in. **Cloud Run**: Direct VPC egress to that
+  subnet (private ranges).
+- A public IP with authorized networks is for a trial at most: the token is the only lock. The live run
+  (spec 012, `scripts/dev/gke_live.sh`) opened one for an hour, in a project deleted after.
 
 ## Token exchange: the assertion signed in Cloud KMS
 
