@@ -16,8 +16,8 @@ command run with `aws ecs run-task` (spec 019). The same structure and README as
 
 - **No recipe**: an AWS user wires two KMS keys and their grants, a task role, RDS IAM authentication and its
   database user, the RDS CA for `verify-full`, private networking and a load balancer by hand.
-- **The network**: tasks in private subnets need KMS, Secrets Manager, ECR, CloudWatch Logs and STS - through a
-  NAT gateway, or VPC endpoints.
+- **The network**: tasks in private subnets need the internet - the identity providers' discovery and signing
+  keys, the image - so a NAT gateway; KMS, Secrets Manager, Logs and STS through it, or VPC endpoints besides.
 - **The HTTPS address**: unlike Container Apps and Cloud Run, ECS gives none: a load balancer and a certificate
   for a domain the user controls.
 
@@ -25,8 +25,7 @@ command run with `aws ecs run-task` (spec 019). The same structure and README as
 
 ### The module
 
-`deploy/aws-ecs/` - `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`, `README.md`, `examples/`. Providers:
-`hashicorp/aws`, `hashicorp/random`; the AWS CLI where Terraform runs (the `db-init` task, as spec 020's job).
+`deploy/aws-ecs/` - `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`, `README.md`, `examples/`. Providers: `hashicorp/aws`, `hashicorp/http` (the RDS CA bundle); the AWS CLI where Terraform runs (the `db-init` task, as spec 020's job).
 
 | Input | Default | |
 | --- | --- | --- |
@@ -35,8 +34,8 @@ command run with `aws ecs run-task` (spec 019). The same structure and README as
 | `vpc_id`, `private_subnet_ids`, `public_subnet_ids` | (none: made) | an existing VPC; none - a VPC of the recipe's own, two AZs |
 | `domain`, `certificate_arn` | (required: domain) | the service's `public_url`; a certificate in ACM (none: one made and DNS-validated in `route53_zone_id`) |
 | `route53_zone_id` | (none) | an alias record for the load balancer, and the certificate's validation |
-| `egress` | `endpoints` | `endpoints`: interface endpoints for KMS, Secrets Manager, ECR (api, dkr), Logs, STS and an S3 gateway endpoint; `nat`: a NAT gateway instead |
-| `image` | ghcr.io's, by an ECR pull-through cache | Fargate pulls from public registries too, but the cache keeps tasks off the internet with `endpoints` |
+| `vpc_endpoints` | `false` | interface endpoints for KMS, Secrets Manager, STS, Logs, ECR and an S3 gateway endpoint, beside the NAT |
+| `image` | ghcr.io's | pulled through the NAT |
 | `issuers`, `admins`, `actors`, `material_allow` | | as the other recipes |
 | `desired_count` | 2 | |
 | `db_instance_class` | `db.t4g.micro` | |
@@ -52,9 +51,9 @@ command run with `aws ecs run-task` (spec 019). The same structure and README as
   not rotated). Key policies naming the task role; deletion window 30 days.
 - **RDS**: PostgreSQL 16, `iam_database_authentication_enabled`, `rds.force_ssl`, in the private subnets, **not
   publicly accessible**, a security group admitting only the service's; encrypted storage, backups. The DSN to the instance's endpoint with `sslmode=verify-full` and the RDS CA bundle, which no
-  system trust store holds: Fargate mounts no secret as a file, so a non-essential init container writes the bundle
-  (from an SSM parameter the recipe fills with AWS's published bundle) to a shared ephemeral volume, and the
-  service's container starts once it has (`dependsOn: SUCCESS`).
+  system trust store holds: Fargate mounts no file, so a non-essential init container writes the region's bundle
+  (AWS's published one, public data, in its environment) to a shared ephemeral volume, and the service's container
+  starts once it has (`dependsOn: SUCCESS`).
 - **The database user and its ownership**: an IAM user in PostgreSQL is a role granted `rds_iam`; the master user
   (its password in Secrets Manager, RDS-managed: `manage_master_user_password`) creates it once - `CREATE ROLE
   "<user>" LOGIN; GRANT rds_iam TO "<user>"; ALTER DATABASE tresor OWNER TO "<user>";` - in a one-time
@@ -97,8 +96,8 @@ recipe) at the end, with the owner's yes: an account and its credentials (the AW
 
 - **App Runner**: it throttles an idle instance's CPU; the service works in the background. Rejected.
 - **CloudFormation or CDK**: AWS's own, but a second tool beside spec 020's Terraform. Rejected for one tool.
-- **A NAT gateway by default**: simpler, ~$32 a month per AZ, and the tasks' traffic to AWS APIs leaves the VPC.
-  An option, not the default.
+- **VPC endpoints instead of a NAT** (found writing it): the service must reach its identity providers on the
+  internet, so a NAT (or a proxy) stays; endpoints are an option beside it.
 - **A task definition per command**: `run-task` overrides the command; one definition is enough.
 
 ## Open questions

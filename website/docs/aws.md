@@ -14,6 +14,19 @@ On AWS (spec 012) the service uses, each optional:
 Every call is made with the platform's identity: no static key of the service's own. CI tests the service's
 wiring against moto (an AWS emulator).
 
+## Deploy on ECS: the recipe
+
+[`deploy/aws-ecs`](https://github.com/hugr-lab/tresor-server/tree/main/deploy/aws-ecs) (Terraform, spec 021)
+makes all of the below in an account: the service on ECS Fargate behind an HTTPS load balancer (a certificate in
+ACM for a domain of yours), its task role the only identity, the KEK in two KMS keys, references in Secrets
+Manager within an allowlist, PostgreSQL on RDS by IAM in private subnets with no public access (`verify-full` to
+the RDS CA), and a task definition the commands run with. Its README says what to change for production. On EKS,
+the chart does the same with IRSA or EKS Pod Identity.
+
+- **The network**: the tasks and the database in private subnets, the load balancer the only public endpoint. A
+  NAT gateway is needed - the service reaches its identity providers on the internet; VPC endpoints keep the
+  traffic to AWS's own services inside the VPC besides.
+
 ## The identity
 
 ```yaml

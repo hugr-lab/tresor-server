@@ -134,6 +134,19 @@ gcloud run jobs executions list --job tresor-reseal --region europe-west1
 
 Their logs go to Cloud Logging. No retry, an hour's timeout.
 
+## ECS (the AWS recipe)
+
+One task definition, `<prefix>-command`, with the service's image, role, settings and network; the command is
+given at the run:
+
+```sh
+aws ecs run-task --cluster tresor --launch-type FARGATE --task-definition tresor-command \
+  --network-configuration "awsvpcConfiguration={subnets=[<private subnets>],securityGroups=[<task security group>],assignPublicIp=DISABLED}" \
+  --overrides '{"containerOverrides":[{"name":"tresor","command":["reseal","-retire"]}]}'
+```
+
+The recipe's outputs name the subnets and the security group. Its log goes to CloudWatch Logs, `/ecs/<prefix>`.
+
 ## Docker
 
 The service's image, tag and settings: the same environment, the same mounted configuration and volumes, the same

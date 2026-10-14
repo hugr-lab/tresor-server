@@ -168,7 +168,7 @@ jobs:
           az bicep build -f deploy/azure-container-apps/main.bicep --stdout >/dev/null 2>bicep.log || { cat bicep.log; exit 1; }
           if grep -q Warning bicep.log; then cat bicep.log; exit 1; fi
 
-  # the GCP recipe (spec 020): formatted and valid, with no cloud and no credentials
+  # the GCP and AWS recipes (specs 020, 021): formatted and valid, with no cloud and no credentials
   terraform:
     name: Terraform
     runs-on: ubuntu-24.04
@@ -177,11 +177,10 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with: {terraform_version: 1.12.2, terraform_wrapper: false}
       - name: terraform fmt, validate
-        working-directory: deploy/gcp-cloud-run
         run: |
-          terraform fmt -check -recursive -diff
-          terraform init -backend=false -input=false
-          terraform validate
+          for m in deploy/gcp-cloud-run deploy/aws-ecs; do
+            (cd "$m" && terraform fmt -check -recursive -diff && terraform init -backend=false -input=false && terraform validate)
+          done
 
   # tresor at the pinned commit, built on a cache miss only (a new pin): its own workflow, so a change here
   # does not rebuild it
