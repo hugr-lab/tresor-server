@@ -32,7 +32,7 @@ variable "public_subnet_ids" {
 }
 
 variable "vpc_endpoints" {
-  description = "Interface endpoints for KMS, Secrets Manager, STS, CloudWatch Logs and ECR, and an S3 gateway endpoint: the tasks' traffic to AWS stays in the VPC (~$7 a month per endpoint and AZ). The NAT stays for the IdP."
+  description = "Interface endpoints for KMS, Secrets Manager and CloudWatch Logs: the tasks' traffic to them stays in the VPC (~$7 a month per endpoint and AZ). The NAT stays for the IdP and the images."
   type        = bool
   default     = false
 }
@@ -52,6 +52,10 @@ variable "certificate_arn" {
   description = "An issued ACM certificate for domain; empty: one made and validated in route53_zone_id."
   type        = string
   default     = ""
+  validation {
+    condition     = var.certificate_arn != "" || var.route53_zone_id != ""
+    error_message = "certificate_arn or route53_zone_id: the HTTPS listener needs a certificate - one issued, or one the recipe validates in the zone."
+  }
 }
 
 variable "image" {
@@ -80,6 +84,10 @@ variable "material_prefixes" {
   description = "Secrets Manager name prefixes ref+aws may read in this account and region (material.aws.allow)."
   type        = list(string)
   default     = ["duckdb/"]
+  validation {
+    condition     = length(var.material_prefixes) > 0 && alltrue([for p in var.material_prefixes : p != ""])
+    error_message = "material_prefixes: at least one, none empty - the service reads no more than these."
+  }
 }
 
 variable "desired_count" {

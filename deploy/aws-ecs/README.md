@@ -10,9 +10,9 @@ too.
 | | |
 | --- | --- |
 | **The task role** `<prefix>-task` | no key: `kms:Encrypt`/`Decrypt`/`DescribeKey` on the KEK, `kms:GenerateMac` on the MAC key (the service's alone), `secretsmanager:GetSecretValue` on `material_prefixes`, `rds-db:connect` on its database user |
-| **KMS** | `<prefix>-kek` (symmetric, rotated yearly by KMS - its id stays, no `rewrap`), `<prefix>-root` (HMAC_256: the KEK's root, not rotated); a 30-day deletion window |
+| **KMS** | `<prefix>-kek` (symmetric, rotated yearly by KMS - its id stays, no `rewrap`), `<prefix>-root` (HMAC_256: the KEK's root, not rotated; its key policy lets the task role alone MAC); a 30-day deletion window |
 | **RDS** `<prefix>-pg` | PostgreSQL 16, IAM authentication, `rds.force_ssl`, private subnets, **not publicly accessible**, encrypted, backups; the master password kept and rotated by RDS in Secrets Manager - never in Terraform's state |
-| **The database's user** | `<prefix>_svc`, granted `rds_iam`, owning the database `tresor` - made once by the `db-init` task `apply` runs |
+| **The database's user** | `<prefix>_svc`, granted `rds_iam`, owning the database `tresor` - made once by the `db-init` task `apply` runs, with an execution role of its own (the only one reading the master password); `state.mac: true` - every row authenticated |
 | **ECS** | a cluster, the service (Fargate, private subnets, no public IP), an init container writing the RDS CA (no trust store holds it) to a volume the service reads for `verify-full` |
 | **HTTPS** | an Application Load Balancer (TLS 1.2/1.3, HTTP redirected), an ACM certificate validated in `route53_zone_id`, an alias for `domain` |
 | **The commands** | a task definition `<prefix>-command`, run with `aws ecs run-task` (below) |
@@ -41,7 +41,7 @@ terraform output url
 ## Run a command
 
 ```sh
-aws ecs run-task --cluster tresor --launch-type FARGATE --task-definition tresor-command \
+aws ecs run-task --region <region> --cluster tresor --launch-type FARGATE --task-definition tresor-command \
   --network-configuration "awsvpcConfiguration={subnets=[<private subnets>],securityGroups=[<task_security_group>],assignPublicIp=DISABLED}" \
   --overrides '{"containerOverrides":[{"name":"tresor","command":["reseal","-retire"]}]}'
 ```
@@ -55,14 +55,18 @@ platform's operators only (the Administration pages).
 
 - The tasks and the database live in private subnets; the load balancer is the only public endpoint.
 - **A NAT gateway is needed** whatever else: the service reaches its identity providers (discovery, signing keys)
-  and pulls its image on the internet. `vpc_endpoints = true` keeps the traffic to KMS, Secrets Manager, STS,
-  Logs and ECR inside the VPC besides.
+  and pulls its image on the internet. `vpc_endpoints = true` keeps the traffic to KMS, Secrets Manager and Logs
+  inside the VPC besides.
 - One NAT gateway, in one AZ: a trial's. For production, one per AZ (edit `main.tf`), or your own VPC.
 
 ## For production
 
 - `desired_count` ≥ 2, `db_instance_class` bigger, `multi_az = true` on the database (in `main.tf`).
 - Deletion protection stays on (the database, the load balancer).
+- **The master user** stays an operator's break-glass login (its password RDS's, in Secrets Manager): who reads
+  that secret can write the database's rows - not forge them (`state.mac`). Keep `secretsmanager:GetSecretValue`
+  on it to the few.
+- `apply` waits for the service to be healthy, and rolls a failed deployment back.
 - **Keep the KMS keys**: without them the database's material never opens. A destroy schedules their deletion
   (30 days); cancel it (`aws kms cancel-key-deletion`) if it was a mistake.
 - The image: a version (`image`), never `edge`.

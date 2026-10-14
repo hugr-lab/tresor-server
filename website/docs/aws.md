@@ -21,7 +21,7 @@ makes all of the below in an account: the service on ECS Fargate behind an HTTPS
 ACM for a domain of yours), its task role the only identity, the KEK in two KMS keys, references in Secrets
 Manager within an allowlist, PostgreSQL on RDS by IAM in private subnets with no public access (`verify-full` to
 the RDS CA), and a task definition the commands run with. Its README says what to change for production. On EKS,
-the chart does the same with IRSA or EKS Pod Identity.
+the chart runs the service with IRSA or EKS Pod Identity; the keys, the database and the network are yours.
 
 - **The network**: the tasks and the database in private subnets, the load balancer the only public endpoint. A
   NAT gateway is needed - the service reaches its identity providers on the internet; VPC endpoints keep the

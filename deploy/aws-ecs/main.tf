@@ -6,6 +6,10 @@ data "aws_caller_identity" "this" {}
 data "aws_partition" "this" {}
 data "aws_availability_zones" "up" {
   state = "available"
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"] # no Local Zone
+  }
 }
 
 locals {
@@ -22,13 +26,15 @@ locals {
   db_admin = "${replace(local.name, "-", "_")}_admin"
   # the service's settings: the service's and the commands' task, one identity and one configuration
   env = {
-    TRESOR_LISTEN               = "0.0.0.0:8080"
-    TRESOR_PUBLIC_URL           = "https://${var.domain}"
-    TRESOR_TLS__OFFLOAD         = "true"
-    TRESOR_AWS__REGION          = var.region
-    TRESOR_STATE__KIND          = "postgres"
-    TRESOR_STATE__DSN           = "host=${aws_db_instance.db.address} port=${aws_db_instance.db.port} user=${local.db_user} dbname=tresor sslmode=verify-full sslrootcert=/ca/rds.pem"
-    TRESOR_STATE__AUTH          = "aws"
+    TRESOR_LISTEN       = "0.0.0.0:8080"
+    TRESOR_PUBLIC_URL   = "https://${var.domain}"
+    TRESOR_TLS__OFFLOAD = "true"
+    TRESOR_AWS__REGION  = var.region
+    TRESOR_STATE__KIND  = "postgres"
+    TRESOR_STATE__DSN   = "host=${aws_db_instance.db.address} port=${aws_db_instance.db.port} user=${local.db_user} dbname=tresor sslmode=verify-full sslrootcert=/ca/rds.pem"
+    TRESOR_STATE__AUTH  = "aws"
+    # spec 014: every row authenticated under the KEK - the master user can write rows, it cannot forge them
+    TRESOR_STATE__MAC           = "true"
     TRESOR_KEYS__KIND           = "awskms"
     TRESOR_KEYS__KEY            = aws_kms_key.kek.arn
     TRESOR_KEYS__MAC_KEY        = aws_kms_key.root.arn
@@ -131,21 +137,13 @@ resource "aws_security_group" "endpoints" {
 }
 
 resource "aws_vpc_endpoint" "interface" {
-  for_each            = var.vpc_endpoints ? toset(["kms", "secretsmanager", "sts", "logs", "ecr.api", "ecr.dkr"]) : toset([])
+  for_each            = var.vpc_endpoints ? toset(["kms", "secretsmanager", "logs"]) : toset([])
   vpc_id              = local.vpc_id
   service_name        = "com.amazonaws.${var.region}.${each.value}"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = local.private
   security_group_ids  = [aws_security_group.endpoints[0].id]
   private_dns_enabled = true
-}
-
-resource "aws_vpc_endpoint" "s3" {
-  count             = var.vpc_endpoints && local.own_vpc ? 1 : 0
-  vpc_id            = local.vpc_id
-  service_name      = "com.amazonaws.${var.region}.s3"
-  vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.private[0].id]
 }
 
 # --- security groups: the load balancer from the internet, the tasks from it, the database from the tasks -----
@@ -215,6 +213,26 @@ resource "aws_kms_key" "root" {
   key_usage                = "GENERATE_VERIFY_MAC"
   customer_master_key_spec = "HMAC_256"
   deletion_window_in_days  = 30
+  # GenerateMac the task role's alone: the account administers the key, it does not MAC with it
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "TheAccountAdministers"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:${local.arn}:iam::${local.account}:root" }
+        NotAction = ["kms:GenerateMac", "kms:VerifyMac"]
+        Resource  = "*"
+      },
+      {
+        Sid       = "TheServiceMACs"
+        Effect    = "Allow"
+        Principal = { AWS = aws_iam_role.task.arn }
+        Action    = ["kms:GenerateMac"]
+        Resource  = "*"
+      },
+    ]
+  })
 }
 
 resource "aws_kms_alias" "kek" {
@@ -250,6 +268,7 @@ resource "aws_db_instance" "db" {
   instance_class                      = var.db_instance_class
   allocated_storage                   = 20
   storage_encrypted                   = true
+  storage_type                        = "gp3"
   db_name                             = "tresor"
   username                            = local.db_admin
   manage_master_user_password         = true # RDS keeps and rotates it in Secrets Manager: never in Terraform's state
@@ -268,6 +287,12 @@ resource "aws_db_instance" "db" {
 # the RDS CA, which no system trust store holds: public data, given to an init container that writes the file
 data "http" "rds_ca" {
   url = "https://truststore.pki.rds.amazonaws.com/${var.region}/${var.region}-bundle.pem"
+  lifecycle {
+    postcondition {
+      condition     = self.status_code == 200 && strcontains(self.response_body, "BEGIN CERTIFICATE")
+      error_message = "The RDS CA bundle for this region did not download: verify-full would refuse every connection."
+    }
+  }
 }
 
 # --- the roles: the task's (the service's identity) and the execution role (pulls, logs, the db-init secret) ---
@@ -283,19 +308,19 @@ data "aws_iam_policy_document" "tasks" {
 }
 
 resource "aws_iam_role" "task" {
-  name               = "${local.name}-task"
+  name               = "${local.name}-task-${var.region}"
   assume_role_policy = data.aws_iam_policy_document.tasks.json
 }
 
 data "aws_iam_policy_document" "task" {
   statement {
     sid       = "TheKEK"
-    actions   = ["kms:Encrypt", "kms:Decrypt", "kms:DescribeKey"]
+    actions   = ["kms:Encrypt", "kms:Decrypt"]
     resources = [aws_kms_key.kek.arn]
   }
   statement {
     sid       = "TheRoot" # the service's alone: who can wrap and MAC can plant a data key
-    actions   = ["kms:GenerateMac", "kms:DescribeKey"]
+    actions   = ["kms:GenerateMac"]
     resources = [aws_kms_key.root.arn]
   }
   statement {
@@ -317,7 +342,7 @@ resource "aws_iam_role_policy" "task" {
 }
 
 resource "aws_iam_role" "execution" {
-  name               = "${local.name}-execution"
+  name               = "${local.name}-execution-${var.region}"
   assume_role_policy = data.aws_iam_policy_document.tasks.json
 }
 
@@ -326,10 +351,21 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:${local.arn}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# db-init's: the master password, read by ECS into that one task's environment
-resource "aws_iam_role_policy" "execution" {
-  name = "db-init"
-  role = aws_iam_role.execution.id
+# db-init's own execution role: the master password, read by ECS into that one task's environment - the
+# service's and the commands' execution role never reads it
+resource "aws_iam_role" "db_init" {
+  name               = "${local.name}-db-init-${var.region}"
+  assume_role_policy = data.aws_iam_policy_document.tasks.json
+}
+
+resource "aws_iam_role_policy_attachment" "db_init" {
+  role       = aws_iam_role.db_init.name
+  policy_arn = "arn:${local.arn}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_iam_role_policy" "db_init" {
+  name = "master-password"
+  role = aws_iam_role.db_init.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -417,7 +453,7 @@ resource "aws_ecs_task_definition" "db_init" {
   network_mode             = "awsvpc"
   cpu                      = 256
   memory                   = 512
-  execution_role_arn       = aws_iam_role.execution.arn
+  execution_role_arn       = aws_iam_role.db_init.arn
   volume {
     name = "ca"
   }
@@ -459,7 +495,9 @@ resource "terraform_data" "db_init" {
       exit 1
     EOT
   }
-  depends_on = [aws_iam_role_policy.execution, aws_iam_role_policy_attachment.execution]
+  # the images come through the NAT: the private subnets' route to it first
+  depends_on = [aws_iam_role_policy.db_init, aws_iam_role_policy_attachment.db_init, aws_route_table_association.private,
+  aws_nat_gateway.nat, aws_vpc_endpoint.interface]
 }
 
 # --- HTTPS: a certificate, the load balancer, the name ---------------------------------------------------------
@@ -568,5 +606,10 @@ resource "aws_ecs_service" "svc" {
     container_port   = 8080
   }
   health_check_grace_period_seconds = 60
-  depends_on                        = [aws_lb_listener.https, terraform_data.db_init, aws_iam_role_policy.task]
+  wait_for_steady_state             = true # apply fails if the tasks never get healthy: the wiring's first test
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+  depends_on = [aws_lb_listener.https, terraform_data.db_init, aws_iam_role_policy.task]
 }

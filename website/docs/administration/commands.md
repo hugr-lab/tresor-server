@@ -140,7 +140,7 @@ One task definition, `<prefix>-command`, with the service's image, role, setting
 given at the run:
 
 ```sh
-aws ecs run-task --cluster tresor --launch-type FARGATE --task-definition tresor-command \
+aws ecs run-task --region <region> --cluster tresor --launch-type FARGATE --task-definition tresor-command \
   --network-configuration "awsvpcConfiguration={subnets=[<private subnets>],securityGroups=[<task security group>],assignPublicIp=DISABLED}" \
   --overrides '{"containerOverrides":[{"name":"tresor","command":["reseal","-retire"]}]}'
 ```
