@@ -14,6 +14,14 @@ On GCP (spec 012) the service uses, each optional:
 Every call is made with the platform's identity: no key of the service's own. The wiring is tested against fakes
 of the two APIs (no emulator exists for Cloud KMS or Secret Manager).
 
+## Deploy on Cloud Run: the recipe
+
+[`deploy/gcp-cloud-run`](https://github.com/hugr-lab/tresor-server/tree/main/deploy/gcp-cloud-run) (Terraform, spec
+020) makes all of the below in a project: the service on Cloud Run with its own account and no key, the KEK in
+Cloud KMS, references in Secret Manager within an allowlist, PostgreSQL in Cloud SQL by IAM over Private Service
+Connect with no public address, the private DNS zone for `verify-full`, and a Cloud Run job per command. Its
+README says what to change for production. On GKE, the chart does the same with Workload Identity.
+
 ## The identity
 
 Application Default Credentials, as the deployment has them:
