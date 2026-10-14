@@ -79,6 +79,19 @@ Anyone with the role then reads `s3://lake/...` with no secret of their own. tre
 [getting started](https://hugr-lab.github.io/tresor/getting-started/) goes on from here: people and
 services, servers acting for users, what DuckDB sees.
 
+## Web pages: tresor in DuckDB-wasm
+
+A page that runs DuckDB in the browser loads tresor there too, and calls the service across origins (tresor's
+protocol, *Browsers*). Name the page's origin:
+
+```yaml
+cors:
+  allowed_origins: [https://notebook.example]
+```
+
+The service then answers CORS on discovery and `/v1` for that page only ([Configuration](configuration.md#cors)).
+The page signs in at the IdP itself (tresor's `tresor_web_login`): register its origin with the IdP's SPA client.
+
 ## Next
 
 - [State stores](state.md): PostgreSQL or SQL Server, for several replicas.

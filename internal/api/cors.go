@@ -43,6 +43,8 @@ func cors(console, pages []string, next http.Handler) http.Handler {
 		}
 		h.Set("Access-Control-Expose-Headers", "ETag, X-Request-Id")
 		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+			h.Add("Vary", "Access-Control-Request-Method")
+			h.Add("Vary", "Access-Control-Request-Headers")
 			h.Set("Access-Control-Allow-Methods", "GET, PUT, PATCH, POST, DELETE")
 			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Delegation, If-Match, If-None-Match, traceparent")
 			h.Set("Access-Control-Max-Age", "600")

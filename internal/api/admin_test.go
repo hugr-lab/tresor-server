@@ -425,6 +425,38 @@ cors: {allowed_origins: ['https://notebook.example']}
 			t.Fatalf("%s for another origin: %v", p, w.Header())
 		}
 	}
+	if w := call("OPTIONS", "/v1/secrets/lake", page); !strings.Contains(strings.Join(w.Header().Values("Vary"), ","), "Origin") ||
+		!strings.Contains(strings.Join(w.Header().Values("Vary"), ","), "Access-Control-Request-Headers") {
+		t.Fatalf("a preflight's Vary: %v", w.Header())
+	}
+	if w := call("OPTIONS", "/v1/secrets/lake", host); w.Code != 204 || !allowed(w, host) || !strings.Contains(w.Header().Get("Access-Control-Allow-Methods"), "PUT") {
+		t.Fatalf("the console's host's preflight on /v1: %d %v", w.Code, w.Header())
+	}
+	// under a base path (public_url's path): the paths as the routes see them
+	based, err := config.Parse([]byte(strings.Replace(strings.Replace(`
+listen: 127.0.0.1:0
+public_url: http://127.0.0.1:8443/secrets
+state: {kind: memory}
+issuers: [{issuer: 'http://127.0.0.1:18080/realms/t', audience: duckdb-secrets}]
+policy: {admins: [role:secrets_admin]}
+cors: {allowed_origins: ['PAGE']}
+`, "PAGE", page, 1), "\t", "", -1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bsrv, err := New(context.Background(), based, auth.NewVerifier(based.Issuers), memory.New(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"/secrets/.well-known/duckdb-secrets", "/secrets/v1/secrets"} {
+		req := httptest.NewRequest("GET", p, nil)
+		req.Header.Set("Origin", page)
+		w := httptest.NewRecorder()
+		bsrv.Handler().ServeHTTP(w, req)
+		if !allowed(w, page) {
+			t.Fatalf("%s under a base path: %d %v", p, w.Code, w.Header())
+		}
+	}
 	// the setting's refusals: an origin exactly, https (http only to this machine), no wildcard, no path
 	for _, bad := range []string{"*", "https://*.example", "https://notebook.example/", "http://notebook.example", "notebook.example"} {
 		if _, err := config.Parse([]byte(strings.Replace(`
