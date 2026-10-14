@@ -737,8 +737,20 @@ func TestExchangeGrant(t *testing.T) {
 func TestStateMAC(t *testing.T) {
 	sqlite := strings.Replace(good, "state: {kind: memory}", "state: {kind: sqlite, path: /data/tresor.db, mac: true}", 1) +
 		"keys: {kind: local, key_file: /k}\n"
-	if cfg, err := Parse([]byte(sqlite)); err != nil || !cfg.State.MAC {
+	if cfg, err := Parse([]byte(sqlite)); err != nil || !cfg.State.MACOn() {
 		t.Fatalf("sqlite: %v", err)
+	}
+	// on by default (spec 022), off when said; never for the stores that have none to check
+	plain := strings.Replace(good, "state: {kind: memory}", "state: {kind: sqlite, path: /data/tresor.db}", 1) + "keys: {kind: local, key_file: /k}\n"
+	if cfg, err := Parse([]byte(plain)); err != nil || !cfg.State.MACOn() {
+		t.Fatalf("sqlite by default: %v", err)
+	}
+	off := strings.Replace(plain, "path: /data/tresor.db}", "path: /data/tresor.db, mac: false}", 1)
+	if cfg, err := Parse([]byte(off)); err != nil || cfg.State.MACOn() {
+		t.Fatalf("sqlite, mac: false: %v", err)
+	}
+	if cfg, err := Parse([]byte(good)); err != nil || cfg.State.MACOn() {
+		t.Fatalf("memory: no MAC to check: %v", err)
 	}
 	for _, kind := range []string{"memory", "kubernetes, namespace: tresor"} {
 		doc := strings.Replace(good, "state: {kind: memory}", "state: {kind: "+kind+", mac: true}", 1) + "keys: {kind: local, key_file: /k}\n"

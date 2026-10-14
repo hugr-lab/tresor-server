@@ -276,3 +276,23 @@ func (s *Store) FillMACs(ctx context.Context) (filled, skipped int, err error) {
 	}
 	return filled, skipped, nil
 }
+
+// macsComplete refuses to serve, with the checks on, a database with rows that have no MAC (written before 0.2.0,
+// spec 014): each would be refused at its read - a start that stops with what to do is clearer (spec 022).
+func (s *Store) macsComplete(ctx context.Context) error {
+	if !s.checkMAC {
+		return nil
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, s.q(`SELECT
+		(SELECT COUNT(*) FROM secrets WHERE mac IS NULL) + (SELECT COUNT(*) FROM variables WHERE mac IS NULL) +
+		(SELECT COUNT(*) FROM delegations WHERE mac IS NULL) + (SELECT COUNT(*) FROM delegation_tokens WHERE mac IS NULL)`)).Scan(&n)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return fmt.Errorf("state.mac is on (the default since 0.4) and %d rows have no MAC (written before 0.2): run "+
+			"tresor-server mac -config ... once (spec 014), then start again - or set state.mac: false for now", n)
+	}
+	return nil
+}

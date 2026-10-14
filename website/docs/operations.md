@@ -48,7 +48,7 @@ Never logged: material, tokens, data keys, a grant's id, a configuration value.
 ## Upgrading
 
 Migrations run at start, one replica at a time; an older binary refuses a database a newer one migrated. The
-steps a version asks for (`rewrap -tag-untagged`, `mac` then `state.mac`): [Upgrading](administration/upgrading.md).
+steps a version asks for (`rewrap -tag-untagged`, `mac` for a database from before 0.2): [Upgrading](administration/upgrading.md).
 
 ## Checking references
 

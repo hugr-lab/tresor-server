@@ -19,7 +19,7 @@ tresor-server [rewrap | refs | mac | reseal] [flags] [-config <file>]
 | `rewrap` | wraps every data key under the KEK's current version, and off a `keys.previous` KEK ([The KEK](kek.md)) |
 | `rewrap -tag-untagged` | once, at the upgrade to authenticated data keys: tags the data keys that have none ([Upgrading](upgrading.md)) |
 | `refs` | lists the stored references the configuration would not admit; `-resolve` reads each one too ([Operations](../operations.md#checking-references)) |
-| `mac` | SQL stores: gives every row with no MAC, or a stale one, a MAC - once, before `state.mac: true` ([Upgrading](upgrading.md)) |
+| `mac` | SQL stores: gives every row with no MAC, or a stale one, a MAC - once, for a database from before 0.2 ([Upgrading](upgrading.md)) |
 | `reseal` | moves every row to the active data key; `-rotate` makes a new active one first; `-retire` then deletes the data keys nothing uses ([Data keys](data-keys.md)) |
 
 - The configuration comes from `-config <file>`, then `TRESOR_CONFIG`, then the `TRESOR_*` variables, as the

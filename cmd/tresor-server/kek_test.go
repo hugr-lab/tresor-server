@@ -101,7 +101,7 @@ func TestMoveToAnotherKEK(t *testing.T) {
 	}
 }
 
-// tresor-server mac (spec 014): rows written before get a MAC; then state.mac: true reads them, and refuses one
+// tresor-server mac (spec 014): rows written before get a MAC; then, the checks on (the default, spec 022), they read, and one is refused
 // changed behind the store
 func TestMACCommand(t *testing.T) {
 	dir := t.TempDir()
@@ -143,6 +143,13 @@ func TestMACCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw.Close()
+	// the checks on (the default since 0.4, spec 022): the start refuses, with what to do
+	if st, _, err := openState(ctx, write(true), log, false); err == nil || !strings.Contains(err.Error(), "tresor-server mac") {
+		if st != nil {
+			st.Close()
+		}
+		t.Fatalf("a start with a MAC-less row: %v", err)
+	}
 	if err := fillMACs(path, log); err != nil {
 		t.Fatal(err)
 	}

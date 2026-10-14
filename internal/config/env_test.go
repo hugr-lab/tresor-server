@@ -251,3 +251,21 @@ func TestEnvDurations(t *testing.T) {
 		t.Fatalf("%v %+v", err, cfg)
 	}
 }
+
+// TRESOR_STATE__MAC=false turns the checks off (spec 022: on by default); unset, on
+func TestEnvStateMAC(t *testing.T) {
+	setenv(t, "TRESOR_STATE__KIND=sqlite", "TRESOR_STATE__PATH=/data/t.db", "TRESOR_KEYS__KIND=local",
+		"TRESOR_KEYS__KEY_FILE=/k", "TRESOR_STATE__MAC=false")
+	cfg, _, err := loadEnv(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.State.MACOn() {
+		t.Fatal("TRESOR_STATE__MAC=false: the checks on")
+	}
+	t.Setenv("TRESOR_STATE__MAC", "")
+	os.Unsetenv("TRESOR_STATE__MAC")
+	if cfg, _, err = loadEnv(good); err != nil || !cfg.State.MACOn() {
+		t.Fatalf("unset: %v", err)
+	}
+}

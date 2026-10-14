@@ -72,8 +72,9 @@ type State struct {
 	PasswordRef  string `yaml:"password_ref"`
 	MaxOpenConns int    `yaml:"max_open_conns"`
 	// MAC checks every row's MAC on a SQL store (spec 014): who may use what cannot change without the KEK. The
-	// MAC is written always; tresor-server mac fills the rows written before.
-	MAC bool `yaml:"mac"`
+	// MAC is written always; tresor-server mac fills the rows written before. On by default (spec 022); false
+	// turns the checks off. MACOn says what applies.
+	MAC *bool `yaml:"mac"`
 	// Namespace is where the kubernetes store keeps its resources: the pod's own by default; outside a pod
 	// (KUBECONFIG) required.
 	Namespace string `yaml:"namespace"`
@@ -81,6 +82,12 @@ type State struct {
 	// Kept stable, so a restore still verifies.
 	Instance string `yaml:"instance"`
 }
+
+// SQL says whether the store is a SQL one (SQLite, PostgreSQL, SQL Server).
+func (s State) SQL() bool { return s.Kind == "sqlite" || s.Kind == "postgres" || s.Kind == "sqlserver" }
+
+// MACOn says whether a SQL store checks every row's MAC (spec 014): on unless state.mac is false (spec 022).
+func (s State) MACOn() bool { return s.SQL() && (s.MAC == nil || *s.MAC) }
 
 // Audit is what the audit records (spec 005): all (the default), changes (no successful read) or off.
 type Audit struct {
@@ -755,7 +762,7 @@ func (c *Config) validate() error {
 	if err := c.State.validateServer(c.Azure.Identity, c.AWS.Region != ""); err != nil {
 		return err
 	}
-	if c.State.MAC && c.State.Kind != "sqlite" && c.State.Kind != "postgres" && c.State.Kind != "sqlserver" {
+	if c.State.MAC != nil && *c.State.MAC && !c.State.SQL() {
 		return fmt.Errorf("state.mac is for the SQL stores: %s %s", c.State.Kind,
 			map[bool]string{true: "always has one (spec 003)", false: "keeps nothing at rest"}[c.State.Kind == "kubernetes"])
 	}

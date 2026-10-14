@@ -39,7 +39,7 @@ Transit key that does not answer at start, the CRDs not served, no identity inje
 
 ## Rows refused
 
-A row (a SQL store with `state.mac: true`) or a resource (the Kubernetes store) whose MAC does not verify is
+A row (a SQL store with the checks on, the default) or a resource (the Kubernetes store) whose MAC does not verify is
 refused: a read fails (`500` to an administrator, `404` to anyone else on the Kubernetes store), a list leaves it
 out, a delete passes. `tresor.state.left_out` counts them; the log names each.
 
@@ -48,7 +48,7 @@ out, a delete passes. `tresor.state.left_out` counts them; the log names each.
 - **From another installation**, or `state.instance` / the installation id changed: restore the right one
   ([Backup and restore](backup-restore.md)).
 - **A SQL row with no MAC** (written by an older replica): `mac`, once every replica runs the new version
-  ([Upgrading](upgrading.md#the-sql-stores-mac-spec-014)).
+  ([Upgrading](upgrading.md#the-sql-stores-mac-spec-014-on-by-default-since-04)).
 - **With `state.mac` off**, a row that does not verify is served, logged and counted.
 
 ## The SQLite store held
