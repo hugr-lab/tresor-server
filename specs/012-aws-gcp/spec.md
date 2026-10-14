@@ -1,6 +1,6 @@
 # Spec 012: AWS and GCP - KMS as the KEK, their secret stores as sources, no static secret
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-06
 - **Author**: hugr lab
 
@@ -131,7 +131,9 @@ keys:
     Identity, the KEK in Cloud KMS, `ref+gcp`, Cloud SQL by IAM over `verify-full`, the chart's jobs. It found that
     Cloud SQL's certificates name the instance with a trailing dot, which Go's hostname check never matches: the
     PostgreSQL store now matches it as the same name; and that the instance's DNS name needs a private zone.
-  - AWS: at the end.
+  - **AWS: done 2026-10-14** (`scripts/dev/eks_live.sh`, deleted after): EKS by IRSA, the Kubernetes store, the KEK
+    in KMS (an encrypt key and an HMAC key), `ref+aws` in Secrets Manager, the chart's jobs; RDS by IAM over
+    `verify-full` in the ECS recipe's run (spec 021). Nothing to fix.
 
 ## Alternatives considered
 

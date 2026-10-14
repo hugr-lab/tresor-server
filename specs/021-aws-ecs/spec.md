@@ -1,6 +1,6 @@
 # Spec 021: an AWS recipe - ECS on Fargate, RDS by IAM in private subnets, in Terraform
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-14
 - **Author**: hugr lab
 
@@ -77,6 +77,15 @@ endpoints or NAT); `administration/commands.md`: `aws ecs run-task`.
 
 `terraform fmt -check`, `validate` beside spec 020's. The live run (EKS for spec 012 with the chart, and this
 recipe) at the end, with the owner's yes: an account and its credentials (the AWS CLI is not set up here yet).
+
+### The live run (2026-10-14)
+
+`scripts/dev/ecs_live.sh` in the owner's account, at `tresor.aws.hugr-lab.com` (a subdomain of `hugr-lab.com`
+delegated from Cloudflare to a Route 53 zone): `apply` made 46 resources, the certificate validated in about two
+minutes; the service ready (`state` - RDS by IAM over `verify-full` to the init container's CA, `keys` - KMS, the
+Entra issuer); through the URL with the node app's token, a secret with a `ref+aws` resolved in Secrets Manager and a
+variable; `mac`, `reseal -rotate -retire` and `rewrap` by `run-task`, each exit 0; `destroy` after. Passed the first
+time.
 
 ## Enforcement & security
 

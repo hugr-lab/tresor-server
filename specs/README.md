@@ -25,7 +25,7 @@ Research lives in the local, gitignored `design/` folder.
 | [009](009-refs-command/spec.md) | `tresor-server refs`: the stored references the configuration would not resolve | implemented |
 | [010](010-console/spec.md) | the management console: /ui/, /admin/v1, a microfrontend for the hugr platform | implemented |
 | [011](011-kek-migration/spec.md) | moving to another KEK: `keys.previous` (read only), then `rewrap` | implemented |
-| [012](012-aws-gcp/spec.md) | phase 4 - AWS and GCP: KMS as the KEK, Secrets Manager and Secret Manager as sources, no static secret | accepted |
+| [012](012-aws-gcp/spec.md) | phase 4 - AWS and GCP: KMS as the KEK, Secrets Manager and Secret Manager as sources, no static secret | implemented |
 | [013](013-entra-on-behalf-of/spec.md) | Entra On-Behalf-Of for `token_exchange` secrets: `exchange.grant: on_behalf_of` | implemented |
 | [014](014-sql-mac/spec.md) | a MAC on the SQL stores: `state.mac`, who may use what authenticated | implemented |
 | [015](015-policy-package/spec.md) | `internal/policy`: the permission model in a package of its own (a refactor) | implemented |
@@ -34,4 +34,4 @@ Research lives in the local, gitignored `design/` folder.
 | [018](018-reseal/spec.md) | `tresor-server reseal`: every row moved to the active data key, old data keys retired | implemented |
 | [019](019-administration/spec.md) | administration: the commands as jobs, the runbooks, the data keys in view | implemented |
 | [020](020-gcp-cloud-run/spec.md) | a GCP recipe: Cloud Run, Cloud SQL by Private Service Connect, in Terraform | implemented |
-| [021](021-aws-ecs/spec.md) | an AWS recipe: ECS on Fargate, RDS by IAM in private subnets, in Terraform | accepted |
+| [021](021-aws-ecs/spec.md) | an AWS recipe: ECS on Fargate, RDS by IAM in private subnets, in Terraform | implemented |
