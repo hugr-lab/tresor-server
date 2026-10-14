@@ -188,8 +188,9 @@ resource "google_sql_database_instance" "db" {
 }
 
 resource "google_sql_database" "tresor" {
-  name     = "tresor"
-  instance = google_sql_database_instance.db.name
+  name            = "tresor"
+  instance        = google_sql_database_instance.db.name
+  deletion_policy = "ABANDON" # owned by the service's IAM user: Cloud SQL refuses to drop it; it goes with the instance
 }
 
 resource "google_sql_user" "svc" {

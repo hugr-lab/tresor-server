@@ -33,4 +33,4 @@ Research lives in the local, gitignored `design/` folder.
 | [017](017-service-client-refused/spec.md) | the service's own client refused by the IdP: `503`, never stored in a grant | implemented |
 | [018](018-reseal/spec.md) | `tresor-server reseal`: every row moved to the active data key, old data keys retired | implemented |
 | [019](019-administration/spec.md) | administration: the commands as jobs, the runbooks, the data keys in view | implemented |
-| [020](020-gcp-cloud-run/spec.md) | a GCP recipe: Cloud Run, Cloud SQL by Private Service Connect, in Terraform | accepted |
+| [020](020-gcp-cloud-run/spec.md) | a GCP recipe: Cloud Run, Cloud SQL by Private Service Connect, in Terraform | implemented |

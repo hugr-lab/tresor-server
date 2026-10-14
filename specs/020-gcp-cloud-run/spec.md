@@ -1,6 +1,6 @@
 # Spec 020: a GCP recipe - Cloud Run, Cloud SQL by Private Service Connect, in Terraform
 
-- **Status**: accepted
+- **Status**: implemented
 - **Date**: 2026-10-14
 - **Author**: hugr lab
 
@@ -106,6 +106,15 @@ like the Bicep one. A live run by hand, with the owner's yes: a fresh project, `
 - Live (with the owner's yes): a fresh project; `terraform apply`; the protocol check through the URL (a secret, a
   `ref+gcp`, a variable); the jobs (`mac`, `reseal -rotate -retire`, `rewrap`); readiness; `terraform destroy`
   (deletion protection off for the run).
+
+### The live run (2026-10-14)
+
+`scripts/dev/cloudrun_live.sh` in a project of its own, deleted after: `terraform apply` made 43 resources; the
+service ready (`state`, `keys`, the Entra issuer) - Cloud Run reached Cloud SQL over Private Service Connect by the
+private zone's name, `verify-full`; through the URL with the node app's token, a secret with a `ref+gcp` resolved in
+Secret Manager and a variable; the `mac`, `reseal-rotate` and `rewrap` jobs succeeded. `destroy` found two things,
+fixed: the database owned by the IAM user is abandoned (Cloud SQL refuses to drop it), and the subnet is released
+only some time after Cloud Run's egress addresses are (the README says to run it again).
 
 ## Alternatives considered
 

@@ -67,8 +67,12 @@ Administration pages.
 
 ## Destroy (a trial)
 
-`deletion_protection = false`, `apply`, then `terraform destroy`. The Cloud SQL users are abandoned, not deleted:
-they go with the instance.
+`deletion_protection = false`, `apply`, then `terraform destroy`. The database and its users are abandoned, not
+dropped: they go with the instance.
+
+- The subnet outlives the service for a while: Cloud Run's Direct VPC egress holds addresses in it, which Google
+  releases some time after the service is gone - `destroy` stops on the subnet; run it again later (or delete the
+  project).
 
 - The KMS key ring and its keys remain (Cloud KMS never deletes one); their versions are destroyed after the delay.
 - So another trial in the same project takes another `prefix` (the key ring's and the keys' names exist), and a
