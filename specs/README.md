@@ -34,3 +34,4 @@ Research lives in the local, gitignored `design/` folder.
 | [018](018-reseal/spec.md) | `tresor-server reseal`: every row moved to the active data key, old data keys retired | implemented |
 | [019](019-administration/spec.md) | administration: the commands as jobs, the runbooks, the data keys in view | implemented |
 | [020](020-gcp-cloud-run/spec.md) | a GCP recipe: Cloud Run, Cloud SQL by Private Service Connect, in Terraform | implemented |
+| [021](021-aws-ecs/spec.md) | an AWS recipe: ECS on Fargate, RDS by IAM in private subnets, in Terraform | draft |
