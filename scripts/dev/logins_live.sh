@@ -63,13 +63,15 @@ jobs() {
 	url="$(service_url)"
 	for job in mi fed; do
 		local cmd_var; cmd_var="TRESOR_LOGIN_CMD_$(tr a-z A-Z <<<"$job")"
+		# the command as words: az takes an argument beginning with '-' (sh -c) for an option of its own
+		local cmd; read -r -a cmd <<<"${!cmd_var:-/live/check.sh $job}"
 		az containerapp job delete -g "$rg" -n "tresor-login-$job" --yes -o none 2>/dev/null || true
 		az containerapp job create -g "$rg" -n "tresor-login-$job" --environment "$env" -o none \
 			--trigger-type Manual --replica-timeout 600 --replica-retry-limit 0 --parallelism 1 --replica-completion-count 1 \
 			--image "$TRESOR_DUCKDB_IMAGE" --cpu 0.5 --memory 1Gi --mi-user-assigned "$(mi_field id)" \
 			--env-vars "TRESOR_URL=$url" "TRESOR_ISSUER=$issuer" "TRESOR_AUDIENCE=$ENTRA_API_CLIENT_ID" \
 			"TRESOR_API_URI=$ENTRA_API_URI" "TRESOR_MI_CLIENT_ID=$(mi_field clientId)" "TRESOR_ACL_CLIENT_ID=$(acl_app)" \
-			--command "${TRESOR_LOGIN_SHELL:-/bin/sh}" --args "-c" "${!cmd_var:-/live/check.sh $job}"
+			--command "${cmd[0]}" --args "${cmd[@]:1}"
 	done
 }
 
@@ -104,7 +106,7 @@ up() {
 	federated "$fic_aks" "$oidc" "system:serviceaccount:$ns:$sa"
 	kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 	kubectl -n "$ns" create serviceaccount "$sa" --dry-run=client -o yaml | kubectl apply -f -
-	echo "logins_live: up - the service at $url"
+	echo "logins_live: up - the service at $(service_url)"
 }
 
 # job <name> <command>: a Container Apps job's run, its exit
@@ -149,6 +151,7 @@ spec:
         - {name: TRESOR_API_URI, value: "$ENTRA_API_URI"}
         - {name: TRESOR_ACL_CLIENT_ID, value: "$(acl_app)"}
         - {name: TRESOR_ASSERTION_FILE, value: /var/run/secrets/tresor/token}
+        - {name: HOME, value: /tmp}   # the image is root's; the pod runs as another user
       volumeMounts: [{name: token, mountPath: /var/run/secrets/tresor, readOnly: true}]
   volumes:
     - name: token
