@@ -27,6 +27,12 @@ the chart runs the service with IRSA or EKS Pod Identity; the keys, the database
   NAT gateway is needed - the service reaches its identity providers on the internet; VPC endpoints keep the
   traffic to AWS's own services inside the VPC besides.
 
+## Checked live
+
+On 2026-10-14 (spec 012, spec 021): the chart on EKS by IRSA (the Kubernetes store, the KEK in KMS, `ref+aws`, the
+maintenance jobs; `scripts/dev/eks_live.sh`), and the ECS recipe at a delegated subdomain (RDS by IAM over
+`verify-full`, `ref+aws`, the commands by `run-task`; `scripts/dev/ecs_live.sh`).
+
 ## The identity
 
 ```yaml
