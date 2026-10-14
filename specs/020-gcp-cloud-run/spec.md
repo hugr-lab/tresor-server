@@ -41,7 +41,7 @@ variable does, for production), an `examples/` tfvars. Providers: `hashicorp/goo
 | `material_allow` | `[{project: <project>, prefixes: [duckdb-]}]` | `material.gcp.allow` |
 | `min_instances`, `max_instances` | 1, 3 | |
 | `database_tier` | `db-custom-1-3840` | `db-f1-micro` for a trial |
-| `deletion_protection` | `true` | on the database and the KMS keys' destruction |
+| `deletion_protection` | `true` | on the database |
 
 ### What it makes
 
@@ -50,7 +50,8 @@ variable does, for production), an `examples/` tfvars. Providers: `hashicorp/goo
   `secretmanager.secretAccessor` on the allowlisted secrets' project (or the secrets the user lists),
   `cloudsql.instanceUser` and `cloudsql.client` scoped by condition to the instance.
 - **Cloud KMS**: a key ring, `kek` (ENCRYPT_DECRYPT, a rotation period - `rewrap` moves the data keys), `root` (MAC,
-  HMAC_SHA256: the root; not rotated). `prevent_destroy` on both.
+  HMAC_SHA256: the root; not rotated). Terraform cannot make `prevent_destroy` a variable, and a trial must go:
+  the README says to keep the keys (a destroy schedules their versions' destruction; until then they restore).
 - **Cloud SQL**: PostgreSQL 16, `cloudsql.iam_authentication=on`, a Google-managed CA (`GOOGLE_MANAGED_CAS_CA`: a
   DNS name in the certificate), `ssl_mode = ENCRYPTED_ONLY`, **no public IP**, **Private Service Connect** enabled
   for the project; a PSC endpoint (a forwarding rule on an internal address in the subnet); a **private DNS zone**
@@ -95,7 +96,8 @@ like the Bicep one. A live run by hand, with the owner's yes: a fresh project, `
   data key).
 - Whoever may run the jobs, deploy a revision or act as the service's account (`iam.serviceAccountUser`) acts as
   the service: the README says so (spec 019).
-- `prevent_destroy` and `deletion_protection` on what holds the material's keys and the data.
+- `deletion_protection` on the database (a variable, on by default); the KMS keys' versions are destroyed only after
+  Cloud KMS's scheduled-destruction delay, and the README says to keep them.
 
 ## Testing
 

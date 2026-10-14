@@ -122,6 +122,18 @@ az containerapp job execution list -g <rg> -n <prefix>-reseal -o table   # Succe
 - No retry, an hour's timeout.
 - `rewrap -tag-untagged` and `refs` without `-resolve` have no job: not supported by the recipe.
 
+## Cloud Run (the GCP recipe)
+
+The recipe makes a job per command, with the service's image, account, settings and egress (spec 020):
+`<prefix>-reseal` (`reseal -retire`), `-reseal-rotate`, `-rewrap`, `-refs` (`refs -resolve`), `-mac`.
+
+```sh
+gcloud run jobs execute tresor-reseal --region europe-west1 --wait
+gcloud run jobs executions list --job tresor-reseal --region europe-west1
+```
+
+Their logs go to Cloud Logging. No retry, an hour's timeout.
+
 ## Docker
 
 The service's image, tag and settings: the same environment, the same mounted configuration and volumes, the same
