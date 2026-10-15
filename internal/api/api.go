@@ -26,6 +26,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/auth"
 	"github.com/hugr-lab/tresor-server/internal/config"
 	"github.com/hugr-lab/tresor-server/internal/keys"
+	"github.com/hugr-lab/tresor-server/internal/login"
 	"github.com/hugr-lab/tresor-server/internal/material"
 	"github.com/hugr-lab/tresor-server/internal/mint"
 	"github.com/hugr-lab/tresor-server/internal/policy"
@@ -51,6 +52,7 @@ type Server struct {
 	now       func() time.Time
 	direct    directCache        // tokens minted for callers reading directly (specs/010)
 	mintLocks mintLocks          // one replica's renewals of a grant's token, per grant and audience
+	logins    loginCache         // what service logins got (spec 023), in this replica's memory
 	material  *material.Resolver // references (ref+...): nil refuses them all
 	audit     *audit.Auditor     // spec 005: nil records nothing
 	// exchangeAuth is how the service logs in at an issuer's token endpoint (spec 006), by IssuerKey
@@ -471,6 +473,9 @@ func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
 		if typ != "" && !strings.EqualFold(sec.Type, typ) {
 			continue
 		}
+		if isLogin(sec) {
+			continue // a service login is never served (spec 023): the console lists them
+		}
 		if verbs := s.policy.Verbs(c, sec); len(verbs) > 0 {
 			out = append(out, descriptor(sec, verbs))
 		}
@@ -482,6 +487,10 @@ func (s *Server) getSecret(w http.ResponseWriter, r *http.Request) {
 	c := callerOf(r)
 	sec, verbs, ok := s.visible(w, r, c, r.PathValue("name"))
 	if !ok {
+		return
+	}
+	if isLogin(sec) { // never served (spec 023)
+		problem(w, http.StatusNotFound, "not_found", fmt.Sprintf("no secret %q", sec.Name))
 		return
 	}
 	if !slices.Contains(verbs, "use") {
@@ -667,6 +676,12 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
 		return
+	}
+	if strings.EqualFold(body.Type, login.Type) {
+		if err := s.checkLogin(body.Scope, body.Params); err != nil {
+			problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
+			return
+		}
 	}
 	// references (ref+...): to a configured source, within its allowlist, VARCHAR only - never stored as a
 	// literal - and redacted: a resolved value never shows in duckdb_secrets()

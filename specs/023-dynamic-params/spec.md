@@ -73,8 +73,7 @@ with `CREATE SECRET`). Its params:
 type: tresor_service_login
 scope: [https://crm.example]          # the only base URLs it may call, and where its results may be used
 params:
-  flow: custom                        # basic | oauth2_password | oauth2_client_credentials | oauth2_refresh
-                                      # | jwt_assertion | session | custom
+  flow: custom                        # basic | oauth2_password | oauth2_client_credentials | custom
   username: svc-duckdb
   password: ref+azkv://corp-vault/crm-svc     # a reference, or sealed as any secret's param
   login_url: /login
@@ -86,11 +85,13 @@ params:
   subject: null                       # per user: the user's subject (below)
 ```
 
-- **Flows**: `basic` (a field `authorization` = `Basic base64(user:password)`, no call), `oauth2_password`,
-  `oauth2_client_credentials` (RFC 6749, `token_url`, `scope`, client auth as `exchange.client_auth`),
-  `oauth2_refresh` (a stored refresh token: the first is written by the admin), `jwt_assertion` (RFC 7523, the
-  key in a KMS or Transit, as exchange's `client_auth`), `session` and `custom` (any request and response, by jq -
-  hugr query-engine's `x-hugr-token-transform`, `x-hugr-refresh-transform`).
+- **Flows** (part 2a): `basic` (a field `authorization` = `Basic base64(user:password)`, no call),
+  `oauth2_password`, `oauth2_client_credentials` (RFC 6749, `token_url`, `scope`; the client by HTTP Basic, or
+  `client_id` in the form without a secret; a `refresh_token` renews), `custom` (any request and response, by jq -
+  hugr query-engine's `x-hugr-token-transform`, `x-hugr-refresh-transform`; a session id from a header, a cookie or
+  the body is a custom login). A path (`/login`) is under the scope's first base URL.
+- **Part 2b**: `oauth2_refresh` (a stored refresh token: rotation needs it kept, sealed), `jwt_assertion` (RFC
+  7523, the key in a KMS or Transit, as exchange's `client_auth`), and rules (below).
 - **The response** is read as `{status, headers, cookies, body}`; the mapping yields named fields - any names
   (`access_token`, `session_id`, `cookie`, …) and `expires_in` (seconds) or `expires_at`. Without either:
   `ttl` from the login's params, else 10 minutes.
@@ -114,9 +115,9 @@ by its **`subject` param**, written by the admin (the user's subject, as the con
   grants hold the effective user's roles, and whose `subject` is the effective user's; one - used; none -
   `403 mint_refused` ("no service login for the caller"), never a fallback to a login without `subject`;
   several - `403 mint_refused` (ambiguous).
-- Or one login for everybody, its inputs interpolated: `username: ${claim://preferred_username}`,
-  `password: ref+vault://kv/users/${claim://sub}#password` - a reference resolved within the allowlist after
-  interpolation.
+- Or one login for everybody, its inputs (`username`, `password`, `client_id`, `client_secret`) interpolated:
+  `username: ${claim://preferred_username}`. A claim inside a reference (`ref+vault://kv/users/${claim://sub}`)
+  is part 2b: a claim in a path needs its own bounds.
 
 ### Rules (`mint+rule://`)
 

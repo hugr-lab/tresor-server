@@ -278,6 +278,24 @@ func (s *Server) grantGenerators(ctx context.Context, actor *auth.Caller) []*gen
 			}
 		}
 	}
+	// a login's inputs may take the user's claims: kept with the grant when its server may use a login
+	for _, gen := range out {
+		if gen.kind != "login" {
+			continue
+		}
+		for _, listed := range secrets {
+			if !isLogin(listed) {
+				continue
+			}
+			if sec, err := s.store.Get(ctx, listed.Name); err == nil {
+				gens, _ := generatorsOf(sec.Type, sec.Provider, sec.Params, s.material.Refs(sec.Params))
+				for _, list := range gens {
+					out = append(out, list...)
+				}
+			}
+		}
+		break
+	}
 	return out
 }
 
