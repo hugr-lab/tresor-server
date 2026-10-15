@@ -14,9 +14,10 @@ type and the provider its DuckDB extension reads - `http` + `config`, `azure` + 
 CREATE PERSISTENT SECRET crm IN corp (TYPE http, SCOPE 'https://crm.corp.example',
   BEARER_TOKEN 'mint+exchange://crm-api');
 
--- Azure SQL through mssql: the caller's own Entra token (an exchange, or On-Behalf-Of: exchange.grant)
-CREATE PERSISTENT SECRET sales_db IN corp (TYPE azure, PROVIDER access_token,
-  ACCESS_TOKEN 'mint+exchange://https://database.windows.net/?scope=https://database.windows.net/.default');
+-- Azure Blob through the azure extension: the caller's own Entra token (an exchange, or On-Behalf-Of)
+CREATE PERSISTENT SECRET lake_blob IN corp (TYPE azure, PROVIDER access_token, ACCOUNT_NAME 'corplake',
+  SCOPE 'az://corplake.blob.core.windows.net/',
+  ACCESS_TOKEN 'mint+exchange://https://storage.azure.com/?scope=https://storage.azure.com/.default');
 
 -- a header made of a claim, inside a MAP
 CREATE PERSISTENT SECRET lake_api IN corp (TYPE http, SCOPE 'https://lake.corp.example',
@@ -202,17 +203,43 @@ A rule's scope is where its fields go (`mssql://…`, `postgres://…`, `s3://�
 ```
 
 ```sql
--- mssql reads the token as its connection's login: no password anywhere
-CREATE PERSISTENT SECRET sales IN corp (TYPE azure, PROVIDER access_token, SCOPE 'mssql://sql.corp.example/sales',
+-- mssql reads the token as its connection's login: no password anywhere. mssql finds an azure secret by its
+-- name (AZURE_SECRET); the SCOPE is this service's bound, within the rule's destinations
+CREATE PERSISTENT SECRET sales_token IN corp (TYPE azure, PROVIDER access_token, SCOPE 'mssql://sql.corp.example/sales',
   ACCESS_TOKEN 'mint+rule://catalog-sql-login#access_token');
+ATTACH 'Server=sql.corp.example;Database=sales' AS sales (TYPE mssql, AZURE_SECRET 'sales_token');
+
 -- PostgreSQL on RDS (its login, catalog-rds-login: {"flow": "rule", "identity": "catalog-rds",
 --   "endpoint": "catalog.abc.eu-west-1.rds.amazonaws.com:5432", "user": "catalog"},
---   scope ["postgres://catalog.abc.eu-west-1.rds.amazonaws.com:5432"]): the database's login is the token
+--   scope ["postgres://catalog.abc.eu-west-1.rds.amazonaws.com:5432"]): the database's login is the token.
+-- postgres finds a secret by its name only (SECRET, or the name __default_postgres)
 CREATE PERSISTENT SECRET catalog IN corp (TYPE postgres,
   SCOPE 'postgres://catalog.abc.eu-west-1.rds.amazonaws.com:5432/catalog',
   HOST 'catalog.abc.eu-west-1.rds.amazonaws.com', PORT 5432, DBNAME 'catalog', USER 'catalog',
   PASSWORD 'mint+rule://catalog-rds-login#password');
+ATTACH '' AS catalog (TYPE postgres, SECRET catalog);
 ```
+
+## Which extension reads what
+
+A generated value reaches an extension when the extension looks the secret up through DuckDB (tresor's storage
+is one of DuckDB's) - and stays fresh only as long as the extension reads it again. From their sources
+(2026-10):
+
+| Extension | Finds the secret | Reads it again |
+| --- | --- | --- |
+| httpfs (s3, gcs, r2, http), azure, delta, bigquery, gsheets | by type and scope | at each file or request: fresh |
+| postgres, mysql, snowflake | by name only (`SECRET`, or `__default_<type>`); SCOPE ignored | the connection string is kept from ATTACH: a token that expires (RDS IAM: 15 minutes) fails new connections after it |
+| mssql (hugr-lab) | by name (`SECRET`, `AZURE_SECRET`) | `AZURE_SECRET`: at each new connection near the token's expiry |
+| iceberg REST | by name, or an unscoped `iceberg` secret | at ATTACH only; serve `token` and `endpoint`, without the client's credentials |
+| airport, adbc_scanner | by type and scope (a named secret: in memory or a file only) | at ATTACH only |
+| unity_catalog, keboola | by name in memory or a file only | - tresor's storage is not searched |
+| motherduck, columnar adbc, http_client | not from a secret (a setting, the environment, the ATTACH string) | - |
+
+- **bigquery** reads a secret of its own class: a secret from tresor's storage is refused today (tresor's client
+  to fix).
+- **Under acl**, a value made per user is the user's when the extension looks up with the session's context; an
+  extension that looks up with none (mssql's `AZURE_SECRET` today, postgres's RDS template) gets the node's.
 
 **ZITADEL**: a machine user logs in with the JWT profile - its key signs, ZITADEL's issuer is the `aud`, the
 assertion is the grant:
