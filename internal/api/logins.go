@@ -486,6 +486,7 @@ func (s *Server) loginSpec(r *http.Request, c *auth.Caller, sec *state.Secret) (
 	if err != nil {
 		return nil, &mintProblem{http.StatusInternalServerError, "service_error", "the service login cannot be read: " + err.Error()}
 	}
+	spec.Name = sec.Name
 	return spec, nil
 }
 
