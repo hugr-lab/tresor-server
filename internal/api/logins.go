@@ -22,6 +22,9 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
+// refreshHorizon: how long after its expiry a login's refresh token is kept to renew it.
+const refreshHorizon = 12 * time.Hour
+
 // isLogin: a service login, never served to a lookup.
 func isLogin(sec *state.Secret) bool { return strings.EqualFold(sec.Type, login.Type) }
 
@@ -70,8 +73,9 @@ func (s *Server) checkLogin(scope []string, params map[string]json.RawMessage) e
 		return err
 	}
 	refs := s.material.Refs(params)
-	for k, v := range text {
-		if refs[k] || strings.Contains(v, "${claim://") {
+	claims := claimKeys(params, refs)
+	for k := range text {
+		if refs[k] || claims[k] {
 			if !isInput(k) {
 				return errors.New("a login's parameter " + strconv.Quote(k) + " takes no reference or claim")
 			}
@@ -89,6 +93,31 @@ func (s *Server) checkLogin(scope []string, params map[string]json.RawMessage) e
 		}
 	}
 	return nil
+}
+
+// claimKeys are a login's params that hold a claim - whole (mint+claim://) or a part (${claim://…}).
+func claimKeys(params map[string]json.RawMessage, refs map[string]bool) map[string]bool {
+	out := map[string]bool{}
+	gens, _ := generatorsOf(login.Type, "config", params, refs)
+	for k, list := range gens {
+		for _, gen := range list {
+			if gen.kind == "claim" {
+				out[k] = true
+			}
+		}
+	}
+	return out
+}
+
+// loginRedacted: a login's inputs are always redacted - the console's shape never shows them.
+func loginRedacted(params map[string]json.RawMessage, redact []string) []string {
+	var keys []string
+	for _, in := range login.Inputs() {
+		if _, ok := params[in]; ok {
+			keys = append(keys, in)
+		}
+	}
+	return withKeys(redact, keys)
 }
 
 func isInput(k string) bool {
@@ -216,15 +245,10 @@ func mayUse(s *Server, c *auth.Caller, sec *state.Secret) bool {
 // loginResult: the login's result for the effective user - cached until shortly before it expires, renewed
 // from what it kept, or a new login; one at a time per login and user in this replica.
 func (s *Server) loginResult(r *http.Request, c *auth.Caller, sec *state.Secret, shape *login.Spec) (*login.Result, *mintProblem) {
+	// per user when bound to one, or made of the user's claims (in any form): never shared across users
 	userKey := ""
 	text, _ := textParams(sec.Params)
-	perUser := text["subject"] != ""
-	for _, in := range login.Inputs() {
-		if strings.Contains(text[in], "${claim://") {
-			perUser = true
-		}
-	}
-	if perUser {
+	if text["subject"] != "" || len(claimKeys(sec.Params, s.material.Refs(sec.Params))) > 0 {
 		userKey = c.Owner()
 	}
 	key := sec.Name + "\x00" + strconv.FormatInt(sec.Version, 10) + "\x00" + userKey
@@ -266,6 +290,9 @@ func (s *Server) loginResult(r *http.Request, c *auth.Caller, sec *state.Secret,
 			s.log.Warn("a service login's refresh failed: logging in again", "login", sec.Name, "reason", err.Error())
 		}
 	}
+	if renewed && kept["refresh_token"] == "" {
+		kept = prev.kept // RFC 6749 6: a refresh may give no new refresh token - the old one stays good
+	}
 	if !renewed {
 		res, kept, err = client.Login(ctx, spec)
 	}
@@ -282,8 +309,12 @@ func (s *Server) loginResult(r *http.Request, c *auth.Caller, sec *state.Secret,
 	if s.logins.entries == nil {
 		s.logins.entries = map[string]*loginEntry{}
 	}
-	for k, e := range s.logins.entries { // expired entries go: a bounded cache
-		if !e.result.Expiry.After(now) {
+	for k, e := range s.logins.entries { // expired entries go - one that can be renewed after a while
+		horizon := e.result.Expiry
+		if e.kept["refresh_token"] != "" {
+			horizon = horizon.Add(refreshHorizon)
+		}
+		if !horizon.After(now) {
 			delete(s.logins.entries, k)
 		}
 	}

@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/itchyny/gojq"
@@ -30,6 +31,8 @@ const (
 	maxBody     = 1 << 20 // a response's body, at most
 	jqTimeout   = 100 * time.Millisecond
 	defaultTTL  = 10 * time.Minute // a result that names no expiry
+	minLife     = time.Minute      // a result is kept at least this long (a past or zero expiry: no loop)
+	maxLife     = 24 * time.Hour   // and at most this long, whatever it says
 )
 
 // Flows a login may use.
@@ -168,9 +171,30 @@ func (s *Spec) Covers(scope []string) bool {
 }
 
 func (s *Spec) under(target string) bool {
+	if hasDotSegments(target) {
+		return false // a path that climbs out of a base URL is never within it
+	}
 	for _, base := range s.Scope {
 		b := strings.TrimRight(base, "/")
 		if target == b || strings.HasPrefix(target, b+"/") || strings.HasPrefix(target, b+"?") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasDotSegments: a path with `.` or `..` segments, or an encoded slash or backslash.
+func hasDotSegments(target string) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return true
+	}
+	lower := strings.ToLower(u.RawPath + u.Path)
+	if strings.Contains(lower, "%2f") || strings.Contains(lower, "%5c") || strings.Contains(u.Path, "\\") {
+		return true
+	}
+	for _, seg := range strings.Split(u.Path, "/") {
+		if seg == "." || seg == ".." {
 			return true
 		}
 	}
@@ -255,6 +279,9 @@ func isLoopback(host string) bool {
 func (c *Client) Login(ctx context.Context, s *Spec) (*Result, map[string]string, error) {
 	switch s.Flow {
 	case FlowBasic:
+		if strings.Contains(s.Username, ":") { // RFC 7617: a user-id never holds a colon
+			return nil, nil, refused("a basic login's username holds a colon")
+		}
 		auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(s.Username+":"+s.Password))
 		ttl := s.TTL
 		if ttl == 0 {
@@ -343,8 +370,12 @@ func (c *Client) custom(ctx context.Context, s *Spec, rawURL, method, request, r
 	if err != nil {
 		return nil, nil, refused("%v", err)
 	}
-	vars := map[string]any{"username": s.Username, "password": s.Password, "client_id": s.ClientID,
-		"client_secret": s.ClientSecret, "refresh_token": kept["refresh_token"]}
+	// the request takes the inputs (a refresh, the refresh token and the client's); a response mapping takes
+	// none of them - a login never serves its own inputs back
+	vars := map[string]any{"client_id": s.ClientID, "client_secret": s.ClientSecret, "refresh_token": kept["refresh_token"]}
+	if kept == nil {
+		vars["username"], vars["password"] = s.Username, s.Password
+	}
 	if method == "" {
 		method = http.MethodPost
 	}
@@ -393,7 +424,7 @@ func (c *Client) custom(ctx context.Context, s *Spec, rawURL, method, request, r
 		parsed = string(resp.body)
 	}
 	in["body"] = parsed
-	out, err := runJQ(ctx, response, normalize(in), vars)
+	out, err := runJQ(ctx, response, normalize(in), map[string]any{"refresh_token": kept["refresh_token"]})
 	if err != nil {
 		return nil, nil, refused("the login's response mapping failed: %v", err)
 	}
@@ -410,13 +441,16 @@ func (c *Client) result(s *Spec, fields map[string]string) (*Result, map[string]
 	now := c.Now()
 	expiry := time.Time{}
 	if v := fields["expires_in"]; v != "" {
-		if n, err := strconv.ParseFloat(v, 64); err == nil && n > 0 {
-			expiry = now.Add(time.Duration(n * float64(time.Second)))
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
+			expiry = now.Add(time.Duration(min(max(n, 0), maxLife.Seconds()) * float64(time.Second)))
 		}
 	} else if v := fields["expires_at"]; v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			expiry = t
 		} else if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			if n > 1e11 { // milliseconds, as JavaScript gives them
+				n /= 1000
+			}
 			expiry = time.Unix(n, 0)
 		}
 	}
@@ -426,6 +460,13 @@ func (c *Client) result(s *Spec, fields map[string]string) (*Result, map[string]
 			ttl = defaultTTL
 		}
 		expiry = now.Add(ttl)
+	}
+	// within bounds: never in the past (no login per read, no expires_at gone already), never years ahead
+	if lo := now.Add(minLife); expiry.Before(lo) {
+		expiry = lo
+	}
+	if hi := now.Add(maxLife); expiry.After(hi) {
+		expiry = hi
 	}
 	kept := map[string]string{"refresh_token": fields["refresh_token"]}
 	served := map[string]string{}
@@ -452,6 +493,9 @@ func (c *Client) call(req *http.Request) (*response, error) {
 		client = &http.Client{}
 	}
 	cl := *client
+	if cl.Transport == nil {
+		cl.Transport = guarded
+	}
 	cl.Timeout = callTimeout
 	cl.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := cl.Do(req)
@@ -486,6 +530,26 @@ func (c *Client) call(req *http.Request) (*response, error) {
 	}
 	return out, nil
 }
+
+// guarded is the transport of logins: it never connects to a link-local, unspecified or multicast address
+// (the clouds' metadata endpoints, 169.254.169.254) - whatever a listed host's name resolves to.
+var guarded = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil // the allowlist names the host it reaches: no proxy in between
+	dialer := &net.Dialer{Timeout: callTimeout, Control: func(_, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return err
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+			return errors.New("a login never connects to a link-local, unspecified or multicast address")
+		}
+		return nil
+	}}
+	t.DialContext = dialer.DialContext
+	return t
+}()
 
 // textFields are an object's scalar fields as text: a string as it is, a number or a boolean as its JSON text.
 func textFields(obj map[string]any) map[string]string {

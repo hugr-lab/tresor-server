@@ -99,10 +99,10 @@ served** (not listed on `/v1`, `404` on a read; the console lists them, `GET /ad
    "username": "svc-duckdb", "password": "ref+azkv://corp-vault/crm-svc",
    "login_url": "/login",
    "login_request": "{login: $username, password: $password}",
-   "login_response": "{session_id: .headers["x-session-id"], refresh_token: .body.refresh, expires_in: .body.ttl}",
+   "login_response": "{session_id: .headers[\"x-session-id\"], refresh_token: .body.refresh, expires_in: .body.ttl}",
    "refresh_url": "/refresh",
    "refresh_request": "{refresh: $refresh_token}",
-   "refresh_response": "{session_id: .headers["x-session-id"], refresh_token: .body.refresh, expires_in: .body.ttl}"}}
+   "refresh_response": "{session_id: .headers[\"x-session-id\"], refresh_token: .body.refresh, expires_in: .body.ttl}"}}
 ```
 
 ```sql
@@ -117,18 +117,26 @@ CREATE PERSISTENT SECRET crm IN corp (TYPE http, SCOPE 'https://crm.corp.example
 | `oauth2_password` | `token_url`, `username`, `password`, `client_id` (`client_secret`), `scope` | the same |
 | `custom` | `login_url`, `login_method` (POST), `login_request`, `login_response`, `content_type` (`json`, `form`); `refresh_url`, `refresh_method`, `refresh_request`, `refresh_response` | what `login_response` names |
 
-- **The mappings are jq.** A request's over the variables `$username`, `$password`, `$client_id`,
-  `$client_secret`, `$refresh_token`; a response's over `{status, headers, cookies, body}` (header names
-  lowercase, the body parsed when it is JSON). The result names fields - any names - and `expires_in` (seconds)
-  or `expires_at` (RFC 3339, or Unix seconds); else `ttl` (a duration), else 10 minutes.
-- **Where it calls**: a path is under the scope's first base URL; an absolute URL must be within the scope. Its
-  host must be in `dynamic.login_hosts`; https (http only to this machine); a redirect is never followed.
+- **The mappings are jq.** A login request's over the variables `$username`, `$password`, `$client_id`,
+  `$client_secret`; a refresh request's over `$refresh_token`, `$client_id`, `$client_secret`; a response's over
+  `{status, headers, cookies, body}` (header names lowercase, the body parsed when it is JSON) and
+  `$refresh_token` only - a login never serves its own inputs back. The result names fields - any names - and
+  `expires_in` (seconds) or `expires_at` (RFC 3339, Unix seconds or milliseconds); else `ttl` (a duration), else 10
+  minutes. Whatever it says, a result is kept between 1 minute and 24 hours.
+- **Where it calls**: a path is under the scope's first base URL; an absolute URL must be within the scope (no
+  `.` or `..` segment, no encoded slash). Its host must be in `dynamic.login_hosts`; https (http only to this
+  machine); a redirect is never followed; no proxy. It never connects to a link-local, unspecified or multicast
+  address (a cloud's metadata endpoint), whatever the name resolves to. The allowlist trusts the names' DNS:
+  list hosts whose DNS you control.
 - **Where its fields go**: only to a secret whose scope is within the login's.
-- **Renewal**: from `refresh_token` (an OAuth2 refresh, or the custom refresh) while the login has one, else a
-  new login; a refused refresh logs in again. What a login got is cached in each replica's memory until shortly
+- **Renewal**: from `refresh_token` (an OAuth2 refresh, or the custom refresh) while the login has one - kept up
+  to 12 hours past the result's expiry, and kept when a refresh gives no new one - else a new login; a refused
+  refresh logs in again. What a login got is cached in each replica's memory until shortly
   before it expires; a restart logs in again.
 - **Inputs**: `username`, `password`, `client_id`, `client_secret` may be references (`ref+…`), or hold the
-  caller's claims (`${claim://preferred_username}`): one login for everybody, logged in per user.
+  caller's claims (`mint+claim://preferred_username`, `${claim://…}` inside): one login for everybody, logged in
+  per user. No other parameter takes a claim or a reference. The inputs are always redacted: the console's shape
+  never shows them.
 - **Use**: a login is granted, as any secret, to roles and groups; a reader of a secret of the login holds `use`
   on both.
 - **Bounds**: 10 seconds a call, 1 MiB a response, 100 ms a jq program. A refusal (4xx) is `403

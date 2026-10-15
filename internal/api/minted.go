@@ -284,7 +284,7 @@ func (s *Server) grantGenerators(ctx context.Context, actor *auth.Caller) []*gen
 			continue
 		}
 		for _, listed := range secrets {
-			if !isLogin(listed) {
+			if !isLogin(listed) || !policy.Usable(listed, actor.Principals) {
 				continue
 			}
 			if sec, err := s.store.Get(ctx, listed.Name); err == nil {

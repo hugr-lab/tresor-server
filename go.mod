@@ -21,6 +21,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/googleapis/gax-go/v2 v2.26.2
+	github.com/itchyny/gojq v0.12.19
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/microsoft/go-mssqldb v1.11.2
 	github.com/spf13/viper v1.21.0
@@ -99,7 +100,6 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.17 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
-	github.com/itchyny/gojq v0.12.19 // indirect
 	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

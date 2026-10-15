@@ -389,6 +389,7 @@ func (s *Server) adminParams(w http.ResponseWriter, r *http.Request) {
 			if err := s.checkLogin(current.Scope, params); err != nil {
 				return nil, fmt.Errorf("%w: %v", errInvalid, err)
 			}
+			redact = loginRedacted(params, redact)
 		}
 		redact, err = s.material.CheckWrite(current.Provider, params, redact)
 		if err != nil {

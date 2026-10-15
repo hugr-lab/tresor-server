@@ -682,6 +682,7 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 			problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
 			return
 		}
+		body.RedactKeys = loginRedacted(body.Params, body.RedactKeys) // the console shows no password
 	}
 	// references (ref+...): to a configured source, within its allowlist, VARCHAR only - never stored as a
 	// literal - and redacted: a resolved value never shows in duckdb_secrets()

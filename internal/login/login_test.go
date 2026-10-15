@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -204,5 +205,55 @@ func TestParseRefusals(t *testing.T) {
 	s, _ := Parse(map[string]string{"flow": "basic", "username": "u", "password": "p"}, scope)
 	if !s.Covers([]string{"https://crm.example/api"}) || s.Covers([]string{"https://crm.example.evil"}) || s.Covers(nil) {
 		t.Fatal("covers")
+	}
+}
+
+// expiry within bounds: a past, a zero, a huge one, milliseconds
+func TestExpiryBounds(t *testing.T) {
+	now := time.Now()
+	c := &Client{Now: func() time.Time { return now }}
+	s := &Spec{}
+	for name, fields := range map[string]map[string]string{
+		"past":         {"expires_at": now.Add(-time.Hour).Format(time.RFC3339)},
+		"zero":         {"expires_in": "0"},
+		"negative":     {"expires_in": "-5"},
+		"huge":         {"expires_in": "1e30"},
+		"milliseconds": {"expires_at": strconv.FormatInt(now.Add(time.Hour).UnixMilli(), 10)},
+	} {
+		res, _, _ := c.result(s, fields)
+		if res.Expiry.Before(now.Add(minLife)) || res.Expiry.After(now.Add(maxLife)) {
+			t.Errorf("%s: %v", name, res.Expiry.Sub(now))
+		}
+	}
+	res, _, _ := c.result(s, map[string]string{"expires_at": strconv.FormatInt(now.Add(time.Hour).UnixMilli(), 10)})
+	if d := res.Expiry.Sub(now); d < 59*time.Minute || d > 61*time.Minute {
+		t.Fatalf("milliseconds read as such: %v", d)
+	}
+}
+
+// a response mapping never reads the inputs; dot segments never pass a scope; a basic username with a colon
+func TestInputsAndPaths(t *testing.T) {
+	srv, _ := service(t)
+	c := client(srv)
+	spec, _ := Parse(map[string]string{"flow": "custom", "username": "svc", "password": "hunter2",
+		"login_url": "/api/login", "login_request": `{login: $username, pass: $password}`,
+		"login_response": `{leak: $password, session_id: .headers["x-session-id"]}`}, []string{srv.URL})
+	res, _, err := c.Login(context.Background(), spec)
+	if err != nil || res.Fields["leak"] == "hunter2" || res.Fields["session_id"] != "sess-1" {
+		t.Fatalf("the response mapping reads no input: %+v %v", res, err)
+	}
+	scoped, _ := Parse(map[string]string{"flow": "basic", "username": "u", "password": "p"}, []string{srv.URL + "/tenant-a"})
+	for _, u := range []string{srv.URL + "/tenant-a/../tenant-b/token", srv.URL + "/tenant-a/%2e%2e/x",
+		srv.URL + "/tenant-a/a%2Fb", srv.URL + "/tenant-a/./x"} {
+		if _, err := c.CheckURL(scoped, u); err == nil {
+			t.Errorf("%s: within the scope", u)
+		}
+	}
+	if scoped.Covers([]string{srv.URL + "/tenant-a/../tenant-b"}) {
+		t.Error("covers a climbing scope")
+	}
+	colon, _ := Parse(map[string]string{"flow": "basic", "username": "a:b", "password": "p"}, []string{srv.URL})
+	if _, _, err := c.Login(context.Background(), colon); err == nil {
+		t.Error("a basic username with a colon")
 	}
 }

@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -186,5 +188,41 @@ func TestServiceLoginFromClaims(t *testing.T) {
 	r = f.do("GET", "/v1/secrets/data", dave, "")
 	if r.status != 200 || r.json(t)["params"].(map[string]any)["bearer_token"] != "sess-dave" || logins.Load() != 2 {
 		t.Fatalf("dave's own: %d %s (%d logins)", r.status, r.body, logins.Load())
+	}
+}
+
+// a claim written whole (mint+claim://) makes the login per user too; a claim only in its inputs; its inputs
+// always redacted
+func TestServiceLoginWholeClaim(t *testing.T) {
+	f := newFixture(t, "")
+	srv, _ := sessionService(t)
+	withLoginHosts(f, srv)
+	body := loginBody(srv.URL, "mint+claim://preferred_username", "pw", "")
+	body = strings.Replace(body, `"login_request":"{user: $username, pass: $password}"`,
+		`"login_request":"{user: $username, pass: (\"pw-\" + $username)}"`, 1)
+	if r := f.do("PUT", "/v1/secrets/crm", f.admin, body); r.status != 201 {
+		t.Fatalf("a login of a whole claim: %d %s", r.status, r.body)
+	}
+	if sec, _ := f.srv.store.Get(context.Background(), "crm"); !slices.Contains(sec.RedactKeys, "password") ||
+		!slices.Contains(sec.RedactKeys, "username") {
+		t.Fatalf("its inputs redacted: %v", sec.RedactKeys)
+	}
+	f.do("PUT", "/v1/secrets/crm/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	f.do("PUT", "/v1/secrets/data", f.admin, `{"type":"http","provider":"config","scope":["`+srv.URL+`"],
+		"params":{"bearer_token":"mint+login://crm#session_id"}}`)
+	f.do("PUT", "/v1/secrets/data/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	if r := f.do("GET", "/v1/secrets/data", f.alice, ""); r.json(t)["params"].(map[string]any)["bearer_token"] != "sess-alice" {
+		t.Fatalf("alice's: %s", r.body)
+	}
+	dave := f.idp.Token(t, testidp.Claims{"sub": "dave-id", "aud": []string{"duckdb-secrets"},
+		"realm_access": map[string]any{"roles": []any{"analysts"}}, "preferred_username": "dave"})
+	if r := f.do("GET", "/v1/secrets/data", dave, ""); r.json(t)["params"].(map[string]any)["bearer_token"] != "sess-dave" {
+		t.Fatalf("dave's own, never alice's: %s", r.body)
+	}
+	// a claim outside the inputs: refused
+	bad := strings.Replace(loginBody(srv.URL, "svc", "pw-svc", ""), `"login_url":"/login"`,
+		`"login_url":"mint+claim://preferred_username"`, 1)
+	if r := f.do("PUT", "/v1/secrets/bad", f.admin, bad); r.status != 422 {
+		t.Fatalf("a claim in login_url: %d %s", r.status, r.body)
 	}
 }
