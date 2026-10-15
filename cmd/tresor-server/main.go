@@ -28,7 +28,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/jackc/pgx/v5/pgconn"
+	"golang.org/x/oauth2"
+	"google.golang.org/api/impersonate"
 	"google.golang.org/api/option"
 
 	"github.com/hugr-lab/tresor-server/internal/api"
@@ -47,6 +50,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/keys/local"
 	"github.com/hugr-lab/tresor-server/internal/keys/vaultkek"
 	"github.com/hugr-lab/tresor-server/internal/kube"
+	"github.com/hugr-lab/tresor-server/internal/login"
 	"github.com/hugr-lab/tresor-server/internal/material"
 	"github.com/hugr-lab/tresor-server/internal/material/awssm"
 	azkvsource "github.com/hugr-lab/tresor-server/internal/material/azurekeyvault"
@@ -54,6 +58,7 @@ import (
 	k8ssource "github.com/hugr-lab/tresor-server/internal/material/k8s"
 	"github.com/hugr-lab/tresor-server/internal/material/vaultkv"
 	"github.com/hugr-lab/tresor-server/internal/mint"
+	"github.com/hugr-lab/tresor-server/internal/rules"
 	"github.com/hugr-lab/tresor-server/internal/state"
 	"github.com/hugr-lab/tresor-server/internal/state/kubestore"
 	"github.com/hugr-lab/tresor-server/internal/state/memory"
@@ -759,8 +764,12 @@ func serve(configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	ids, err := identities(ctx, cfg)
+	if err != nil {
+		return err
+	}
 	opts := []api.Option{api.WithMaterial(resolver), api.WithAudit(audit.New(level, os.Stdout)),
-		api.WithExchangeAuth(exchange)}
+		api.WithExchangeAuth(exchange), api.WithIdentities(ids)}
 	var checker *health.Checker // made below: the console asks it at each request
 	if cfg.UI.On() {
 		c := api.Console{UI: consoleHandler(cfg), Version: version,
@@ -871,83 +880,10 @@ func exchangeAuth(ctx context.Context, cfg *config.Config) (map[string]mint.Clie
 		if ex == nil || ex.ClientAuth == "secret" {
 			continue
 		}
-		clientID := ex.ClientID
-		var source clientauth.Source
 		aud := clientauth.Audience{Issuer: is.Issuer, TokenEndpoint: ex.AssertionAudience == "token_endpoint"}
-		switch ex.ClientAuth {
-		case "azure":
-			cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
-			if err != nil {
-				return nil, nil, err
-			}
-			source = clientauth.Azure(cred)
-		case "file":
-			source = clientauth.File(ex.AssertionFile)
-		case "key_file":
-			signer, kid, fileClient, err := clientauth.KeyFile(ex.KeyFile)
-			if err != nil {
-				return nil, nil, err
-			}
-			if ex.KID != "" {
-				if kid != "" && kid != ex.KID {
-					return nil, nil, fmt.Errorf("exchange.kid is not the key file's keyId")
-				}
-				kid = ex.KID
-			}
-			if kid == "" && ex.X5T == "" {
-				return nil, nil, fmt.Errorf("exchange.kid: the key file names no keyId - set kid (or x5t)")
-			}
-			if fileClient != "" {
-				if clientID != "" && clientID != fileClient {
-					return nil, nil, fmt.Errorf("exchange.client_id is not the key file's clientId")
-				}
-				clientID = fileClient
-			}
-			if clientID == "" {
-				return nil, nil, fmt.Errorf("exchange.client_id: the key file names no clientId - set client_id")
-			}
-			source = clientauth.JWT(clientID, clientauth.Header{KID: kid, X5T: ex.X5T}, aud, signer)
-		case "keyvault":
-			cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
-			if err != nil {
-				return nil, nil, err
-			}
-			signer, err := azurekeyvault.NewSigner(ctx, ex.Key, cred)
-			if err != nil {
-				return nil, nil, err
-			}
-			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
-		case "vault":
-			v, err := vaultClient(cfg)
-			if err != nil {
-				return nil, nil, err
-			}
-			mount, key, _ := strings.Cut(ex.Key, "/")
-			signer, err := vaultkek.NewSigner(ctx, v, mount, key)
-			if err != nil {
-				return nil, nil, err
-			}
-			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
-		case "awskms":
-			ac, err := awsOf(cfg.AWS)
-			if err != nil {
-				return nil, nil, err
-			}
-			signer, err := awskms.NewSigner(ctx, kms.NewFromConfig(ac), ex.Key)
-			if err != nil {
-				return nil, nil, err
-			}
-			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
-		case "gcpkms":
-			c, err := gcpKMS(cfg)
-			if err != nil {
-				return nil, nil, err
-			}
-			signer, err := gcpkms.NewSigner(ctx, c, ex.Key)
-			if err != nil {
-				return nil, nil, err
-			}
-			source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
+		clientID, source, err := clientAssertion(ctx, cfg, ex, aud)
+		if err != nil {
+			return nil, nil, err
 		}
 		out[config.IssuerKey(is.Issuer)] = mint.AssertionAuth{ID: clientID, Assertion: source, OmitID: ex.OmitClientID}
 		checks = append(checks, health.Check{
@@ -960,6 +896,179 @@ func exchangeAuth(ctx context.Context, cfg *config.Config) (map[string]mint.Clie
 		})
 	}
 	return out, checks, nil
+}
+
+// identities are dynamic.identities, made (spec 023): the workload identities and client keys service logins
+// may use, each bounded to what the operator lists.
+func identities(ctx context.Context, cfg *config.Config) (map[string]login.Identity, error) {
+	out := map[string]login.Identity{}
+	for _, id := range cfg.Dynamic.Identities {
+		where := "dynamic.identities " + id.Name
+		switch id.Kind {
+		case "azure":
+			clientID := cfg.Azure.ClientID
+			if id.ClientID != "" {
+				clientID = id.ClientID
+			}
+			cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: clientID, TenantID: cfg.Azure.TenantID})
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", where, err)
+			}
+			out[id.Name] = rules.Azure{Cred: cred, Scopes: id.Scopes}
+		case "gcp":
+			allowStatic := cfg.GCP.StaticCredentials == "allow"
+			sa := id.ServiceAccount
+			out[id.Name] = rules.GCP{Scopes: id.Scopes, Source: gcpTokenSource(allowStatic, sa)}
+		case "aws_rds":
+			ac, err := awsOf(config.AWS{Region: cfg.AWS.Region, EndpointURL: cfg.AWS.EndpointURL,
+				StaticCredentials: cfg.AWS.StaticCredentials, RoleARN: firstNonEmpty(id.RoleARN, cfg.AWS.RoleARN)})
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", where, err)
+			}
+			out[id.Name] = rules.RDS{Creds: ac.Credentials, Region: ac.Region, Endpoints: id.Endpoints, Users: id.Users,
+				Now: time.Now}
+		case "aws_sts":
+			ac, err := awsOf(cfg.AWS)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", where, err)
+			}
+			out[id.Name] = rules.STS{Client: sts.NewFromConfig(ac), RoleARN: id.RoleARN, Duration: id.Duration}
+		case "jwt":
+			aud := clientauth.Audience{Issuer: id.Audience, TokenEndpoint: id.Audience == ""}
+			clientID, source, err := clientAssertion(ctx, cfg, id.Client, aud)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", where, err)
+			}
+			out[id.Name] = rules.JWT{ID: clientID, Source: source}
+		}
+	}
+	return out, nil
+}
+
+// gcpTokenSource makes a token source per scope: the service's own identity, or a service account it
+// impersonates (IAM Credentials: the service's identity holds roles/iam.serviceAccountTokenCreator on it).
+func gcpTokenSource(allowStatic bool, serviceAccount string) func(context.Context, string) (oauth2.TokenSource, error) {
+	var mu sync.Mutex
+	made := map[string]oauth2.TokenSource{}
+	return func(ctx context.Context, scope string) (oauth2.TokenSource, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if ts, ok := made[scope]; ok {
+			return ts, nil
+		}
+		var ts oauth2.TokenSource
+		if serviceAccount == "" {
+			creds, err := gcpid.Credentials(context.WithoutCancel(ctx), allowStatic, scope)
+			if err != nil {
+				return nil, err
+			}
+			ts = creds.TokenSource
+		} else {
+			base, err := gcpid.Credentials(context.WithoutCancel(ctx), allowStatic)
+			if err != nil {
+				return nil, err
+			}
+			ts, err = impersonate.CredentialsTokenSource(context.WithoutCancel(ctx), impersonate.CredentialsConfig{
+				TargetPrincipal: serviceAccount, Scopes: []string{scope}}, option.WithCredentials(base),
+				option.WithUniverseDomain(gcpid.Universe))
+			if err != nil {
+				return nil, err
+			}
+		}
+		made[scope] = ts
+		return ts, nil
+	}
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// clientAssertion is how a client logs in at a token endpoint with what it holds (spec 006): its Azure identity's
+// token, a projected token, or a JWT signed with a key - in Key Vault, Transit, a KMS or a file. It gives the
+// client's id (a key file may name it).
+func clientAssertion(ctx context.Context, cfg *config.Config, ex *config.ExchangeClient, aud clientauth.Audience) (string, clientauth.Source, error) {
+	clientID := ex.ClientID
+	var source clientauth.Source
+	switch ex.ClientAuth {
+	case "azure":
+		cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
+		if err != nil {
+			return "", nil, err
+		}
+		source = clientauth.Azure(cred)
+	case "file":
+		source = clientauth.File(ex.AssertionFile)
+	case "key_file":
+		signer, kid, fileClient, err := clientauth.KeyFile(ex.KeyFile)
+		if err != nil {
+			return "", nil, err
+		}
+		if ex.KID != "" {
+			if kid != "" && kid != ex.KID {
+				return "", nil, fmt.Errorf("exchange.kid is not the key file's keyId")
+			}
+			kid = ex.KID
+		}
+		if kid == "" && ex.X5T == "" {
+			return "", nil, fmt.Errorf("exchange.kid: the key file names no keyId - set kid (or x5t)")
+		}
+		if fileClient != "" {
+			if clientID != "" && clientID != fileClient {
+				return "", nil, fmt.Errorf("exchange.client_id is not the key file's clientId")
+			}
+			clientID = fileClient
+		}
+		if clientID == "" {
+			return "", nil, fmt.Errorf("exchange.client_id: the key file names no clientId - set client_id")
+		}
+		source = clientauth.JWT(clientID, clientauth.Header{KID: kid, X5T: ex.X5T}, aud, signer)
+	case "keyvault":
+		cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
+		if err != nil {
+			return "", nil, err
+		}
+		signer, err := azurekeyvault.NewSigner(ctx, ex.Key, cred)
+		if err != nil {
+			return "", nil, err
+		}
+		source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
+	case "vault":
+		v, err := vaultClient(cfg)
+		if err != nil {
+			return "", nil, err
+		}
+		mount, key, _ := strings.Cut(ex.Key, "/")
+		signer, err := vaultkek.NewSigner(ctx, v, mount, key)
+		if err != nil {
+			return "", nil, err
+		}
+		source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
+	case "awskms":
+		ac, err := awsOf(cfg.AWS)
+		if err != nil {
+			return "", nil, err
+		}
+		signer, err := awskms.NewSigner(ctx, kms.NewFromConfig(ac), ex.Key)
+		if err != nil {
+			return "", nil, err
+		}
+		source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
+	case "gcpkms":
+		c, err := gcpKMS(cfg)
+		if err != nil {
+			return "", nil, err
+		}
+		signer, err := gcpkms.NewSigner(ctx, c, ex.Key)
+		if err != nil {
+			return "", nil, err
+		}
+		source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
+	}
+	return clientID, source, nil
 }
 
 // awsConfigs are the SDK configurations made, one per identity (the top-level aws:, a named source's own): one

@@ -50,11 +50,13 @@ type Server struct {
 	store     state.Store
 	log       *slog.Logger
 	now       func() time.Time
-	direct    directCache        // tokens minted for callers reading directly (specs/010)
-	mintLocks mintLocks          // one replica's renewals of a grant's token, per grant and audience
-	logins    loginCache         // what service logins got (spec 023), in this replica's memory
-	material  *material.Resolver // references (ref+...): nil refuses them all
-	audit     *audit.Auditor     // spec 005: nil records nothing
+	direct    directCache // tokens minted for callers reading directly (specs/010)
+	mintLocks mintLocks   // one replica's renewals of a grant's token, per grant and audience
+	logins    loginCache  // what service logins got (spec 023), in this replica's memory
+	// identities are dynamic.identities, made (spec 023): what a rule or a jwt_assertion login may use
+	identities map[string]login.Identity
+	material   *material.Resolver // references (ref+...): nil refuses them all
+	audit      *audit.Auditor     // spec 005: nil records nothing
 	// exchangeAuth is how the service logs in at an issuer's token endpoint (spec 006), by IssuerKey
 	exchangeAuth map[string]mint.ClientAuth
 	console      *Console // spec 010: /ui/ and /admin/v1; nil serves neither
@@ -686,7 +688,7 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	// references (ref+...): to a configured source, within its allowlist, VARCHAR only - never stored as a
 	// literal - and redacted: a resolved value never shows in duckdb_secrets()
-	redact, err := s.material.CheckWrite(body.Provider, body.Params, body.RedactKeys)
+	redact, err := s.material.CheckWrite(body.Provider, claimsStoodIn(body.Type, body.Params), body.RedactKeys)
 	if err != nil {
 		problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
 		return

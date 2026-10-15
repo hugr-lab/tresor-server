@@ -17,12 +17,18 @@ import (
 
 	"github.com/hugr-lab/tresor-server/internal/audit"
 	"github.com/hugr-lab/tresor-server/internal/auth"
+	"github.com/hugr-lab/tresor-server/internal/login"
 	"github.com/hugr-lab/tresor-server/internal/mint"
 	"github.com/hugr-lab/tresor-server/internal/telemetry"
 )
 
 // Spec 005: a request's span (under tresor's trace only), its metrics, and its audit event. The handlers fill
 // what they decided into the request's observation; the event is emitted once the answer is known.
+
+// WithIdentities: the workload identities and client keys service logins may use (spec 023), by name.
+func WithIdentities(ids map[string]login.Identity) Option {
+	return func(s *Server) { s.identities = ids }
+}
 
 // WithExchangeAuth: how the service logs in at each issuer's token endpoint, by IssuerKey (spec 006); an
 // issuer not in it uses its client secret.

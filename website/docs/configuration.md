@@ -236,6 +236,7 @@ Web pages that run tresor in DuckDB-wasm call the service from the browser, acro
 | Setting | |
 | --- | --- |
 | `dynamic.login_hosts` | The hosts a [service login](generated.md#service-logins) may call: a name, or `*.domain`. Empty: no login calls out. |
+| `dynamic.identities` | The workload identities and client keys a [rule or a `jwt_assertion`](generated.md#a-key-a-workload-identity-jwt_assertion-and-rules) may use: `name`, `kind` (`azure`, `gcp`, `aws_rds`, `aws_sts`, `jwt`) and their bounds. |
 | `dynamic.margin` | `expires_at` is this long before what was generated expires, at most half of what is left: up to `1h`; unset (or `0`), `10m`. |
 
 ### `audit`, `telemetry`

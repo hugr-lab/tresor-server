@@ -91,14 +91,12 @@ func parseGenerator(kind, body string) (*generator, error) {
 			return nil, errors.New("is a claim:// generator of a session claim, never served")
 		}
 		return &generator{kind: kind, claim: body}, nil
-	case "login":
+	case "login", "rule": // a rule is a login (flow rule): the same form
 		name, field, ok := strings.Cut(body, "#")
 		if !ok || name == "" || field == "" {
-			return nil, errors.New("is a login://<login>#<field> generator with no login or no field")
+			return nil, fmt.Errorf("is a %s://<login>#<field> generator with no login or no field", kind)
 		}
 		return loginGenerator(name, field)
-	case "rule":
-		return nil, fmt.Errorf("is a %s:// generator, not available in this version", kind)
 	}
 	return nil, errors.New("is a generator of an unknown kind (exchange://, claim://)")
 }

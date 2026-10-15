@@ -118,7 +118,36 @@ type Dynamic struct {
 	Margin time.Duration `yaml:"margin"`
 	// LoginHosts: the hosts a service login may call (a name, or *.domain); empty - none may.
 	LoginHosts []string `yaml:"login_hosts"`
+	// Identities: what a rule (flow rule) or a signed client (flow jwt_assertion) may use - the operator's, never
+	// an administrator's choice: each bounded to what it may be asked for.
+	Identities []Identity `yaml:"identities"`
 }
+
+// Identity is a workload identity, or a client's signing key, a service login may use (spec 023).
+type Identity struct {
+	Name string `yaml:"name"` // what a login's identity names
+	Kind string `yaml:"kind"` // azure | gcp | aws_rds | aws_sts | jwt
+	// azure: a user-assigned identity's client id (managed, or workload with its federated credential); empty -
+	// the service's own (azure.identity). gcp: a service account impersonated; empty - the service's own.
+	ClientID       string `yaml:"client_id"`
+	ServiceAccount string `yaml:"service_account"`
+	// Scopes: azure, gcp - the only token scopes a login may ask for.
+	Scopes []string `yaml:"scopes"`
+	// RoleARN: aws_rds (optional), aws_sts (required) - a role assumed with the service's identity.
+	RoleARN string `yaml:"role_arn"`
+	// Endpoints, Users: aws_rds - the databases (host:port) and their users a token may be made for.
+	Endpoints []string `yaml:"endpoints"`
+	Users     []string `yaml:"users"`
+	// Duration: aws_sts - the credentials' life (15m to 12h; default 1h).
+	Duration time.Duration `yaml:"duration"`
+	// Client: jwt - a private_key_jwt client: client_id and its key, as exchange's client_auth (keyvault, vault,
+	// awskms, gcpkms, key_file); Audience is the assertion's aud (default: the token endpoint).
+	Client   *ExchangeClient `yaml:"client"`
+	Audience string          `yaml:"audience"`
+}
+
+// IdentityKinds are the kinds of dynamic.identities.
+var IdentityKinds = []string{"azure", "gcp", "aws_rds", "aws_sts", "jwt"}
 
 // CORS: the web pages that call the service - tresor in DuckDB-wasm (spec 022). The console's hosts are
 // ui.allowed_origins; neither implies the other.
@@ -735,6 +764,9 @@ func (c *Config) validate() error {
 	}
 	if c.Dynamic.Margin < 0 || c.Dynamic.Margin > time.Hour {
 		return errors.New("dynamic.margin is 0 to 1h")
+	}
+	if err := c.validateIdentities(); err != nil {
+		return err
 	}
 	for _, h := range c.Dynamic.LoginHosts {
 		name := strings.TrimPrefix(h, "*.")
@@ -1375,6 +1407,84 @@ func (s Source) admits(rest string) bool {
 		}
 	}
 	return false
+}
+
+// validateIdentities checks dynamic.identities: each named once, of a kind, bounded to what it may be asked for.
+func (c *Config) validateIdentities() error {
+	seen := map[string]bool{}
+	for i := range c.Dynamic.Identities {
+		id := &c.Dynamic.Identities[i]
+		where := fmt.Sprintf("dynamic.identities[%d]", i)
+		if id.Name == "" || seen[id.Name] {
+			return fmt.Errorf("%s: a name, once", where)
+		}
+		seen[id.Name] = true
+		set := map[string]bool{"client_id": id.ClientID != "", "service_account": id.ServiceAccount != "",
+			"scopes": len(id.Scopes) > 0, "role_arn": id.RoleARN != "", "endpoints": len(id.Endpoints) > 0,
+			"users": len(id.Users) > 0, "duration": id.Duration != 0, "client": id.Client != nil,
+			"audience": id.Audience != ""}
+		allowed, ok := map[string][]string{
+			"azure":   {"client_id", "scopes"},
+			"gcp":     {"service_account", "scopes"},
+			"aws_rds": {"role_arn", "endpoints", "users"},
+			"aws_sts": {"role_arn", "duration"},
+			"jwt":     {"client", "audience"},
+		}[id.Kind]
+		if !ok {
+			return fmt.Errorf("%s.kind is %s", where, strings.Join(IdentityKinds, " | "))
+		}
+		for name, on := range set {
+			if on && !slices.Contains(allowed, name) {
+				return fmt.Errorf("%s.%s is not for kind %s", where, name, id.Kind)
+			}
+		}
+		switch id.Kind {
+		case "azure":
+			if len(id.Scopes) == 0 {
+				return fmt.Errorf("%s: an azure identity lists the scopes it may be asked for", where)
+			}
+			if c.Azure.Identity == "" {
+				return fmt.Errorf("%s: an azure identity needs azure.identity", where)
+			}
+		case "gcp":
+			if len(id.Scopes) == 0 {
+				return fmt.Errorf("%s: a gcp identity lists the scopes it may be asked for", where)
+			}
+		case "aws_rds":
+			if len(id.Endpoints) == 0 || len(id.Users) == 0 {
+				return fmt.Errorf("%s: an aws_rds identity lists its endpoints (host:port) and users", where)
+			}
+			if c.AWS.Region == "" {
+				return fmt.Errorf("%s: aws_rds needs aws.region", where)
+			}
+		case "aws_sts":
+			if id.RoleARN == "" {
+				return fmt.Errorf("%s: an aws_sts identity names the role_arn it assumes", where)
+			}
+			if id.Duration == 0 {
+				id.Duration = time.Hour
+			}
+			if id.Duration < 15*time.Minute || id.Duration > 12*time.Hour {
+				return fmt.Errorf("%s.duration is 15m to 12h", where)
+			}
+			if c.AWS.Region == "" {
+				return fmt.Errorf("%s: aws_sts needs aws.region", where)
+			}
+		case "jwt":
+			if id.Client == nil {
+				return fmt.Errorf("%s: a jwt identity has a client (client_id, client_auth, key)", where)
+			}
+			switch id.Client.ClientAuth {
+			case "keyvault", "vault", "awskms", "gcpkms", "key_file":
+			default:
+				return fmt.Errorf("%s.client.client_auth is keyvault, vault, awskms, gcpkms or key_file", where)
+			}
+			if err := id.Client.validate(c.Azure.Identity, c.Vault.used(), c.AWS.Region != ""); err != nil {
+				return fmt.Errorf("%s.client: %w", where, err)
+			}
+		}
+	}
+	return nil
 }
 
 // validate checks an exchange client's login: one way, and what that way needs - nothing of another.

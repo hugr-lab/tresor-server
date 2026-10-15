@@ -1,8 +1,14 @@
 package api
 
 import (
+	"errors"
+	"strconv"
+	"time"
+
 	"context"
 	"encoding/json"
+	"github.com/hugr-lab/tresor-server/internal/login"
+	azkv "github.com/hugr-lab/tresor-server/internal/material/azurekeyvault"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -224,5 +230,117 @@ func TestServiceLoginWholeClaim(t *testing.T) {
 		`"login_url":"mint+claim://preferred_username"`, 1)
 	if r := f.do("PUT", "/v1/secrets/bad", f.admin, bad); r.status != 422 {
 		t.Fatalf("a claim in login_url: %d %s", r.status, r.body)
+	}
+}
+
+type ruleID struct{ token string }
+
+func (ruleID) Kind() string { return "azure" }
+func (ruleID) Check(s *login.Spec) error {
+	if s.OAuthScope != "https://database.windows.net/.default" {
+		return errors.New("not that scope")
+	}
+	return nil
+}
+func (r ruleID) Make(context.Context, *login.Spec) (*login.Result, error) {
+	return &login.Result{Fields: map[string]string{"access_token": r.token}, Expiry: time.Now().Add(time.Hour)}, nil
+}
+
+// a rule: an identity the operator lists, bounded by it; unknown or out of bounds - refused at the write
+func TestServiceLoginRule(t *testing.T) {
+	f := newFixture(t, "")
+	f.srv.identities = map[string]login.Identity{"catalog-sql": ruleID{token: "entra-token"}}
+	rule := func(identity, scope string) string {
+		return `{"type":"tresor_service_login","provider":"config","scope":["mssql://sql.corp.example"],
+			"params":{"flow":"rule","identity":"` + identity + `","scope":"` + scope + `"}}`
+	}
+	for name, body := range map[string]string{
+		"an identity not listed": rule("nobody", "https://database.windows.net/.default"),
+		"a scope not allowed":    rule("catalog-sql", "https://vault.azure.net/.default"),
+	} {
+		if r := f.do("PUT", "/v1/secrets/r", f.admin, body); r.status != 422 {
+			t.Errorf("%s: %d %s", name, r.status, r.body)
+		}
+	}
+	if r := f.do("PUT", "/v1/secrets/sql-login", f.admin, rule("catalog-sql", "https://database.windows.net/.default")); r.status != 201 {
+		t.Fatalf("a rule: %d %s", r.status, r.body)
+	}
+	f.do("PUT", "/v1/secrets/sql-login/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	f.do("PUT", "/v1/secrets/sales", f.admin, `{"type":"azure","provider":"access_token","scope":["mssql://sql.corp.example/sales"],
+		"params":{"access_token":"mint+rule://sql-login#access_token"}}`)
+	f.do("PUT", "/v1/secrets/sales/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	r := f.do("GET", "/v1/secrets/sales", f.alice, "")
+	if r.status != 200 || r.json(t)["params"].(map[string]any)["access_token"] != "entra-token" || r.json(t)["provider"] != "access_token" {
+		t.Fatalf("an azure secret for mssql: %d %s", r.status, r.body)
+	}
+}
+
+// oauth2_refresh: a rotated refresh token is written back, sealed, compare-and-set; served from the cache after
+func TestServiceLoginRotation(t *testing.T) {
+	f := newFixture(t, "")
+	var refreshes atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		n := refreshes.Add(1)
+		if r.Form.Get("refresh_token") != "rt-"+strconv.Itoa(int(n-1)) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at-" + strconv.Itoa(int(n)),
+			"refresh_token": "rt-" + strconv.Itoa(int(n)), "expires_in": 600})
+	}))
+	t.Cleanup(srv.Close)
+	withLoginHosts(f, srv)
+	if r := f.do("PUT", "/v1/secrets/api-login", f.admin, `{"type":"tresor_service_login","provider":"config","scope":["`+srv.URL+`"],
+		"params":{"flow":"oauth2_refresh","token_url":"/token","client_id":"app","refresh_token":"rt-0"}}`); r.status != 201 {
+		t.Fatalf("a refresh login: %d %s", r.status, r.body)
+	}
+	f.do("PUT", "/v1/secrets/api-login/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	f.do("PUT", "/v1/secrets/api", f.admin, `{"type":"http","provider":"config","scope":["`+srv.URL+`"],
+		"params":{"bearer_token":"mint+login://api-login#access_token"}}`)
+	f.do("PUT", "/v1/secrets/api/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	for range 3 {
+		r := f.do("GET", "/v1/secrets/api", f.alice, "")
+		if r.status != 200 || r.json(t)["params"].(map[string]any)["bearer_token"] != "at-1" {
+			t.Fatalf("material: %d %s", r.status, r.body)
+		}
+	}
+	sec, _ := f.srv.store.Get(context.Background(), "api-login")
+	if string(sec.Params["refresh_token"]) != `"rt-1"` || sec.Version != 3 || refreshes.Load() != 1 { // created, granted, rotated
+		t.Fatalf("written back once: %s v%d, %d refreshes", sec.Params["refresh_token"], sec.Version, refreshes.Load())
+	}
+	if strings.Contains(f.logs.String(), "rt-1") || strings.Contains(f.logs.String(), "at-1") {
+		t.Fatal("a token reached the log")
+	}
+	// a refresh token as a reference cannot be written back: refused
+	if r := f.do("PUT", "/v1/secrets/bad", f.admin, `{"type":"tresor_service_login","provider":"config","scope":["`+srv.URL+`"],
+		"params":{"flow":"oauth2_refresh","token_url":"/token","refresh_token":"ref+azkv://corp-vault/x"}}`); r.status != 422 {
+		t.Fatalf("a reference: %d %s", r.status, r.body)
+	}
+}
+
+// a claim inside a reference: a name or an id only, the allowlist checked with it in
+func TestServiceLoginClaimInReference(t *testing.T) {
+	f := newFixture(t, "")
+	srv, _ := sessionService(t)
+	withLoginHosts(f, srv)
+	v := &kvSecrets{values: map[string]string{"lake-alice": "pw-alice"}}
+	withVault(f, v, azkv.Allow{Vault: "corp-vault", Prefixes: []string{"lake-"}})
+	body := loginBody(srv.URL, "${claim://preferred_username}", "ref+azkv://corp-vault/lake-${claim://preferred_username}", "")
+	if r := f.do("PUT", "/v1/secrets/crm", f.admin, body); r.status != 201 {
+		t.Fatalf("a login with a claim in a reference: %d %s", r.status, r.body)
+	}
+	f.do("PUT", "/v1/secrets/crm/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	f.do("PUT", "/v1/secrets/data", f.admin, `{"type":"http","provider":"config","scope":["`+srv.URL+`"],
+		"params":{"bearer_token":"mint+login://crm#session_id"}}`)
+	f.do("PUT", "/v1/secrets/data/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	r := f.do("GET", "/v1/secrets/data", f.alice, "")
+	if r.status != 200 || r.json(t)["params"].(map[string]any)["bearer_token"] != "sess-alice" {
+		t.Fatalf("alice's password from her reference: %d %s", r.status, r.body)
+	}
+	mallory := f.idp.Token(t, testidp.Claims{"sub": "m-id", "aud": []string{"duckdb-secrets"},
+		"realm_access": map[string]any{"roles": []any{"analysts"}}, "preferred_username": "../admin"})
+	if r := f.do("GET", "/v1/secrets/data", mallory, ""); r.status != 403 {
+		t.Fatalf("a claim that climbs: %d %s", r.status, r.body)
 	}
 }
