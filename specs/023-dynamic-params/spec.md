@@ -1,6 +1,6 @@
 # Spec 023: dynamic parameters - any secret type, a value made on each read
 
-- **Status**: accepted (tresor spec 029: hugr-lab/tresor#49, c0e1e38)
+- **Status**: implemented (tresor spec 029: hugr-lab/tresor#49, c0e1e38; #65, #66, #67)
 - **Date**: 2026-10-15
 - **Author**: hugr lab
 
