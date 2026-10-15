@@ -264,14 +264,24 @@ func (s *Server) mintAtGrant(ctx context.Context, user *auth.Caller, subject str
 	}
 	targets := map[string][2]string{}
 	for _, listed := range secrets {
-		if isMinted(listed) && policy.Usable(listed, actor.Principals) {
+		if isDynamic(listed) && policy.Usable(listed, actor.Principals) {
 			sec, err := s.store.Get(ctx, listed.Name) // a list carries no params: the audience is in them
 			if err != nil {
 				s.log.Error("store read failed", "secret", listed.Name, "error", err.Error())
 				continue // minted lazily, or refused at the read with the reason
 			}
-			audience, scope := mintTarget(sec.Params)
-			targets[mintKey(audience, scope)] = [2]string{audience, scope}
+			// every exchange the secret generates (spec 023), the token_exchange alias's too
+			gens, err := generatorsOf(sec.Type, sec.Provider, sec.Params, s.material.Refs(sec.Params))
+			if err != nil {
+				continue // refused at the read, with the reason
+			}
+			for _, list := range gens {
+				for _, gen := range list {
+					if gen.kind == "exchange" {
+						targets[mintKey(gen.audience, gen.scope)] = [2]string{gen.audience, gen.scope}
+					}
+				}
+			}
 		}
 	}
 	if len(targets) == 0 {
@@ -333,9 +343,9 @@ func isRefusal(err error) bool {
 	return errors.As(err, &e) && !e.Transient() && !e.ClientRefused()
 }
 
-// mintedToken is the token a minted secret's material carries for this request's caller, or the problem.
-func (s *Server) mintedToken(r *http.Request, c *auth.Caller, sec *state.Secret) (*mint.Token, *mintProblem) {
-	audience, scope := mintTarget(sec.Params)
+// mintedToken is a token for the audience and scope, for this request's caller (under a grant, the grant's
+// user), or the problem.
+func (s *Server) mintedToken(r *http.Request, c *auth.Caller, audience, scope string) (*mint.Token, *mintProblem) {
 	key := mintKey(audience, scope)
 	now := s.now()
 	fresh := func(t *mint.Token) bool { return t != nil && t.Expiry.Sub(now) > mintMargin }

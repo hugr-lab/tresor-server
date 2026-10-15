@@ -1,6 +1,6 @@
 # Spec 023: dynamic parameters - any secret type, a value made on each read
 
-- **Status**: draft (tresor spec 029: hugr-lab/tresor#49)
+- **Status**: accepted (tresor spec 029: hugr-lab/tresor#49, c0e1e38)
 - **Date**: 2026-10-15
 - **Author**: hugr lab
 
@@ -144,7 +144,13 @@ dynamic:
   typed params; gojq for the transforms.
 - `internal/api/minted.go`: the token_exchange path becomes the `exchange` generator; `tokenParam` goes (kept for
   the alias).
-- No state migration: a login is a secret; `subject` is a param.
+- **A row's `dynamic` marker** (state): a list opens no params, yet a descriptor says `dynamic` - so the write keeps
+  it beside them: a column `dynamic` on the SQL stores (migration 0007, `0` for the rows before), a field
+  `dynamic` on `TresorSecret` (the CRD changes: applied before the upgrade). It is in the row's MAC only when set,
+  so the rows written before keep theirs.
+- A login is a secret; `subject` is a param: nothing more in the state.
+- **Two parts**: (1) `exchange` and `claim`, the syntax, the marker, the alias, the pin at tresor `c0e1e38`; (2)
+  service logins and rules.
 
 ## Enforcement & security
 

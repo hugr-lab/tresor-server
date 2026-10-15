@@ -4,8 +4,9 @@ title: Token exchange
 
 # Token exchange
 
-A `token_exchange` secret (tresor specs/010) makes the service mint a token for its caller at the caller's
-identity provider (RFC 8693). The service logs in to the IdP as a confidential client, and is configured per
+A token for the caller - `mint+exchange://<audience>` in any parameter ([Generated parameters](generated.md)), or
+the older `provider: token_exchange` secret (tresor specs/010) - is minted at the caller's identity provider
+(RFC 8693, or Entra On-Behalf-Of). The service logs in to the IdP as a confidential client, and is configured per
 issuer:
 
 ```yaml

@@ -165,6 +165,34 @@ func testCreateGetList(t *testing.T, open Opener) {
 	if _, err := st.Describe(ctx, "zz"); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("describing a missing secret: %v", err)
 	}
+	// spec 023: dynamic is the row's own, said by a list (which opens no params) and kept by a write
+	dyn, err := st.Update(ctx, "d", func(*state.Secret) (*state.Secret, error) {
+		next := secret(1)
+		next.Dynamic = true
+		return next, nil
+	})
+	if err != nil || !dyn.Dynamic {
+		t.Fatalf("a dynamic secret: %+v %v", dyn, err)
+	}
+	if got, err := st.Get(ctx, "d"); err != nil || !got.Dynamic {
+		t.Fatalf("read back, dynamic: %v", err)
+	}
+	if got, err := st.Describe(ctx, "d"); err != nil || !got.Dynamic {
+		t.Fatalf("described, dynamic: %v", err)
+	}
+	if again, err := st.Update(ctx, "d", func(cur *state.Secret) (*state.Secret, error) {
+		next := state.Clone(cur)
+		next.Dynamic, next.Version = false, cur.Version+1
+		return next, nil
+	}); err != nil || again.Dynamic {
+		t.Fatalf("made static: %+v %v", again, err)
+	}
+	if got, err := st.Get(ctx, "d"); err != nil || got.Dynamic {
+		t.Fatalf("read back, static: %v", err)
+	}
+	if _, err := st.Update(ctx, "d", func(*state.Secret) (*state.Secret, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
 	if a, b := mustJSON(t, list[0]), mustJSON(t, listed); a != b {
 		t.Fatalf("listed\n%s\nwant\n%s", a, b)
 	}

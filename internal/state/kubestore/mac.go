@@ -23,6 +23,7 @@ type secretSpec struct {
 	DataKeyID  string        `json:"dataKeyID"`
 	Sealed     []byte        `json:"sealed"`
 	MAC        []byte        `json:"mac"`
+	Dynamic    bool          `json:"dynamic,omitempty"` // spec 023
 }
 
 type secretGrant struct {
@@ -105,6 +106,9 @@ func (s *secretSpec) canonical(k kind, instance string) []byte {
 	}
 	c.Str(s.DataKeyID)
 	c.Bytes(s.Sealed)
+	if s.Dynamic { // spec 023: only when set, so the resources written before keep their MACs
+		c.Str("dynamic")
+	}
 	return *c
 }
 

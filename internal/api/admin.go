@@ -380,12 +380,16 @@ func (s *Server) adminParams(w http.ResponseWriter, r *http.Request) {
 				return nil, fmt.Errorf("%w: %v", errInvalid, err)
 			}
 		}
+		dynamic, err := s.checkGenerators(current.Type, current.Provider, params) // spec 023
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errInvalid, err)
+		}
 		redact, err = s.material.CheckWrite(current.Provider, params, redact)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", errInvalid, err)
 		}
 		next := *current
-		next.Params, next.RedactKeys = params, redact
+		next.Params, next.RedactKeys, next.Dynamic = params, redact, dynamic
 		if body.Comment != nil {
 			next.Comment = *body.Comment
 		}

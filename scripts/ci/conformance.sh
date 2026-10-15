@@ -40,6 +40,8 @@ export TRESOR_STATE__KIND="$kind"
 export TRESOR_SERVER_WAIT="${TRESOR_SERVER_WAIT:-30}"
 # this service advertises variables (spec 004): tresor's variables.test runs too
 export TRESOR_CONFORMANCE_VARIABLES=1
+# and generated parameters in the shared mint+ syntax (spec 023, tresor spec 029): tresor's generators.test too
+export TRESOR_CONFORMANCE_GENERATORS=1
 case "$kind" in
 memory) ;;
 postgres | sqlserver)

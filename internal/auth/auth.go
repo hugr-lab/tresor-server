@@ -6,6 +6,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +39,10 @@ type Caller struct {
 	// ActorPrincipals are the actor's own (specs/009): under a grant the service applies the actor's
 	// permissions, never the user's - the user gets nothing beyond what the server was granted.
 	ActorPrincipals []string
+	// Claims are the token's top-level text claims (a string, a number or a boolean as its JSON text) that a
+	// generated parameter may serve (spec 023, mint+claim://) - never the session's or a token's binding
+	// (sid, jti, nonce, …), never a list or an object. Kept with a delegation grant: the grant's user's.
+	Claims map[string]string `json:",omitempty"`
 }
 
 // Client is the caller's client: principal (a service), or "".
@@ -233,8 +239,14 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Caller, error) {
 	if !slices.Contains(token.Audience, is.cfg.Audience) {
 		return nil, fmt.Errorf("%w: aud %v does not contain %q", ErrUnauthenticated, token.Audience, is.cfg.Audience)
 	}
+	var payload json.RawMessage
+	if err := token.Claims(&payload); err != nil {
+		return nil, fmt.Errorf("%w: claims: %v", ErrUnauthenticated, err)
+	}
 	var claims map[string]any
-	if err := token.Claims(&claims); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	dec.UseNumber() // a number claim served as its JSON text, every digit kept
+	if err := dec.Decode(&claims); err != nil {
 		return nil, fmt.Errorf("%w: claims: %v", ErrUnauthenticated, err)
 	}
 	if token.Subject == "" {
@@ -243,10 +255,42 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Caller, error) {
 	return callerFrom(is.cfg, token.Issuer, token.Subject, token.Expiry, claims), nil
 }
 
+// maxClaim bounds a kept claim's text: a claim is a name or an id, not a document.
+const maxClaim = 4096
+
+// bindingClaims name the user's session at the IdP or bind one token: never kept (tresor spec 029).
+var bindingClaims = map[string]bool{"sid": true, "session_state": true, "jti": true, "nonce": true,
+	"at_hash": true, "c_hash": true, "s_hash": true}
+
+// textClaims are the claims a generated parameter may serve: top-level, a string, a number or a boolean.
+func textClaims(claims map[string]any) map[string]string {
+	out := map[string]string{}
+	for name, v := range claims {
+		if bindingClaims[name] {
+			continue
+		}
+		var text string
+		switch t := v.(type) {
+		case string:
+			text = t
+		case json.Number:
+			text = t.String()
+		case bool:
+			text = strconv.FormatBool(t)
+		default:
+			continue
+		}
+		if text != "" && len(text) <= maxClaim {
+			out[name] = text
+		}
+	}
+	return out
+}
+
 // callerFrom maps claims to principals: identity is iss+sub, never an email or a username. A service
 // is recognised only by the issuer's configured rule: no claim marks one by convention.
 func callerFrom(cfg config.Issuer, iss, sub string, exp time.Time, claims map[string]any) *Caller {
-	c := &Caller{Issuer: iss, Subject: sub, ExpiresAt: exp}
+	c := &Caller{Issuer: iss, Subject: sub, ExpiresAt: exp, Claims: textClaims(claims)}
 	c.Principals = append(c.Principals, "subject:"+iss+"|"+sub)
 	for _, r := range stringsAt(claims, cfg.RolesClaim) {
 		c.Principals = append(c.Principals, "role:"+r)

@@ -160,7 +160,8 @@ The service's own identity on GCP (spec 012): Application Default Credentials. S
 
 ### `exchange` (per issuer)
 
-The service's client at the issuer, for `token_exchange` secrets. See [Token exchange](token-exchange.md).
+The service's client at the issuer, for tokens minted for callers (`mint+exchange://`, `token_exchange` secrets). See
+[Token exchange](token-exchange.md).
 
 | Setting | |
 | --- | --- |
@@ -227,6 +228,14 @@ Web pages that run tresor in DuckDB-wasm call the service from the browser, acro
 - Separate from `ui.allowed_origins` (the console's hosts): neither list implies the other.
 - An origin as a browser sends it: `https://host[:port]` (http only to this machine), no path, no wildcard.
 - The page's sign-in is the IdP's: register the page's origin there too (a SPA client, CORS on its token endpoint).
+
+### `dynamic`
+
+[Generated parameters](generated.md) (spec 023).
+
+| Setting | |
+| --- | --- |
+| `dynamic.margin` | `expires_at` is this long before what was generated expires, at most half of what is left: `10m` by default, `0` to `1h`. |
 
 ### `audit`, `telemetry`
 

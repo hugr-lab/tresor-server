@@ -37,6 +37,8 @@ type Config struct {
 	UI        UI        `yaml:"ui"`
 	// CORS is for web pages that run tresor in DuckDB-wasm (tresor's protocol, Browsers; spec 022).
 	CORS CORS `yaml:"cors"`
+	// Dynamic is for generated parameters (spec 023).
+	Dynamic Dynamic `yaml:"dynamic"`
 	// Store is the reference server's encrypted file: kept only to refuse a config that still has it (an
 	// empty `store:` too: see load)
 	Store any `yaml:"store"`
@@ -107,6 +109,13 @@ type UI struct {
 	// ConnectSrc are more origins the sign-in calls, beside the issuers' own (its CSP): an IdP whose token or
 	// user-info endpoint is on another host (Google: oauth2.googleapis.com; Entra: graph.microsoft.com).
 	ConnectSrc []string `yaml:"connect_src"`
+}
+
+// Dynamic: generated parameters (spec 023).
+type Dynamic struct {
+	// Margin: expires_at is this long before what was generated expires (at most half of what is left);
+	// default 10m - mssql renews a token 5 minutes before its exp.
+	Margin time.Duration `yaml:"margin"`
 }
 
 // CORS: the web pages that call the service - tresor in DuckDB-wasm (spec 022). The console's hosts are
@@ -721,6 +730,9 @@ func KnownVerb(v string) bool { return knownVerbs[v] }
 func (c *Config) validate() error {
 	if c.Listen == "" {
 		return errors.New("listen is required")
+	}
+	if c.Dynamic.Margin < 0 || c.Dynamic.Margin > time.Hour {
+		return errors.New("dynamic.margin is 0 to 1h")
 	}
 	host, _, err := net.SplitHostPort(c.Listen)
 	if err != nil {

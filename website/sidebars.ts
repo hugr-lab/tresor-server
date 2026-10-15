@@ -9,6 +9,7 @@ const sidebars: SidebarsConfig = {
     'encryption',
     'references',
     'variables',
+    'generated',
     'token-exchange',
     'console',
     'vault',
