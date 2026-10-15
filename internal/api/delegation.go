@@ -173,9 +173,20 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 	// the user's tokens for what the server may mint (specs/010): now, while the subject token lives
 	mayMint := slices.Contains(s.policy.ActorVerbs(client, actor.Issuer), "use")
 	var minted map[string]mintResult
+	var gens []*generator
 	if mayMint {
-		minted = s.mintAtGrant(r.Context(), user, body.SubjectToken, actor)
+		gens = s.grantGenerators(r.Context(), actor)
+		minted = s.mintAtGrant(r.Context(), user, body.SubjectToken, actor, gens)
 	}
+	// the claims the grant keeps (spec 023): only those a secret the actor may use names - stored with the
+	// grant, so no more of the user's token than is served
+	kept := map[string]string{}
+	for _, gen := range gens {
+		if v, ok := user.Claims[gen.claim]; gen.kind == "claim" && ok {
+			kept[gen.claim] = v
+		}
+	}
+	user.Claims = kept
 	if r.Context().Err() != nil {
 		return // the server gave up waiting: no grant nobody holds, with its refresh tokens
 	}

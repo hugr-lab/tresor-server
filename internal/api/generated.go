@@ -36,10 +36,6 @@ const (
 	defaultMargin   = 10 * time.Minute // expires_at this long before what was made expires (spec 023)
 )
 
-// sessionClaims name the user's session at the IdP or bind one token: never served (tresor spec 029).
-var sessionClaims = map[string]bool{"sid": true, "session_state": true, "jti": true, "nonce": true,
-	"at_hash": true, "c_hash": true, "s_hash": true}
-
 // servedProvider is the descriptor's provider: the stored one, the consumer's - the token_exchange alias's is
 // config (the protocol never serves a name for the service's mechanism).
 func servedProvider(sec *state.Secret) string {
@@ -88,7 +84,7 @@ func parseGenerator(kind, body string) (*generator, error) {
 		if body == "" {
 			return nil, errors.New("is a claim:// generator with no claim name")
 		}
-		if sessionClaims[body] {
+		if auth.BindingClaims[body] {
 			return nil, errors.New("is a claim:// generator of a session claim, never served")
 		}
 		return &generator{kind: kind, claim: body}, nil
@@ -193,6 +189,10 @@ func walkStrings(raw json.RawMessage, fn func(string) (string, bool, error)) (js
 	if json.Unmarshal(raw, &typed) != nil || typed["value"] == nil {
 		return raw, false, nil // checked at PUT: never here
 	}
+	var typ string
+	if json.Unmarshal(typed["type"], &typ) != nil || !textual(typ) {
+		return raw, false, nil // a BLOB, a number, a date: never read for generators
+	}
 	dec := json.NewDecoder(bytes.NewReader(typed["value"]))
 	dec.UseNumber() // every digit kept
 	var value any
@@ -209,6 +209,13 @@ func walkStrings(raw json.RawMessage, fn func(string) (string, bool, error)) (js
 	}
 	b, err := json.Marshal(typed)
 	return b, true, err
+}
+
+// textual: a type whose strings are text - VARCHAR, and the strings inside a MAP, STRUCT or LIST.
+func textual(typ string) bool {
+	t := strings.ToUpper(strings.TrimSpace(typ))
+	return t == "VARCHAR" || strings.HasPrefix(t, "MAP(") || strings.HasPrefix(t, "STRUCT(") ||
+		strings.HasPrefix(t, "LIST(") || strings.HasSuffix(t, "[]")
 }
 
 func walkAny(v any, fn func(string) (string, bool, error)) (any, bool, error) {
@@ -305,8 +312,10 @@ type made struct {
 }
 
 // generated replaces, in params (references resolved already), every generated value with one made for the
-// effective user, and unescapes literals. It returns the keys that hold a generated value and the earliest
-// expiry. stored are the params as stored; refs the keys that were references (left as resolved).
+// effective user, and unescapes literals; it reads the stored values (sec.Params), never what a reference read
+// (refs: those keys are left as resolved). It returns the keys that hold a generated value and the earliest
+// expiry. A row not marked dynamic - written before 0.5 - makes nothing: a string holding a generator is served
+// as stored, so a secret said static is never one made per caller.
 func (s *Server) generated(r *http.Request, c *auth.Caller, sec *state.Secret, params map[string]json.RawMessage,
 	refs map[string]bool) ([]string, time.Time, *mintProblem) {
 	cache := map[string]made{}
@@ -344,8 +353,14 @@ func (s *Server) generated(r *http.Request, c *auth.Caller, sec *state.Secret, p
 		hasGen := false
 		out, changed, err := walkStrings(sec.Params[key], func(str string) (string, bool, error) {
 			pieces, special, err := parseString(str)
+			if err != nil && !sec.Dynamic {
+				return str, false, nil // written before 0.5, unchecked: a literal
+			}
 			if err != nil || !special {
 				return str, false, err
+			}
+			if !sec.Dynamic && slices.ContainsFunc(pieces, func(p piece) bool { return p.gen != nil }) {
+				return str, false, nil // written before 0.5: a literal
 			}
 			var b strings.Builder
 			for _, p := range pieces {
@@ -405,8 +420,10 @@ func (s *Server) generate(r *http.Request, c *auth.Caller, gen *generator) (stri
 	case "claim":
 		value, ok := c.Claims[gen.claim]
 		if !ok || value == "" {
-			if c.Actor != "" && c.Claims == nil {
-				return "", time.Time{}, refusedMint("the delegation grant predates claims: a new session carries them")
+			if c.Actor != "" {
+				// a grant keeps the claims its secrets named at its exchange
+				return "", time.Time{}, refusedMint("the delegation grant holds no claim " + strconv.Quote(gen.claim) +
+					" (the user's token had none, or the secret was granted since): a new session carries it")
 			}
 			return "", time.Time{}, refusedMint("the caller's token carries no text claim " + strconv.Quote(gen.claim))
 		}

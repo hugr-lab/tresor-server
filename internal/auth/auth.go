@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
@@ -258,15 +259,16 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Caller, error) {
 // maxClaim bounds a kept claim's text: a claim is a name or an id, not a document.
 const maxClaim = 4096
 
-// bindingClaims name the user's session at the IdP or bind one token: never kept (tresor spec 029).
-var bindingClaims = map[string]bool{"sid": true, "session_state": true, "jti": true, "nonce": true,
-	"at_hash": true, "c_hash": true, "s_hash": true}
+// BindingClaims name the user's session at the IdP or bind one token (Entra's uti, rh, aio too): never kept,
+// never served (tresor spec 029).
+var BindingClaims = map[string]bool{"sid": true, "session_state": true, "jti": true, "nonce": true,
+	"at_hash": true, "c_hash": true, "s_hash": true, "uti": true, "rh": true, "aio": true}
 
 // textClaims are the claims a generated parameter may serve: top-level, a string, a number or a boolean.
 func textClaims(claims map[string]any) map[string]string {
 	out := map[string]string{}
 	for name, v := range claims {
-		if bindingClaims[name] {
+		if BindingClaims[name] {
 			continue
 		}
 		var text string
@@ -280,7 +282,9 @@ func textClaims(claims map[string]any) map[string]string {
 		default:
 			continue
 		}
-		if text != "" && len(text) <= maxClaim {
+		// no control character (CR, LF, NUL, …): a claim a user may edit is put inside strings a consumer
+		// parses - a header, a connection string
+		if text != "" && len(text) <= maxClaim && strings.IndexFunc(text, unicode.IsControl) < 0 {
 			out[name] = text
 		}
 	}

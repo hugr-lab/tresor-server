@@ -93,10 +93,11 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
 - **The SQL stores** migrate at start (a column, `dynamic`): nothing to do.
 - **Roll out every replica before writing a generated parameter**: a replica still on 0.4 serves `mint+…` as the
   text it is.
-- **`provider: token_exchange` is served as `config`**, the consumer's provider: nothing reads the old name.
-- **Values that now mean something**: a stored string that begins with `mint+`, or holds `${exchange://`,
-  `${claim://` or `$${`, is read as a generator or an escape from 0.5. Such a literal is unlikely; written again
-  through 0.5 it is checked.
+- **`provider: token_exchange` is served as `config`**, the consumer's provider: nothing reads the old name. Its
+  `expires_at` is now the token's expiry less `dynamic.margin` (at most half of what is left), not the expiry
+  itself: a client fetches a new token sooner.
+- **Secrets written before**: not dynamic, so a `mint+…` or `${…}` stored in one is served as it is, until the
+  secret is written again. Only an escape changes: `$${` is served as `${`, `mint++` as `mint+`.
 
 ## Check
 

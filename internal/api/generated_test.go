@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -171,5 +172,128 @@ func TestGeneratedNotFromReferences(t *testing.T) {
 	secret := r.json(t)["params"].(map[string]any)["secret"].(map[string]any)
 	if secret["value"] != "${claim://preferred_username}" {
 		t.Fatalf("resolved as it is: %s", r.body)
+	}
+}
+
+// typed values: STRUCT and LIST read, every digit kept, an untouched value served as stored, a BLOB never read
+func TestGeneratedTypedValues(t *testing.T) {
+	f := newFixture(t, "")
+	r := f.do("PUT", "/v1/secrets/t", f.admin, `{"type":"http","provider":"config","params":{
+		"s":{"type":"STRUCT(a VARCHAR, n DOUBLE)","value":{"a":"${claim://preferred_username}","n":12345678901234567890.123}},
+		"l":{"type":"VARCHAR[]","value":["x","mint+claim://preferred_username"]},
+		"b":{"type":"BLOB","value":"mint+claim://preferred_username"},
+		"m":{"type":"MAP(VARCHAR, VARCHAR)","value":{"k":"v"}}}}`)
+	if r.status != 201 || r.json(t)["dynamic"] != true {
+		t.Fatalf("written: %d %s", r.status, r.body)
+	}
+	f.do("PUT", "/v1/secrets/t/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	r = f.do("GET", "/v1/secrets/t", f.alice, "")
+	for _, want := range []string{`"a":"alice"`, `12345678901234567890.123`, `["x","alice"]`,
+		`"b":{"type":"BLOB","value":"mint+claim://preferred_username"}`, `"m":{"type":"MAP(VARCHAR, VARCHAR)","value":{"k":"v"}}`} {
+		if !strings.Contains(string(r.body), want) {
+			t.Fatalf("%s not in %s", want, r.body)
+		}
+	}
+	redact := r.json(t)["redact_keys"].([]any)
+	if len(redact) != 2 || redact[0] != "l" || redact[1] != "s" {
+		t.Fatalf("redact_keys: %v", redact)
+	}
+	// an exchange for this service's own audience, inside a MAP: refused
+	if r := f.do("PUT", "/v1/secrets/own", f.admin, `{"type":"http","provider":"config","params":{
+		"h":{"type":"MAP(VARCHAR, VARCHAR)","value":{"A":"Bearer ${exchange://duckdb-secrets}"}}}}`); r.status != 422 {
+		t.Fatalf("own audience in a MAP: %d %s", r.status, r.body)
+	}
+}
+
+// a row written before 0.5 (not marked dynamic) makes nothing: a generator in it is a literal, so a secret said
+// static is never one made per caller
+func TestGeneratedStaticRow(t *testing.T) {
+	f := newFixture(t, "")
+	stored(t, f.srv.store, "old", `{"password":"mint+claim://preferred_username","user":"mint+bad","x":"$${y}"}`)
+	f.do("PUT", "/v1/secrets/old/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	r := f.do("GET", "/v1/secrets/old", f.alice, "")
+	body := r.json(t)
+	params := body["params"].(map[string]any)
+	if r.status != 200 || body["dynamic"] != false || body["expires_at"] != nil ||
+		params["password"] != "mint+claim://preferred_username" || params["user"] != "mint+bad" || params["x"] != "${y}" {
+		t.Fatalf("served as stored: %d %s", r.status, r.body)
+	}
+}
+
+// the admin API's params change sets and clears the marker; a PUT without a generator makes it static
+func TestGeneratedMarkerFollowsWrites(t *testing.T) {
+	f := newFixture(t, "")
+	withConsole(f)
+	f.do("PUT", "/v1/secrets/pg", f.admin, `{"type":"postgres","provider":"config","params":{"host":"db","password":"p"}}`)
+	r := f.do("PATCH", "/admin/v1/secrets/pg/params", f.admin, `{"keep":["host"],"set":{"password":"mint+claim://preferred_username"}}`,
+		"If-Match", `"1"`)
+	if r.status != 200 {
+		t.Fatalf("patch: %d %s", r.status, r.body)
+	}
+	if sec, _ := f.srv.store.Get(context.Background(), "pg"); !sec.Dynamic {
+		t.Fatal("a generator set: dynamic")
+	}
+	f.do("PATCH", "/admin/v1/secrets/pg/params", f.admin, `{"keep":["host"],"set":{"password":"p"}}`, "If-Match", `"2"`)
+	if sec, _ := f.srv.store.Get(context.Background(), "pg"); sec.Dynamic {
+		t.Fatal("no generator left: static")
+	}
+	f.do("PUT", "/v1/secrets/pg", f.admin, `{"type":"postgres","provider":"config","params":{"password":"mint+claim://sub"}}`)
+	f.do("PUT", "/v1/secrets/pg", f.admin, `{"type":"postgres","provider":"config","params":{"password":"p"}}`)
+	if sec, _ := f.srv.store.Get(context.Background(), "pg"); sec.Dynamic {
+		t.Fatal("replaced without a generator: static")
+	}
+}
+
+// under a grant: an exchange generator minted at the exchange, the user's; only the claims a usable secret
+// names are kept with the grant; a claim with a control character is never kept
+func TestGeneratedUnderGrant(t *testing.T) {
+	f := newFixture(t, "")
+	node := f.idp.Service(t, "duckdb-secrets", "node", "nodes")
+	f.do("PUT", "/v1/secrets/echo", f.admin, `{"type":"http","provider":"config","params":{
+		"bearer_token":"mint+exchange://echo-api","extra_http_headers":{"type":"MAP(VARCHAR, VARCHAR)","value":{"X-User":"${claim://preferred_username}"}}}}`)
+	f.do("PUT", "/v1/secrets/echo/grants/n", f.admin, `{"principal":"role:nodes","verbs":["use"]}`)
+	g, r := f.grantFor(node, f.alice)
+	if g == "" || f.idp.Exchanges != 1 {
+		t.Fatalf("exchange: %d %s, %d exchanges", r.status, r.body, f.idp.Exchanges)
+	}
+	bearer, body, r := f.mintedMaterial(node, "Delegation", g)
+	if c := claimsOf(t, bearer); c["sub"] != "alice-id" || c["aud"] != "echo-api" || f.idp.Exchanges != 1 {
+		t.Fatalf("alice's token, minted at the exchange: %v (%d) %s", c, f.idp.Exchanges, r.body)
+	}
+	if !strings.Contains(string(r.body), `"X-User":"alice"`) || body["dynamic"] != true {
+		t.Fatalf("alice's claim: %s", r.body)
+	}
+	// a secret granted since names a claim the grant did not keep
+	f.do("PUT", "/v1/secrets/azp", f.admin, `{"type":"http","provider":"config","params":{"bearer_token":"mint+claim://azp"}}`)
+	f.do("PUT", "/v1/secrets/azp/grants/n", f.admin, `{"principal":"role:nodes","verbs":["use"]}`)
+	if r := f.do("GET", "/v1/secrets/azp", node, "", "Delegation", g); r.status != 403 || !strings.Contains(string(r.body), "new session") {
+		t.Fatalf("a claim not kept: %d %s", r.status, r.body)
+	}
+	// a claim with a line break is never kept
+	mallory := f.idp.Token(t, testidp.Claims{"sub": "m-id", "aud": []string{"duckdb-secrets"},
+		"realm_access": map[string]any{"roles": []any{"analysts"}}, "preferred_username": "m\r\nX-Admin: 1"})
+	f.do("PUT", "/v1/secrets/echo/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	f.do("PUT", "/v1/secrets/who", f.admin, claimSecret)
+	f.do("PUT", "/v1/secrets/who/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	if r := f.do("GET", "/v1/secrets/who", mallory, ""); r.status != 403 {
+		t.Fatalf("a claim with a control character: %d %s", r.status, r.body)
+	}
+}
+
+// the margin: a set one, and one clamped to half of a short life
+func TestGeneratedMargin(t *testing.T) {
+	f := newFixture(t, "")
+	now := time.Now()
+	f.srv.now = func() time.Time { return now }
+	f.srv.cfg.Dynamic.Margin = time.Minute
+	if got := f.srv.expiresAt(now.Add(time.Hour)); !got.Equal(now.Add(59 * time.Minute)) {
+		t.Fatalf("a set margin: %v", got.Sub(now))
+	}
+	f.srv.cfg.Dynamic.Margin = 0 // the default, 10m, at most half of what is left
+	if got := f.srv.expiresAt(now.Add(4 * time.Minute)); !got.Equal(now.Add(2 * time.Minute)) {
+		t.Fatalf("a short life: %v", got.Sub(now))
+	}
+	if got := f.srv.expiresAt(now.Add(-time.Second)); got.After(now) {
+		t.Fatalf("an expired value: %v", got.Sub(now))
 	}
 }
