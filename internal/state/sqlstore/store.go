@@ -185,10 +185,10 @@ func (s *Store) verified(ctx context.Context, r *row) error {
 
 // selectSecrets reads secrets with their grants in one statement: one snapshot, the grants in their order.
 const selectSecrets = `SELECT s.name, s.row_id, s.type, s.provider, s.scope, s.redact_keys, s.comment, s.owner,
-	s.version, s.created_at, s.updated_at, s.data_key_id, s.sealed, s.mac, g.id, g.principal, g.verbs
+	s.version, s.created_at, s.updated_at, s.data_key_id, s.sealed, s.mac, s.dynamic, g.id, g.principal, g.verbs
 	FROM {entries} s LEFT JOIN {grants} g ON g.secret = s.name`
 
-const secretColumns = `name, row_id, type, provider, scope, redact_keys, comment, owner, version, created_at, updated_at, data_key_id, sealed, mac`
+const secretColumns = `name, row_id, type, provider, scope, redact_keys, comment, owner, version, created_at, updated_at, data_key_id, sealed, mac, dynamic`
 
 // query reads secrets (one, when name is set), in name order.
 func (s *Store) query(ctx context.Context, name string) ([]*row, error) {
@@ -205,11 +205,13 @@ func (s *Store) query(ctx context.Context, name string) ([]*row, error) {
 	for rows.Next() {
 		var r row
 		var gID, gPrincipal, gVerbs sql.NullString
+		var dynamic int64
 		if err := rows.Scan(&r.sec.Name, &r.rowID, &r.sec.Type, &r.sec.Provider, &r.scopeText, &r.redactText, &r.sec.Comment,
-			&r.sec.Owner, &r.sec.Version, &r.createdMicro, &r.updatedMicro, &r.dataKeyID, &r.sealed, &r.mac,
+			&r.sec.Owner, &r.sec.Version, &r.createdMicro, &r.updatedMicro, &r.dataKeyID, &r.sealed, &r.mac, &dynamic,
 			&gID, &gPrincipal, &gVerbs); err != nil {
 			return nil, err
 		}
+		r.sec.Dynamic = dynamic != 0
 		if n := len(out); n == 0 || out[n-1].sec.Name != r.sec.Name {
 			if err := json.Unmarshal([]byte(r.scopeText), &r.sec.Scope); err != nil {
 				return nil, fmt.Errorf("secret %s: scope: %w", r.sec.Name, err)
@@ -431,11 +433,15 @@ func (s *Store) write(ctx context.Context, r *row, next *state.Secret) (bool, er
 		return false, err
 	}
 	defer tx.Rollback()
+	dynamic := 0
+	if next.Dynamic {
+		dynamic = 1
+	}
 	args := []any{next.Type, next.Provider, string(scope), string(redact), next.Comment, next.Owner, next.Version,
-		next.CreatedAt.UnixMicro(), next.UpdatedAt.UnixMicro(), dataKeyID, sealed, mac}
+		next.CreatedAt.UnixMicro(), next.UpdatedAt.UnixMicro(), dataKeyID, sealed, mac, dynamic}
 	if r == nil {
 		_, err := tx.ExecContext(ctx, s.q(`INSERT INTO {entries} (`+secretColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), append([]any{next.Name, rowID}, args...)...)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), append([]any{next.Name, rowID}, args...)...)
 		if s.d.Unique(err) {
 			return false, nil // created by another writer meanwhile
 		}
@@ -444,8 +450,8 @@ func (s *Store) write(ctx context.Context, r *row, next *state.Secret) (bool, er
 		}
 	} else {
 		res, err := tx.ExecContext(ctx, s.q(`UPDATE {entries} SET type = ?, provider = ?, scope = ?, redact_keys = ?,
-			comment = ?, owner = ?, version = ?, created_at = ?, updated_at = ?, data_key_id = ?, sealed = ?, mac = ?
-			WHERE name = ? AND version = ? AND row_id = ?`), append(args, next.Name, r.sec.Version, r.rowID)...)
+			comment = ?, owner = ?, version = ?, created_at = ?, updated_at = ?, data_key_id = ?, sealed = ?, mac = ?,
+			dynamic = ? WHERE name = ? AND version = ? AND row_id = ?`), append(args, next.Name, r.sec.Version, r.rowID)...)
 		if err != nil {
 			return false, err
 		}

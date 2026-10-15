@@ -192,6 +192,7 @@ func (s *Store) verified(ctx context.Context, o *object[secretSpec]) (*state.Sec
 		return nil, err
 	}
 	sec := &state.Secret{Name: sp.Name, Type: sp.Type, Provider: sp.Provider, Scope: sp.Scope, RedactKeys: sp.RedactKeys,
+		Dynamic: sp.Dynamic,
 		Comment: sp.Comment, Owner: sp.Owner, Version: sp.Version,
 		CreatedAt: fromNanos(sp.CreatedAt), UpdatedAt: fromNanos(sp.UpdatedAt)}
 	if sp.Grants != nil {
@@ -371,7 +372,7 @@ func (s *Store) write(ctx context.Context, o *object[secretSpec], next *state.Se
 		return false, err
 	}
 	sp.Name, sp.Type, sp.Provider, sp.Scope, sp.RedactKeys = next.Name, next.Type, next.Provider, next.Scope, next.RedactKeys
-	sp.Comment, sp.Owner, sp.Version = next.Comment, next.Owner, next.Version
+	sp.Comment, sp.Owner, sp.Version, sp.Dynamic = next.Comment, next.Owner, next.Version, next.Dynamic
 	sp.CreatedAt, sp.UpdatedAt = nanos(next.CreatedAt), nanos(next.UpdatedAt)
 	if next.Grants != nil {
 		sp.Grants = make([]secretGrant, len(next.Grants))

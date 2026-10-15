@@ -401,7 +401,7 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 		"api":      strings.TrimRight(s.cfg.PublicURL, "/"),
 		"issuers":  issuers,
 		"capabilities": map[string]bool{
-			"write": true, "annotate": true, "dynamic": false, "delegation": true, "variables": true,
+			"write": true, "annotate": true, "dynamic": true, "delegation": true, "variables": true,
 		},
 	})
 }
@@ -446,14 +446,14 @@ func descriptor(sec *state.Secret, verbs []string) map[string]any {
 	return map[string]any{
 		"name":        sec.Name,
 		"type":        sec.Type,
-		"provider":    sec.Provider,
+		"provider":    servedProvider(sec), // the consumer's (spec 023)
 		"scope":       scope,
 		"comment":     sec.Comment,
 		"owner":       sec.Owner,
 		"created_at":  sec.CreatedAt.UTC().Format(time.RFC3339),
 		"updated_at":  sec.UpdatedAt.UTC().Format(time.RFC3339),
 		"version":     strconv.FormatInt(sec.Version, 10),
-		"dynamic":     isMinted(sec), // a token minted per caller (specs/010)
+		"dynamic":     isDynamic(sec), // a value made on each read (spec 023; specs/010's alias)
 		"permissions": verbs,
 	}
 }
@@ -514,34 +514,29 @@ func (s *Server) getSecret(w http.ResponseWriter, r *http.Request) {
 			"version", res.Version)
 		refs = append(refs, audit.Ref{Param: res.Param, Ref: res.Ref.String(), Version: res.Version})
 	}
-	if params == nil {
-		params = map[string]json.RawMessage{}
+	// generated values (spec 023): made for the effective user - the caller, or under a grant the grant's
+	// user - after the references, never from what a reference read
+	out := make(map[string]json.RawMessage, len(params)+1)
+	for k, v := range params {
+		out[k] = v
 	}
-	redact := sec.RedactKeys
-	if redact == nil {
-		redact = []string{}
+	refKeys := map[string]bool{}
+	for _, res := range resolved {
+		refKeys[res.Param] = true
 	}
-	body["params"] = params
-	body["redact_keys"] = redact
+	generatedKeys, expires, refusal := s.generated(r, c, sec, out, refKeys)
+	if refusal != nil {
+		problem(w, refusal.status, refusal.kind, refusal.detail)
+		return
+	}
+	body["params"] = out
+	body["redact_keys"] = withKeys(sec.RedactKeys, generatedKeys)
 	body["expires_at"] = nil
-	if isMinted(sec) {
-		// a token for the caller (specs/010): the caller's own, or under a grant the grant's user's
-		token, refusal := s.mintedToken(r, c, sec)
-		if refusal != nil {
-			problem(w, refusal.status, refusal.kind, refusal.detail)
-			return
-		}
-		param := tokenParam[strings.ToLower(sec.Type)]
-		minted := make(map[string]json.RawMessage, len(params)+1)
-		for k, v := range params {
-			minted[k] = v
-		}
-		minted[param], _ = json.Marshal(token.Access)
-		body["params"] = minted
-		body["redact_keys"] = append(slices.Clone(redact), param)
-		if !token.Expiry.IsZero() {
-			body["expires_at"] = token.Expiry.UTC().Format(time.RFC3339)
-		}
+	if !expires.IsZero() {
+		body["expires_at"] = s.expiresAt(expires).UTC().Format(time.RFC3339)
+	} else if isDynamic(sec) {
+		// a dynamic secret's material always names its expiry (tresor spec 029): nothing made now
+		body["expires_at"] = s.now().Add(mintNoExpiry).UTC().Format(time.RFC3339)
 	}
 	o := observed(r) // what was served, once it is
 	o.event.Version, o.event.Refs = sec.Version, refs
@@ -667,6 +662,12 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// generated values (spec 023): well formed, of a kind this version makes - and the row says it is dynamic
+	dynamic, err := s.checkGenerators(body.Type, body.Provider, body.Params)
+	if err != nil {
+		problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
+		return
+	}
 	// references (ref+...): to a configured source, within its allowlist, VARCHAR only - never stored as a
 	// literal - and redacted: a resolved value never shows in duckdb_secrets()
 	redact, err := s.material.CheckWrite(body.Provider, body.Params, body.RedactKeys)
@@ -680,11 +681,11 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 		return &state.Secret{
 			Type: body.Type, Provider: body.Provider, Scope: body.Scope, Params: body.Params,
 			RedactKeys: body.RedactKeys, Comment: deref(body.Comment), Owner: c.Owner(),
-			CreatedAt: now, UpdatedAt: now, Version: 1,
+			CreatedAt: now, UpdatedAt: now, Version: 1, Dynamic: dynamic,
 		}
 	}, func(next *state.Secret) {
 		next.Type, next.Provider, next.Scope = body.Type, body.Provider, body.Scope
-		next.Params, next.RedactKeys = body.Params, body.RedactKeys
+		next.Params, next.RedactKeys, next.Dynamic = body.Params, body.RedactKeys, dynamic
 		if body.Comment != nil {
 			next.Comment = *body.Comment
 		}

@@ -5,7 +5,7 @@
 #
 #   scripts/ci/tresor_checkout.sh <dir> [--submodules]    # --submodules: to build it (duckdb, ...)
 set -euo pipefail
-TRESOR_COMMIT=d5fca882b35f5440d9c233c6ea27f891f9c9ddce # tresor main: spec 028 - duckdb f702a1f with duckdb-acl; the protocol's Browsers note (spec 020)
+TRESOR_COMMIT=c0e1e387c1ac75fcd2c19fd2e9529b66ab00c68d
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 dest="${1:?usage: tresor_checkout.sh <dir> [--submodules]}"
 

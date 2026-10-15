@@ -36,3 +36,4 @@ Research lives in the local, gitignored `design/` folder.
 | [020](020-gcp-cloud-run/spec.md) | a GCP recipe: Cloud Run, Cloud SQL by Private Service Connect, in Terraform | implemented |
 | [021](021-aws-ecs/spec.md) | an AWS recipe: ECS on Fargate, RDS by IAM in private subnets, in Terraform | implemented |
 | [022](022-release-0.4/spec.md) | release 0.4.0: tresor's browsers (CORS), the MAC on by default, signed artifacts | implemented |
+| [023](023-dynamic-params/spec.md) | dynamic parameters: any type, a value made on each read; service logins | accepted |

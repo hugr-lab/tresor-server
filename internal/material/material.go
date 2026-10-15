@@ -272,6 +272,18 @@ func (r *Resolver) Resolve(ctx context.Context, params map[string]json.RawMessag
 	return out, done, nil
 }
 
+// Refs are the parameters whose value is a reference (ref+…, a string or a typed one's): what Resolve reads,
+// and what a generator never does (spec 023).
+func (r *Resolver) Refs(params map[string]json.RawMessage) map[string]bool {
+	refs := map[string]bool{}
+	for key, raw := range params {
+		if p := readParam(raw); p.isStr && strings.HasPrefix(p.text, Prefix) {
+			refs[key] = true
+		}
+	}
+	return refs
+}
+
 // Admits says whether a reference's text parses and is within a configured allowlist: what an administrator
 // could write.
 func (r *Resolver) Admits(text string) bool {

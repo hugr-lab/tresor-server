@@ -85,6 +85,20 @@ needs nothing. One with rows from before 0.2 (no MAC) makes the start stop, nami
 
 Nothing else: no migration of the Kubernetes store, no CRD changed, no setting renamed.
 
+### Upgrading to 0.5 (spec 023)
+
+- **Kubernetes store: apply the CRDs first** (`kubectl apply --server-side -f crds/`): `TresorSecret` and
+  `TresorVariable` have a new field, `dynamic`. With the old CRDs the API server drops it, and a secret with
+  generated parameters is refused (its MAC no longer verifies).
+- **The SQL stores** migrate at start (a column, `dynamic`): nothing to do.
+- **Roll out every replica before writing a generated parameter**: a replica still on 0.4 serves `mint+…` as the
+  text it is.
+- **`provider: token_exchange` is served as `config`**, the consumer's provider: nothing reads the old name. Its
+  `expires_at` is now the token's expiry less `dynamic.margin` (at most half of what is left), not the expiry
+  itself: a client fetches a new token sooner.
+- **Secrets written before**: not dynamic, so a `mint+…` or `${…}` stored in one is served as it is, until the
+  secret is written again. Only an escape changes: `$${` is served as `${`, `mint++` as `mint+`.
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.

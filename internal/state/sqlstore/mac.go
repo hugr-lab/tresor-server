@@ -67,6 +67,9 @@ func rowCanon(ns namespace, instance string, r *row) []byte {
 	}
 	c.Str(r.dataKeyID)
 	c.Bytes(r.sealed)
+	if r.sec.Dynamic { // spec 023: only when set, so the rows written before keep their MACs
+		c.Str("dynamic")
+	}
 	return *c
 }
 

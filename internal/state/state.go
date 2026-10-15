@@ -19,10 +19,13 @@ type Secret struct {
 	Scope      []string                   `json:"scope"`
 	Params     map[string]json.RawMessage `json:"params"`
 	RedactKeys []string                   `json:"redact_keys"`
-	Comment    string                     `json:"comment"`
-	Owner      string                     `json:"owner"`
-	CreatedAt  time.Time                  `json:"created_at"`
-	UpdatedAt  time.Time                  `json:"updated_at"`
+	// Dynamic: a parameter is made on each read (spec 023) - kept apart from the sealed params, so a list,
+	// which opens none, can say so.
+	Dynamic   bool      `json:"dynamic,omitempty"`
+	Comment   string    `json:"comment"`
+	Owner     string    `json:"owner"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 	// Version is the protocol's (the ETag): every write moves it, and the compare-and-set is on it.
 	Version int64   `json:"version"`
 	Grants  []Grant `json:"grants"`

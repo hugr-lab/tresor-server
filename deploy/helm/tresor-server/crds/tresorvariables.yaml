@@ -106,3 +106,5 @@ spec:
               mac:
                 type: string
                 format: byte
+              dynamic:
+                type: boolean

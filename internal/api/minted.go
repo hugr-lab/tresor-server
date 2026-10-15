@@ -253,25 +253,43 @@ func (s *Server) checkMinted(token *mint.Token, audience string) error {
 	return nil
 }
 
-// mintAtGrant: at a grant's exchange, the user's token is exchanged - with a refresh token - for every
-// audience the actor may mint, concurrently and under one deadline; the results are stored with the grant.
-// The subject token is kept (sealed) until it expires, for what could not be minted now.
-func (s *Server) mintAtGrant(ctx context.Context, user *auth.Caller, subject string, actor *auth.Caller) map[string]mintResult {
+// grantGenerators are the generators of every dynamic secret the actor may use (spec 023; the token_exchange
+// alias's too): what a grant's exchange mints now, and the claims it keeps.
+func (s *Server) grantGenerators(ctx context.Context, actor *auth.Caller) []*generator {
 	secrets, err := s.store.List(ctx)
 	if err != nil {
 		s.log.Error("store read failed", "error", err.Error())
 		return nil // minted lazily from the subject token, while it lives
 	}
-	targets := map[string][2]string{}
+	var out []*generator
 	for _, listed := range secrets {
-		if isMinted(listed) && policy.Usable(listed, actor.Principals) {
-			sec, err := s.store.Get(ctx, listed.Name) // a list carries no params: the audience is in them
+		if isDynamic(listed) && policy.Usable(listed, actor.Principals) {
+			sec, err := s.store.Get(ctx, listed.Name) // a list carries no params: the generators are in them
 			if err != nil {
 				s.log.Error("store read failed", "secret", listed.Name, "error", err.Error())
 				continue // minted lazily, or refused at the read with the reason
 			}
-			audience, scope := mintTarget(sec.Params)
-			targets[mintKey(audience, scope)] = [2]string{audience, scope}
+			gens, err := generatorsOf(sec.Type, sec.Provider, sec.Params, s.material.Refs(sec.Params))
+			if err != nil {
+				continue // refused at the read, with the reason
+			}
+			for _, list := range gens {
+				out = append(out, list...)
+			}
+		}
+	}
+	return out
+}
+
+// mintAtGrant: at a grant's exchange, the user's token is exchanged - with a refresh token - for every
+// audience the actor may mint, concurrently and under one deadline; the results are stored with the grant.
+// The subject token is kept (sealed) until it expires, for what could not be minted now.
+func (s *Server) mintAtGrant(ctx context.Context, user *auth.Caller, subject string, actor *auth.Caller,
+	gens []*generator) map[string]mintResult {
+	targets := map[string][2]string{}
+	for _, gen := range gens {
+		if gen.kind == "exchange" {
+			targets[mintKey(gen.audience, gen.scope)] = [2]string{gen.audience, gen.scope}
 		}
 	}
 	if len(targets) == 0 {
@@ -333,9 +351,9 @@ func isRefusal(err error) bool {
 	return errors.As(err, &e) && !e.Transient() && !e.ClientRefused()
 }
 
-// mintedToken is the token a minted secret's material carries for this request's caller, or the problem.
-func (s *Server) mintedToken(r *http.Request, c *auth.Caller, sec *state.Secret) (*mint.Token, *mintProblem) {
-	audience, scope := mintTarget(sec.Params)
+// mintedToken is a token for the audience and scope, for this request's caller (under a grant, the grant's
+// user), or the problem.
+func (s *Server) mintedToken(r *http.Request, c *auth.Caller, audience, scope string) (*mint.Token, *mintProblem) {
 	key := mintKey(audience, scope)
 	now := s.now()
 	fresh := func(t *mint.Token) bool { return t != nil && t.Expiry.Sub(now) > mintMargin }
