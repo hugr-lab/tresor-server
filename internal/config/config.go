@@ -116,6 +116,8 @@ type Dynamic struct {
 	// Margin: expires_at is this long before what was generated expires (at most half of what is left);
 	// default 10m - mssql renews a token 5 minutes before its exp.
 	Margin time.Duration `yaml:"margin"`
+	// LoginHosts: the hosts a service login may call (a name, or *.domain); empty - none may.
+	LoginHosts []string `yaml:"login_hosts"`
 }
 
 // CORS: the web pages that call the service - tresor in DuckDB-wasm (spec 022). The console's hosts are
@@ -733,6 +735,12 @@ func (c *Config) validate() error {
 	}
 	if c.Dynamic.Margin < 0 || c.Dynamic.Margin > time.Hour {
 		return errors.New("dynamic.margin is 0 to 1h")
+	}
+	for _, h := range c.Dynamic.LoginHosts {
+		name := strings.TrimPrefix(h, "*.")
+		if name == "" || strings.ContainsAny(name, "/:*@ ") || (!strings.Contains(name, ".") && name != "localhost") {
+			return fmt.Errorf("dynamic.login_hosts: %q is not a host name (or *.domain)", h)
+		}
 	}
 	host, _, err := net.SplitHostPort(c.Listen)
 	if err != nil {

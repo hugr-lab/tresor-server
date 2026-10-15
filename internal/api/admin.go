@@ -65,6 +65,7 @@ func (s *Server) consoleRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /admin/v1/secrets/{name}/params", s.authed(s.admin(s.adminParams)))
 	mux.HandleFunc("GET /admin/v1/grants", s.authed(s.admin(s.adminGrants)))
 	mux.HandleFunc("POST /admin/v1/refs-check", s.authed(s.admin(s.adminRefsCheck)))
+	mux.HandleFunc("GET /admin/v1/logins", s.authed(s.admin(s.adminLogins)))
 }
 
 // admin lets administrators through, calling directly: never a server acting for one (a delegation grant).
@@ -383,6 +384,12 @@ func (s *Server) adminParams(w http.ResponseWriter, r *http.Request) {
 		dynamic, err := s.checkGenerators(current.Type, current.Provider, params) // spec 023
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", errInvalid, err)
+		}
+		if isLogin(current) {
+			if err := s.checkLogin(current.Scope, params); err != nil {
+				return nil, fmt.Errorf("%w: %v", errInvalid, err)
+			}
+			redact = loginRedacted(params, redact)
 		}
 		redact, err = s.material.CheckWrite(current.Provider, params, redact)
 		if err != nil {

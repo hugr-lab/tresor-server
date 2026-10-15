@@ -29,7 +29,9 @@ CREATE PERSISTENT SECRET lake_api IN corp (TYPE http, SCOPE 'https://lake.corp.e
 | --- | --- |
 | `mint+exchange://<audience>[?scope=<scope>]` | a token for the caller at their identity provider (RFC 8693, or Entra On-Behalf-Of), for `<audience>`. The audience is everything up to the first `?`, percent-decoded; the query is `scope=` only. |
 | `mint+claim://<claim>` | a top-level claim of the caller's verified token, as text: a string as it is, a number or a boolean as its JSON text. Never the token. |
-| `${exchange://…}`, `${claim://…}` inside a string | the same, as a part of the string: `'Bearer ${exchange://crm-api}'`. |
+| `mint+login://<login>#<field>` | a field of what a [service login](#service-logins) got: an access token, a session id. |
+| `mint+login:scope#<field>` | the same, from the login bound to the caller, picked by the secret's scope ([per user](#per-user-logins)). |
+| `${exchange://…}`, `${claim://…}`, `${login://…}`, `${login:scope#…}` inside a string | the same, as a part of the string: `'Bearer ${exchange://crm-api}'`. |
 | `mint++…` | a literal: one `+` dropped (`mint++x` is served as `mint+x`), and the rest of that string is not read (no `${…}` in it). Only lowercase `mint+` is read. |
 | `$${` | a literal `${`. |
 
@@ -73,7 +75,7 @@ A claim interpolated into a header, a connection string or a URL is text the use
 - **At the write** (`422`), naming the parameter, never its value: a malformed generator, an unknown kind, an
   exchange for this service's own audience, a claim that names the session or binds a token (`sid`,
   `session_state`, `jti`, `nonce`, `at_hash`, `c_hash`, `s_hash`), `${` of a known kind with no closing `}`.
-  `mint+login://` and `mint+rule://` are reserved for service logins (to come).
+  A login field that renews it (`refresh_token`) is never served. `mint+rule://` is reserved (to come).
 - **At the read**: `403 mint_refused` - the identity provider refused, the caller's token has no such claim
   (empty, a list or an object counts as none), or the claim is shaped like a token; `503` - the identity
   provider did not answer. Never an empty value.
@@ -82,6 +84,72 @@ A claim interpolated into a header, a connection string or a URL is text the use
   generator. The console shows what is stored (Admin → a secret's shape).
 - **A secret written before 0.5** is not dynamic, and makes nothing: a `mint+…` or `${exchange://…}` in it is
   served as stored until the secret is written again. A secret said static is never one made per caller.
+
+## Service logins
+
+A service that is no identity provider - its own login with a user and a password, an OAuth2 token endpoint, a
+session id to send with every request - is logged in to by the service, which keeps the inputs and serves one
+field of what it gets. A login is a secret of type `tresor_service_login`, written by an administrator, **never
+served** (not listed on `/v1`, `404` on a read; the console lists them, `GET /admin/v1/logins`). Here, `crm_login`:
+
+```json
+{"type": "tresor_service_login", "provider": "config", "scope": ["https://crm.corp.example/api"],
+ "params": {
+   "flow": "custom",
+   "username": "svc-duckdb", "password": "ref+azkv://corp-vault/crm-svc",
+   "login_url": "/login",
+   "login_request": "{login: $username, password: $password}",
+   "login_response": "{session_id: .headers[\"x-session-id\"], refresh_token: .body.refresh, expires_in: .body.ttl}",
+   "refresh_url": "/refresh",
+   "refresh_request": "{refresh: $refresh_token}",
+   "refresh_response": "{session_id: .headers[\"x-session-id\"], refresh_token: .body.refresh, expires_in: .body.ttl}"}}
+```
+
+```sql
+CREATE PERSISTENT SECRET crm IN corp (TYPE http, SCOPE 'https://crm.corp.example/api/data',
+  EXTRA_HTTP_HEADERS MAP {'X-Session-Id': '${login://crm_login#session_id}'});
+```
+
+| `flow` | Parameters | Fields |
+| --- | --- | --- |
+| `basic` | `username`, `password` | `authorization` (`Basic …`), no call |
+| `oauth2_client_credentials` | `token_url`, `client_id`, `client_secret`, `scope` | the token response's: `access_token`, `token_type`, … |
+| `oauth2_password` | `token_url`, `username`, `password`, `client_id` (`client_secret`), `scope` | the same |
+| `custom` | `login_url`, `login_method` (POST), `login_request`, `login_response`, `content_type` (`json`, `form`); `refresh_url`, `refresh_method`, `refresh_request`, `refresh_response` | what `login_response` names |
+
+- **The mappings are jq.** A login request's over the variables `$username`, `$password`, `$client_id`,
+  `$client_secret`; a refresh request's over `$refresh_token`, `$client_id`, `$client_secret`; a response's over
+  `{status, headers, cookies, body}` (header names lowercase, the body parsed when it is JSON) and
+  `$refresh_token` only - a login never serves its own inputs back. The result names fields - any names - and
+  `expires_in` (seconds) or `expires_at` (RFC 3339, Unix seconds or milliseconds); else `ttl` (a duration), else 10
+  minutes. Whatever it says, a result is kept between 1 minute and 24 hours.
+- **Where it calls**: a path is under the scope's first base URL; an absolute URL must be within the scope (no
+  `.` or `..` segment, no encoded slash). Its host must be in `dynamic.login_hosts`; https (http only to this
+  machine); a redirect is never followed; no proxy. It never connects to a link-local, unspecified or multicast
+  address (a cloud's metadata endpoint), whatever the name resolves to. The allowlist trusts the names' DNS:
+  list hosts whose DNS you control.
+- **Where its fields go**: only to a secret whose scope is within the login's.
+- **Renewal**: from `refresh_token` (an OAuth2 refresh, or the custom refresh) while the login has one - kept up
+  to 12 hours past the result's expiry, and kept when a refresh gives no new one - else a new login; a refused
+  refresh logs in again. What a login got is cached in each replica's memory until shortly
+  before it expires; a restart logs in again.
+- **Inputs**: `username`, `password`, `client_id`, `client_secret` may be references (`ref+…`), or hold the
+  caller's claims (`mint+claim://preferred_username`, `${claim://…}` inside): one login for everybody, logged in
+  per user. No other parameter takes a claim or a reference. The inputs are always redacted: the console's shape
+  never shows them.
+- **Use**: a login is granted, as any secret, to roles and groups; a reader of a secret of the login holds `use`
+  on both.
+- **Bounds**: 10 seconds a call, 1 MiB a response, 100 ms a jq program. A refusal (4xx) is `403
+  mint_refused`, an outage (5xx, no answer) `503`. Nothing a login sends or receives is logged: its name, the
+  step and the status only.
+
+### Per-user logins
+
+`subject` binds a login to one user (their `subject:<issuer>|<sub>`, as the console shows it). A secret's
+`mint+login:scope#<field>` names no login: at each read the service takes the one bound to the **effective
+user** - the caller, or under a delegation grant the grant's user - that the caller may use and whose scope
+covers the secret's. User A through acl to service B: B sees A's login, never the node's. No login for the user,
+or more than one: `403 mint_refused`; never another's, never one without `subject`.
 
 ## `provider: token_exchange`
 

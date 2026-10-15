@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/hugr-lab/tresor-server/internal/auth"
+	"github.com/hugr-lab/tresor-server/internal/login"
 	"github.com/hugr-lab/tresor-server/internal/state"
 )
 
@@ -50,15 +51,17 @@ func isDynamic(sec *state.Secret) bool { return sec.Dynamic || isMinted(sec) }
 
 // generator is one value made on each read.
 type generator struct {
-	kind     string // "exchange" | "claim"
+	kind     string // "exchange" | "claim" | "login"
 	audience string // exchange
 	scope    string // exchange, optional
 	claim    string // claim
+	login    string // login: its name; empty - the one for the effective user, by the secret's scope
+	field    string // login
 }
 
 // key identifies what a generator makes, so a read makes it once.
 func (g *generator) key() string {
-	return g.kind + "\x00" + g.audience + "\x00" + g.scope + "\x00" + g.claim
+	return g.kind + "\x00" + g.audience + "\x00" + g.scope + "\x00" + g.claim + "\x00" + g.login + "\x00" + g.field
 }
 
 // parseGenerator reads `<kind>://<body>`. The error names no value: an administrator's value may be a secret.
@@ -88,7 +91,13 @@ func parseGenerator(kind, body string) (*generator, error) {
 			return nil, errors.New("is a claim:// generator of a session claim, never served")
 		}
 		return &generator{kind: kind, claim: body}, nil
-	case "login", "rule":
+	case "login":
+		name, field, ok := strings.Cut(body, "#")
+		if !ok || name == "" || field == "" {
+			return nil, errors.New("is a login://<login>#<field> generator with no login or no field")
+		}
+		return loginGenerator(name, field)
+	case "rule":
 		return nil, fmt.Errorf("is a %s:// generator, not available in this version", kind)
 	}
 	return nil, errors.New("is a generator of an unknown kind (exchange://, claim://)")
@@ -110,6 +119,13 @@ func parseString(value string) ([]piece, bool, error) {
 		if lit, escaped := strings.CutPrefix(rest, "+"); escaped { // the escape: one `+` dropped
 			return []piece{{literal: generatorPrefix + lit}}, true, nil
 		}
+		if field, ok := strings.CutPrefix(rest, scopedLogin); ok {
+			gen, err := loginGenerator("", field)
+			if err != nil {
+				return nil, false, err
+			}
+			return []piece{{gen: gen}}, true, nil
+		}
 		kind, body, ok := strings.Cut(rest, "://")
 		if !ok {
 			return nil, false, errors.New("begins with mint+ but is no mint+<kind>://… generator (a literal is written mint++…)")
@@ -130,6 +146,24 @@ func parseString(value string) ([]piece, bool, error) {
 		if strings.HasPrefix(value[i:], "$${") { // a literal ${
 			lit.WriteString("${")
 			i += 3
+			special = true
+			continue
+		}
+		if strings.HasPrefix(value[i:], "${"+scopedLogin) {
+			end := strings.IndexByte(value[i:], '}')
+			if end < 0 {
+				return nil, false, errors.New("has a ${login:scope#… with no closing }")
+			}
+			gen, err := loginGenerator("", value[i+2+len(scopedLogin):i+end])
+			if err != nil {
+				return nil, false, err
+			}
+			if lit.Len() > 0 {
+				pieces = append(pieces, piece{literal: lit.String()})
+				lit.Reset()
+			}
+			pieces = append(pieces, piece{gen: gen})
+			i += end + 1
 			special = true
 			continue
 		}
@@ -160,6 +194,20 @@ func parseString(value string) ([]piece, bool, error) {
 		pieces = append(pieces, piece{literal: lit.String()})
 	}
 	return pieces, special, nil
+}
+
+// scopedLogin names the login by the secret's scope, for the effective user: `login:scope#<field>`.
+const scopedLogin = "login:scope#"
+
+// loginGenerator: a field of a service login's result - never one that renews it.
+func loginGenerator(name, field string) (*generator, error) {
+	if field == "" {
+		return nil, errors.New("is a login generator with no field")
+	}
+	if login.Hidden[field] {
+		return nil, errors.New("is a login generator of a field never served (it renews the login)")
+	}
+	return &generator{kind: "login", login: name, field: field}, nil
 }
 
 // namedKind: the text after `${` names a generator's kind (`<kind>://`).
@@ -290,6 +338,17 @@ func (s *Server) checkGenerators(typ, provider string, params map[string]json.Ra
 	if err != nil {
 		return false, err
 	}
+	if strings.EqualFold(typ, login.Type) {
+		// a login's inputs may take the user's claims, nothing else made; a login itself is never served
+		for key, list := range gens {
+			for _, gen := range list {
+				if gen.kind != "claim" {
+					return false, fmt.Errorf("parameter %q: a login's parameters take claims only", key)
+				}
+			}
+		}
+		return false, nil
+	}
 	for key, list := range gens {
 		for _, gen := range list {
 			if gen.kind != "exchange" {
@@ -325,7 +384,7 @@ func (s *Server) generated(r *http.Request, c *auth.Caller, sec *state.Secret, p
 		if m, ok := cache[gen.key()]; ok {
 			return m.value, nil
 		}
-		value, expiry, p := s.generate(r, c, gen)
+		value, expiry, p := s.generate(r, c, sec, gen)
 		if p != nil {
 			problem = p
 			return "", errors.New("refused")
@@ -406,8 +465,10 @@ func (s *Server) generated(r *http.Request, c *auth.Caller, sec *state.Secret, p
 }
 
 // generate makes one value for the effective user.
-func (s *Server) generate(r *http.Request, c *auth.Caller, gen *generator) (string, time.Time, *mintProblem) {
+func (s *Server) generate(r *http.Request, c *auth.Caller, sec *state.Secret, gen *generator) (string, time.Time, *mintProblem) {
 	switch gen.kind {
+	case "login":
+		return s.loginField(r, c, sec, gen)
 	case "exchange":
 		token, problem := s.mintedToken(r, c, gen.audience, gen.scope)
 		if problem != nil {
