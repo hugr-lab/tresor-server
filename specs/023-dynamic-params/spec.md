@@ -1,6 +1,6 @@
 # Spec 023: dynamic parameters - any secret type, a value made on each read
 
-- **Status**: draft (waits for tresor spec 029)
+- **Status**: draft (tresor spec 029: hugr-lab/tresor#49)
 - **Date**: 2026-10-15
 - **Author**: hugr lab
 
@@ -35,21 +35,30 @@ with tresor's reference server and is not the protocol's (as `ref+` is not):
 
 | Form | Value |
 | --- | --- |
-| `mint+exchange://<audience>[?scope=<scope>]` | a token for the effective user (RFC 8693, or Entra OBO by `exchange.grant`) - today's `token_exchange` |
-| `mint+claim://<claim>` | a claim of the caller's verified token (`sub`, `preferred_username`, `upn`, `email`, …); never the token |
+| `mint+exchange://<audience>[?scope=<scope>]` | a token for the effective user (RFC 8693, or Entra OBO by `exchange.grant`) - today's `token_exchange`; the audience up to the first `?`, percent-decoded, the query `scope=` only |
+| `mint+claim://<claim>` | a top-level claim of the effective user's verified token, as text (a number or a boolean as its JSON text); never the token. Missing, empty, a list, an object or shaped like a JWT: `403 mint_refused`. Session and binding claims (`sid`, `session_state`, `jti`, `nonce`, `at_hash`, `c_hash`, `s_hash`) refused at PUT |
 | `mint+login://<login>#<field>` | a field of a service login's result (below) |
 | `mint+login:scope#<field>` | the same, the login picked by the secret's scope for the effective user (per-user logins) |
-| `${<form without mint+>}` inside a string | the same, interpolated: `'Session ${login://portal#session_id}'`; `$${` is a literal `${` |
+| `${<form without mint+>}` inside a string | the same, interpolated: `'Session ${login://portal#session_id}'`; `$${` is a literal `${` (tresor-server only: the reference server serves it as written) |
+| `mint++…` | a literal: one `+` dropped (`mint++x` is served as `mint+x`); the prefix is lowercase only |
 
-- Inside MAP, STRUCT and LIST values too (`EXTRA_HTTP_HEADERS MAP {'X-Session': '${login://portal#session_id}'}`).
+- Inside MAP, STRUCT and LIST values too (`EXTRA_HTTP_HEADERS MAP {'X-Session': '${login://portal#session_id}'}`):
+  tresor-server reads typed values (`{"type", "value"}`); the reference server keeps them literal. A store moved
+  from the reference server escapes its literal `${` as `$${` first.
+- The syntax is shared with tresor's reference server (its documentation, *Generated parameters*); `mint+login`
+  and `mint+rule` are this service's own. A malformed generator or an unknown kind is refused at PUT, naming the
+  parameter, never the value.
 - A secret with any generated value is **dynamic**: `dynamic: true`, `expires_at` = the earliest expiry of its
-  values minus a margin (`dynamic.margin`, default 10 minutes: mssql renews 5 minutes before a token's `exp`).
-  A value with no expiry (a claim) does not shorten it; a secret of claims only expires after `dynamic.claim_ttl`
-  (default 5 minutes).
-- **Generated keys are always in `redact_keys`** (tresor spec 029).
-- **The provider served is the stored one** - the consumer's. `provider: token_exchange` stays readable as an
-  alias: such a secret is served as before; `tresor-server migrate-dynamic` (or the console) rewrites one into
-  `provider: config` + `mint+exchange://` in its token parameter.
+  values minus a margin (`dynamic.margin`, default 10 minutes: mssql renews 5 minutes before a token's `exp`) -
+  never `null`. A claim expires with the token it came from (under a grant, the grant's).
+- **Generated keys are always in `redact_keys`** (tresor spec 029): a nested value with a generated part, by
+  its top-level key.
+- **Material is a resolved copy**: an administrator reads back what was generated, never the generator; the
+  console shows a generator through `/admin/v1/secrets/{name}/shape`.
+- **The provider served is the stored one** - the consumer's. `provider: token_exchange` stays as an alias:
+  served as if its token parameter were `mint+exchange://<audience>?scope=<scope>`, **with provider `config`**
+  (as tresor's reference server does; today it is served as `token_exchange`). The console offers to rewrite one.
+- **Discovery** says `capabilities.dynamic: true` (today `false`, though minted secrets are served).
 - **The effective user**: the caller reading directly; under a delegation grant, the grant's user - never the
   server (protocol).
 
@@ -122,7 +131,6 @@ Fields: `access_token`, `password` (RDS), `access_key_id`/`secret_access_key`/`s
 ```yaml
 dynamic:
   margin: 10m                  # expires_at = the earliest expiry minus this
-  claim_ttl: 5m
   login_hosts: [crm.example, "*.corp.example"]   # empty: no login may call out
   identities:                  # workload identities a rule may use besides the service's own
     - {kind: azure, client_id: 0000…}
@@ -160,7 +168,9 @@ dynamic:
   cookie, expiry handling), the interpolation walk (MAP, STRUCT, LIST, `$${`), the per-user pick (one, none,
   several), the alias, the bounds (host, redirect, size, time, jq).
 - The state suite unchanged (a login is a secret); the API's tests: a login never on `/v1`, redact_keys.
-- tresor's conformance at the spec 029 pin: `exchange` and `claim` on every store.
+- tresor's conformance at the spec 029 pin, on every store; its `generators.test` (`TRESOR_CONFORMANCE_GENERATORS`:
+  `exchange`, `claim`, the escape, redact_keys, the alias's provider) in the job with an IdP that exchanges
+  (Keycloak in kind, or ZITADEL).
 - End to end: a secret with `mint+login` read through tresor in DuckDB (`http` with `extra_http_headers`); an
   `azure` + `access_token` secret read by mssql-extension (with duckdb-acl).
 
