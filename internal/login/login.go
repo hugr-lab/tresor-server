@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -41,13 +42,42 @@ const (
 	FlowClientCredentials = "oauth2_client_credentials"
 	FlowPassword          = "oauth2_password"
 	FlowCustom            = "custom"
+	FlowRefresh           = "oauth2_refresh" // a stored refresh token, renewed; rotated ones written back
+	FlowJWT               = "jwt_assertion"  // client credentials, the client a signed JWT (RFC 7523)
+	FlowRule              = "rule"           // a token of a workload identity the operator lists
 )
+
+// Identity is one of dynamic.identities: a workload identity that makes a token (a rule), or a client's
+// signing key (jwt_assertion).
+type Identity interface {
+	Kind() string
+	// Check says whether a login may ask it for what it names (its scope, endpoint, user).
+	Check(s *Spec) error
+}
+
+// Maker is an identity that makes a login's result itself (azure, gcp, aws_rds, aws_sts).
+type Maker interface {
+	Make(ctx context.Context, s *Spec) (*Result, error)
+}
+
+// Asserter is a client's signing key: a client assertion for a token endpoint.
+type Asserter interface {
+	ClientID() string
+	Assert(ctx context.Context, tokenURL string) (string, error)
+	// For: the token endpoints its assertions may go to (the operator's) - an assertion is redeemable there.
+	For(tokenURL string) bool
+}
+
+// Bounded is a rule's identity: the scopes (where its credentials may go) the operator lets a login use.
+type Bounded interface {
+	Destinations() []string
+}
 
 // Hidden are fields never served: what renews a login stays in the service.
 var Hidden = map[string]bool{"refresh_token": true}
 
 // inputs are the parameters that may hold a secret (a reference, or written sealed): resolved before a login.
-var inputs = []string{"username", "password", "client_id", "client_secret"}
+var inputs = []string{"username", "password", "client_id", "client_secret", "refresh_token"}
 
 // Spec is a login, from its secret's params and scope.
 type Spec struct {
@@ -61,6 +91,11 @@ type Spec struct {
 	RefreshRequest, RefreshResponse            string
 	TTL                                        time.Duration
 	Subject                                    string // a login for one user: their subject: principal
+	RefreshToken                               string // oauth2_refresh: the stored one
+	Identity                                   string // rule, jwt_assertion: one of dynamic.identities
+	Endpoint, User, Region                     string // rule (aws_rds): the database and its user
+	Grant                                      string // jwt_assertion: client_credentials, or jwt_bearer (RFC 7523 2.1)
+	Name                                       string // the login's name (set by its caller): an STS session's
 }
 
 // Parse reads a login's params (strings; references resolved already, or placeholders at a write).
@@ -71,22 +106,38 @@ func Parse(params map[string]string, scope []string) (*Spec, error) {
 		LoginRequest: params["login_request"], LoginResponse: params["login_response"],
 		ContentType: params["content_type"], RefreshURL: params["refresh_url"],
 		RefreshMethod: strings.ToUpper(params["refresh_method"]), RefreshRequest: params["refresh_request"],
-		RefreshResponse: params["refresh_response"], Subject: params["subject"]}
+		RefreshResponse: params["refresh_response"], Subject: params["subject"], RefreshToken: params["refresh_token"],
+		Identity: params["identity"], Endpoint: params["endpoint"], User: params["user"], Region: params["region"],
+		Grant: params["grant"]}
 	known := map[string]bool{"flow": true, "username": true, "password": true, "client_id": true,
 		"client_secret": true, "token_url": true, "scope": true, "login_url": true, "login_method": true,
 		"login_request": true, "login_response": true, "content_type": true, "refresh_url": true,
-		"refresh_method": true, "refresh_request": true, "refresh_response": true, "ttl": true, "subject": true}
+		"refresh_method": true, "refresh_request": true, "refresh_response": true, "ttl": true, "subject": true,
+		"refresh_token": true, "identity": true, "endpoint": true, "user": true, "region": true, "grant": true}
 	for k := range params {
 		if !known[k] {
 			return nil, fmt.Errorf("a login has no parameter %q", k)
+		}
+	}
+	common := []string{"flow", "ttl", "subject"}
+	if takes, ok := flowParams[s.Flow]; ok {
+		for k := range params {
+			if !slices.Contains(takes, k) && !slices.Contains(common, k) {
+				return nil, fmt.Errorf("a %s login takes no %s", s.Flow, k)
+			}
 		}
 	}
 	if len(scope) == 0 {
 		return nil, errors.New("a login's scope names the base URLs it may call")
 	}
 	for _, base := range scope {
-		if u, err := url.Parse(base); err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		u, err := url.Parse(base)
+		if err != nil || u.Host == "" {
 			return nil, errors.New("a login's scope is base URLs (https://host[/path])")
+		}
+		// a rule calls nothing: its scope is where its fields may go (mssql://, postgres://, s3://)
+		if params["flow"] != FlowRule && u.Scheme != "https" && u.Scheme != "http" {
+			return nil, errors.New("a login's scope is base URLs it calls (https://host[/path])")
 		}
 	}
 	if t := params["ttl"]; t != "" {
@@ -132,16 +183,57 @@ func Parse(params map[string]string, scope []string) (*Spec, error) {
 				return nil, fmt.Errorf("a login's jq does not parse: %v", err)
 			}
 		}
+	case FlowRefresh:
+		if s.TokenURL == "" || s.RefreshToken == "" {
+			return nil, errors.New("an oauth2_refresh login has a token_url and a refresh_token")
+		}
+	case FlowJWT:
+		if s.TokenURL == "" || s.Identity == "" {
+			return nil, errors.New("a jwt_assertion login has a token_url and an identity (a jwt one of dynamic.identities)")
+		}
+		if s.Grant != "" && s.Grant != "client_credentials" && s.Grant != "jwt_bearer" {
+			return nil, errors.New("a jwt_assertion's grant is client_credentials or jwt_bearer")
+		}
+	case FlowRule:
+		if s.Identity == "" {
+			return nil, errors.New("a rule names its identity (one of dynamic.identities)")
+		}
 	case "":
-		return nil, errors.New("a login names its flow (basic, oauth2_client_credentials, oauth2_password, custom)")
+		return nil, errors.New("a login names its flow (" + flowList + ")")
 	default:
-		return nil, fmt.Errorf("a login's flow %q is not one of basic, oauth2_client_credentials, oauth2_password, custom", s.Flow)
+		return nil, fmt.Errorf("a login's flow %q is not one of %s", s.Flow, flowList)
+	}
+	if s.Flow != FlowRule && (s.Endpoint != "" || s.User != "" || s.Region != "") {
+		return nil, errors.New("endpoint, user and region are a rule's (aws_rds)")
+	}
+	if s.Flow != FlowRule && s.Flow != FlowJWT && s.Identity != "" {
+		return nil, errors.New("identity is a rule's or a jwt_assertion's")
+	}
+	if s.Flow != FlowJWT && s.Grant != "" {
+		return nil, errors.New("grant is a jwt_assertion's")
+	}
+	if s.Flow != FlowRefresh && s.RefreshToken != "" {
+		return nil, errors.New("refresh_token is an oauth2_refresh login's")
 	}
 	if s.ContentType != "" && s.ContentType != "json" && s.ContentType != "form" {
 		return nil, errors.New("a login's content_type is json or form")
 	}
 	return s, nil
 }
+
+// flowParams are the parameters each flow takes (besides flow, ttl, subject).
+var flowParams = map[string][]string{
+	FlowBasic:             {"username", "password"},
+	FlowClientCredentials: {"token_url", "client_id", "client_secret", "scope"},
+	FlowPassword:          {"token_url", "username", "password", "client_id", "client_secret", "scope"},
+	FlowRefresh:           {"token_url", "refresh_token", "client_id", "client_secret", "scope"},
+	FlowJWT:               {"token_url", "identity", "scope", "grant"},
+	FlowRule:              {"identity", "scope", "endpoint", "user", "region"},
+	FlowCustom: {"username", "password", "client_id", "client_secret", "login_url", "login_method", "login_request",
+		"login_response", "content_type", "refresh_url", "refresh_method", "refresh_request", "refresh_response"},
+}
+
+const flowList = "basic, oauth2_client_credentials, oauth2_password, oauth2_refresh, jwt_assertion, custom, rule"
 
 // Inputs are the parameters that may hold a secret: a reference, or a claim's interpolation.
 func Inputs() []string { return inputs }
@@ -221,11 +313,47 @@ func refused(format string, a ...any) error {
 }
 func outage(format string, a ...any) error { return &Error{Msg: fmt.Sprintf(format, a...)} }
 
+// Refused is a lasting refusal (an identity's), Outage an identity that did not answer: for the identities.
+func Refused(format string, a ...any) error { return refused(format, a...) }
+func Outage(format string, a ...any) error  { return outage(format, a...) }
+
 // Client logs in: within its hosts, never following a redirect.
 type Client struct {
-	Hosts []string // dynamic.login_hosts: a host, or *.domain
-	HTTP  *http.Client
-	Now   func() time.Time
+	Hosts      []string // dynamic.login_hosts: a host, or *.domain
+	HTTP       *http.Client
+	Now        func() time.Time
+	Identities map[string]Identity // dynamic.identities, by name
+}
+
+// CheckIdentity: a rule's or a jwt_assertion's identity is listed, of the kind its flow takes, and lets the
+// login ask for what it names.
+func (c *Client) CheckIdentity(s *Spec) error {
+	if s.Identity == "" {
+		return nil
+	}
+	id, ok := c.Identities[s.Identity]
+	if !ok {
+		return fmt.Errorf("no identity %q in dynamic.identities", s.Identity)
+	}
+	if (s.Flow == FlowJWT) != (id.Kind() == "jwt") {
+		return fmt.Errorf("the identity %q (%s) is not for flow %s", s.Identity, id.Kind(), s.Flow)
+	}
+	if a, ok := id.(Asserter); ok && s.Flow == FlowJWT {
+		target, err := c.CheckURL(s, s.TokenURL)
+		if err != nil {
+			return err
+		}
+		if !a.For(target) {
+			return fmt.Errorf("the identity %q signs for other token endpoints (the operator's)", s.Identity)
+		}
+	}
+	if b, ok := id.(Bounded); ok && s.Flow == FlowRule {
+		dest := &Spec{Scope: b.Destinations()}
+		if !dest.Covers(s.Scope) {
+			return fmt.Errorf("the identity %q's credentials go elsewhere: the login's scope is outside its destinations", s.Identity)
+		}
+	}
+	return id.Check(s)
 }
 
 // CheckURL resolves a login's URL against its scope and checks it: within the scope, https (http only to this
@@ -303,6 +431,30 @@ func (c *Client) Login(ctx context.Context, s *Spec) (*Result, map[string]string
 		return c.oauth(ctx, s, form)
 	case FlowCustom:
 		return c.custom(ctx, s, s.LoginURL, s.LoginMethod, s.LoginRequest, s.LoginResponse, nil)
+	case FlowRefresh:
+		return c.oauth(ctx, s, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {s.RefreshToken}})
+	case FlowJWT:
+		form := url.Values{"grant_type": {"client_credentials"}}
+		if s.Grant == "jwt_bearer" { // the assertion is the grant (ZITADEL's machine users: the JWT profile)
+			form.Set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
+		}
+		if s.OAuthScope != "" {
+			form.Set("scope", s.OAuthScope)
+		}
+		return c.oauth(ctx, s, form)
+	case FlowRule:
+		if err := c.CheckIdentity(s); err != nil {
+			return nil, nil, refused("%v", err)
+		}
+		maker, ok := c.Identities[s.Identity].(Maker)
+		if !ok {
+			return nil, nil, refused("the identity %q makes no token", s.Identity)
+		}
+		res, err := maker.Make(ctx, s)
+		if err != nil {
+			return nil, nil, err
+		}
+		return c.bounded(res), nil, nil
 	}
 	return nil, nil, refused("a login of an unknown flow")
 }
@@ -314,7 +466,7 @@ func (c *Client) Refresh(ctx context.Context, s *Spec, kept map[string]string) (
 		return nil, nil, false, nil
 	}
 	switch s.Flow {
-	case FlowClientCredentials, FlowPassword:
+	case FlowClientCredentials, FlowPassword, FlowRefresh, FlowJWT:
 		form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {kept["refresh_token"]}}
 		res, next, err := c.oauth(ctx, s, form)
 		return res, next, true, err
@@ -334,7 +486,26 @@ func (c *Client) oauth(ctx context.Context, s *Spec, form url.Values) (*Result, 
 	if err != nil {
 		return nil, nil, refused("%v", err)
 	}
-	if s.ClientSecret == "" && s.ClientID != "" {
+	if s.Flow == FlowJWT && !(s.Grant == "jwt_bearer" && form.Get("grant_type") == "refresh_token") {
+		if err := c.CheckIdentity(s); err != nil {
+			return nil, nil, refused("%v", err)
+		}
+		asserter, ok := c.Identities[s.Identity].(Asserter)
+		if !ok {
+			return nil, nil, refused("the identity %q signs no assertion", s.Identity)
+		}
+		assertion, err := asserter.Assert(ctx, target)
+		if err != nil {
+			return nil, nil, outage("the client's assertion could not be made")
+		}
+		if s.Grant == "jwt_bearer" {
+			form.Set("assertion", assertion)
+		} else {
+			form.Set("client_id", asserter.ClientID())
+			form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+			form.Set("client_assertion", assertion)
+		}
+	} else if s.ClientSecret == "" && s.ClientID != "" {
 		form.Set("client_id", s.ClientID)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(form.Encode()))
@@ -343,7 +514,7 @@ func (c *Client) oauth(ctx context.Context, s *Spec, form url.Values) (*Result, 
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	if s.ClientSecret != "" {
+	if s.ClientSecret != "" && s.Flow != FlowJWT {
 		req.SetBasicAuth(url.QueryEscape(s.ClientID), url.QueryEscape(s.ClientSecret))
 	}
 	resp, err := c.call(req)
@@ -462,12 +633,7 @@ func (c *Client) result(s *Spec, fields map[string]string) (*Result, map[string]
 		expiry = now.Add(ttl)
 	}
 	// within bounds: never in the past (no login per read, no expires_at gone already), never years ahead
-	if lo := now.Add(minLife); expiry.Before(lo) {
-		expiry = lo
-	}
-	if hi := now.Add(maxLife); expiry.After(hi) {
-		expiry = hi
-	}
+	expiry = c.bounded(&Result{Expiry: expiry}).Expiry
 	kept := map[string]string{"refresh_token": fields["refresh_token"]}
 	served := map[string]string{}
 	for k, v := range fields {
@@ -476,6 +642,18 @@ func (c *Client) result(s *Spec, fields map[string]string) (*Result, map[string]
 		}
 	}
 	return &Result{Fields: served, Expiry: expiry}, kept, nil
+}
+
+// bounded keeps a result's expiry within 1 minute and 24 hours from now.
+func (c *Client) bounded(res *Result) *Result {
+	now := c.Now()
+	if lo := now.Add(minLife); res.Expiry.Before(lo) {
+		res.Expiry = lo
+	}
+	if hi := now.Add(maxLife); res.Expiry.After(hi) {
+		res.Expiry = hi
+	}
+	return res
 }
 
 type response struct {

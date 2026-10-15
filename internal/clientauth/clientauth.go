@@ -112,8 +112,8 @@ func JWT(clientID string, h Header, aud Audience, signer Signer) Source {
 	}
 }
 
-// KeyFile reads a private key for JWT: a ZITADEL key file (JSON: keyId, key, clientId) - its kid and client id
-// come with it - or a PEM key (RSA or EC P-256), whose kid is the configuration's.
+// KeyFile reads a private key for JWT: a ZITADEL key file (JSON: keyId, key, clientId - or userId, a machine
+// user's) - its kid and client id come with it - or a PEM key (RSA or EC P-256), whose kid is the configuration's.
 func KeyFile(path string) (signer Signer, kid, clientID string, err error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -124,10 +124,14 @@ func KeyFile(path string) (signer Signer, kid, clientID string, err error) {
 		Key      string `json:"key"`
 		ClientID string `json:"clientId"`
 		AppID    string `json:"appId"`
+		UserID   string `json:"userId"`
 	}
 	pemBytes := raw
 	if json.Unmarshal(raw, &zitadel) == nil && zitadel.Key != "" {
 		pemBytes, kid, clientID = []byte(zitadel.Key), zitadel.KeyID, zitadel.ClientID
+		if clientID == "" {
+			clientID = zitadel.UserID // a machine user's key: the JWT profile's iss and sub
+		}
 	}
 	// the first key block: a certificate before it (as Entra's bundles have) is passed over
 	var block *pem.Block

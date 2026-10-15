@@ -257,3 +257,93 @@ func TestInputsAndPaths(t *testing.T) {
 		t.Error("a basic username with a colon")
 	}
 }
+
+type fakeID struct {
+	kind  string
+	check error
+	res   *Result
+}
+
+func (f fakeID) Kind() string                                 { return f.kind }
+func (f fakeID) Check(*Spec) error                            { return f.check }
+func (f fakeID) ClientID() string                             { return "app" }
+func (f fakeID) Make(context.Context, *Spec) (*Result, error) { return f.res, nil }
+func (f fakeID) For(tokenURL string) bool                     { return strings.HasSuffix(tokenURL, "/token") }
+func (f fakeID) Destinations() []string                       { return []string{"mssql://sql.example", "http://127.0.0.1"} }
+func (f fakeID) Assert(_ context.Context, tokenURL string) (string, error) {
+	return "signed-for-" + tokenURL, nil
+}
+
+// a rule: the identity listed, of its flow's kind, bounded by it; a jwt_assertion: the client's assertion, as
+// client authentication or as the grant (ZITADEL's JWT profile); oauth2_refresh: the stored refresh token
+func TestIdentityFlows(t *testing.T) {
+	srv, _ := service(t)
+	var form url.Values
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		form = r.Form
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at-jwt", "expires_in": 300})
+	})
+	tok := httptest.NewServer(mux)
+	t.Cleanup(tok.Close)
+	c := client(srv)
+	c.Identities = map[string]Identity{
+		"db":    fakeID{kind: "azure", res: &Result{Fields: map[string]string{"access_token": "entra"}, Expiry: time.Now().Add(time.Hour)}},
+		"wide":  fakeID{kind: "azure", check: errors.New("not for that scope")},
+		"signr": fakeID{kind: "jwt"},
+	}
+	far, _ := Parse(map[string]string{"flow": FlowRule, "identity": "db", "scope": "x"}, []string{"mssql://elsewhere.example"})
+	if c.CheckIdentity(far) == nil {
+		t.Fatal("a rule whose scope is outside its identity's destinations")
+	}
+	rule, err := Parse(map[string]string{"flow": FlowRule, "identity": "db", "scope": "https://database.windows.net/.default"}, []string{"mssql://sql.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, _, err := c.Login(context.Background(), rule); err != nil || res.Fields["access_token"] != "entra" {
+		t.Fatalf("a rule: %+v %v", res, err)
+	}
+	for _, id := range []string{"wide", "signr", "nobody"} {
+		rule.Identity = id
+		if _, _, err := c.Login(context.Background(), rule); err == nil {
+			t.Errorf("identity %s: made", id)
+		}
+	}
+	c.Hosts = append(c.Hosts, "127.0.0.1")
+	jwt, _ := Parse(map[string]string{"flow": FlowJWT, "identity": "signr", "token_url": "/token", "scope": "openid"}, []string{tok.URL})
+	if res, _, err := c.Login(context.Background(), jwt); err != nil || res.Fields["access_token"] != "at-jwt" ||
+		form.Get("client_assertion") != "signed-for-"+tok.URL+"/token" || form.Get("grant_type") != "client_credentials" {
+		t.Fatalf("private_key_jwt: %+v %v %v", res, err, form)
+	}
+	jwt.Grant = "jwt_bearer"
+	if _, _, err := c.Login(context.Background(), jwt); err != nil || form.Get("assertion") == "" ||
+		form.Get("grant_type") != "urn:ietf:params:oauth:grant-type:jwt-bearer" || form.Get("client_assertion") != "" {
+		t.Fatalf("the JWT profile: %v %v", err, form)
+	}
+	jwt.Identity = "db"
+	if _, _, err := c.Login(context.Background(), jwt); err == nil {
+		t.Fatal("a jwt_assertion with a rule's identity")
+	}
+	jwt.Identity, jwt.TokenURL = "signr", "/other"
+	if _, _, err := c.Login(context.Background(), jwt); err == nil {
+		t.Fatal("an assertion for a token endpoint the identity is not for")
+	}
+	if _, err := Parse(map[string]string{"flow": FlowJWT, "identity": "s", "token_url": "/t", "client_id": "x"}, []string{srv.URL}); err == nil {
+		t.Fatal("a param another flow takes")
+	}
+	refresh, _ := Parse(map[string]string{"flow": FlowRefresh, "token_url": "/oauth/token", "refresh_token": "rt",
+		"client_id": "app"}, []string{srv.URL})
+	if res, _, err := c.Login(context.Background(), refresh); err != nil || res.Fields["access_token"] != "at-renewed" {
+		t.Fatalf("oauth2_refresh: %+v %v", res, err)
+	}
+	for name, params := range map[string]map[string]string{
+		"a rule's endpoint elsewhere": {"flow": "basic", "username": "u", "password": "p", "endpoint": "db:5432"},
+		"a refresh token elsewhere":   {"flow": "basic", "username": "u", "password": "p", "refresh_token": "x"},
+		"a bad grant":                 {"flow": FlowJWT, "identity": "s", "token_url": "/t", "grant": "password"},
+	} {
+		if _, err := Parse(params, []string{srv.URL}); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

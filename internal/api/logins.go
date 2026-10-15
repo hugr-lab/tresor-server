@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,7 +42,7 @@ type loginEntry struct {
 }
 
 func (s *Server) loginClient() *login.Client {
-	return &login.Client{Hosts: s.cfg.Dynamic.LoginHosts, Now: s.now}
+	return &login.Client{Hosts: s.cfg.Dynamic.LoginHosts, Now: s.now, Identities: s.identities}
 }
 
 // textParams are a login's params as text: a string, or a typed VARCHAR's value.
@@ -74,6 +75,14 @@ func (s *Server) checkLogin(scope []string, params map[string]json.RawMessage) e
 	}
 	refs := s.material.Refs(params)
 	claims := claimKeys(params, refs)
+	for k := range refs {
+		text, _ := stringOf(params[k])
+		for _, m := range claimPattern.FindAllString(text, -1) {
+			if name := m[len("${claim://") : len(m)-1]; name == "" || auth.BindingClaims[name] {
+				return errors.New("a login's parameter " + strconv.Quote(k) + " names no claim, or a session claim")
+			}
+		}
+	}
 	for k := range text {
 		if refs[k] || claims[k] {
 			if !isInput(k) {
@@ -92,12 +101,85 @@ func (s *Server) checkLogin(scope []string, params map[string]json.RawMessage) e
 			return err
 		}
 	}
-	return nil
+	if refs["refresh_token"] || claims["refresh_token"] {
+		// rotated tokens are written back: it is the login's own, sealed - never a reference's nor a user's claim
+		return errors.New("a login's refresh_token is written as it is: not a reference, not a claim")
+	}
+	return client.CheckIdentity(spec) // a rule's or a jwt_assertion's identity: the operator's, bounded
+}
+
+// claimRef is a claim's text as it may go into a reference: a name or an id - never a path's separator or a
+// climb, so a user's claim cannot point a reference elsewhere.
+var claimRef = regexp.MustCompile(`^[A-Za-z0-9._@-]{1,256}$`)
+
+// claimsStoodIn: a login's references with their claims stood in for (a write checks the reference's shape
+// and allowlist; the read checks them again with the user's claim in).
+func claimsStoodIn(typ string, params map[string]json.RawMessage) map[string]json.RawMessage {
+	if !strings.EqualFold(typ, login.Type) {
+		return params
+	}
+	out := make(map[string]json.RawMessage, len(params))
+	for k, raw := range params {
+		out[k] = raw
+		if text, ok := stringOf(raw); ok && strings.HasPrefix(text, "ref+") && strings.Contains(text, "${claim://") {
+			out[k], _ = json.Marshal(claimPattern.ReplaceAllString(text, "x"))
+		}
+	}
+	return out
+}
+
+var claimPattern = regexp.MustCompile(`\$\{claim://[^}]*\}`)
+
+// stringOf is a param's text: a string, or a typed VARCHAR's value.
+func stringOf(raw json.RawMessage) (string, bool) {
+	var str string
+	if json.Unmarshal(raw, &str) == nil {
+		return str, true
+	}
+	var typed struct {
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	}
+	if json.Unmarshal(raw, &typed) == nil && strings.EqualFold(typed.Type, "VARCHAR") {
+		return typed.Value, true
+	}
+	return "", false
+}
+
+// claimsIntoRefs puts the effective user's claims into a login's references, each checked as a name or an id.
+func claimsIntoRefs(c *auth.Caller, params map[string]json.RawMessage, refs map[string]bool) (map[string]json.RawMessage, *mintProblem) {
+	out := make(map[string]json.RawMessage, len(params))
+	for k, raw := range params {
+		out[k] = raw
+		text, ok := stringOf(raw)
+		if !refs[k] || !ok || !strings.Contains(text, "${claim://") {
+			continue
+		}
+		var problem *mintProblem
+		filled := claimPattern.ReplaceAllStringFunc(text, func(m string) string {
+			name := m[len("${claim://") : len(m)-1]
+			value := c.Claims[name]
+			if auth.BindingClaims[name] || !claimRef.MatchString(value) || strings.Contains(value, "..") {
+				problem = refusedMint("the caller's claim " + strconv.Quote(name) + " cannot name a reference (a name or an id only)")
+			}
+			return value
+		})
+		if problem != nil {
+			return nil, problem
+		}
+		out[k], _ = json.Marshal(filled)
+	}
+	return out, nil
 }
 
 // claimKeys are a login's params that hold a claim - whole (mint+claim://) or a part (${claim://…}).
 func claimKeys(params map[string]json.RawMessage, refs map[string]bool) map[string]bool {
 	out := map[string]bool{}
+	for k := range refs { // a reference with a claim in it (ref+vault://kv/users/${claim://sub}#password)
+		if text, ok := stringOf(params[k]); ok && strings.Contains(text, "${claim://") {
+			out[k] = true
+		}
+	}
 	gens, _ := generatorsOf(login.Type, "config", params, refs)
 	for k, list := range gens {
 		for _, gen := range list {
@@ -251,7 +333,11 @@ func (s *Server) loginResult(r *http.Request, c *auth.Caller, sec *state.Secret,
 	if text["subject"] != "" || len(claimKeys(sec.Params, s.material.Refs(sec.Params))) > 0 {
 		userKey = c.Owner()
 	}
-	key := sec.Name + "\x00" + strconv.FormatInt(sec.Version, 10) + "\x00" + userKey
+	keyAt := func(version int64) string {
+		return sec.Name + "\x00" + strconv.FormatInt(version, 10) + "\x00" + userKey
+	}
+	key := keyAt(sec.Version)
+	lockKey := "login\x00" + sec.Name + "\x00" + userKey // not the version: a rotation moves it
 	now := s.now()
 	fresh := func(e *loginEntry) bool { return e != nil && e.result.Expiry.Sub(now) > mintMargin }
 	s.logins.mu.Lock()
@@ -260,11 +346,17 @@ func (s *Server) loginResult(r *http.Request, c *auth.Caller, sec *state.Secret,
 		return e.result, nil
 	}
 	s.logins.mu.Unlock()
-	unlock, err := s.mintLocks.lock(r.Context(), "login\x00"+key)
+	unlock, err := s.mintLocks.lock(r.Context(), lockKey)
 	if err != nil {
 		return nil, unavailableMint("the request ended while the service login was being renewed")
 	}
 	defer unlock()
+	// read again under the lock: a rotation made meanwhile (here or by another replica) moved its version
+	cur, err := s.store.Get(r.Context(), sec.Name)
+	if err != nil || !isLogin(cur) {
+		return nil, unavailableMint("the service login could not be read")
+	}
+	sec, key = cur, keyAt(cur.Version)
 	s.logins.mu.Lock()
 	prev := s.logins.entries[key]
 	s.logins.mu.Unlock()
@@ -274,6 +366,9 @@ func (s *Server) loginResult(r *http.Request, c *auth.Caller, sec *state.Secret,
 	spec, problem := s.loginSpec(r, c, sec)
 	if problem != nil {
 		return nil, problem
+	}
+	if spec.Flow == login.FlowRefresh && prev != nil && prev.kept["refresh_token"] != spec.RefreshToken {
+		prev = nil // what is stored is newer than what this replica kept: renew from it
 	}
 	// detached from the request: a refresh token the service rotated must not be lost with a dropped connection
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), refreshTimeout)
@@ -305,6 +400,15 @@ func (s *Server) loginResult(r *http.Request, c *auth.Caller, sec *state.Secret,
 		return nil, unavailableMint("the service login " + strconv.Quote(sec.Name) + " did not answer")
 	}
 	s.log.Info("service login", "login", sec.Name, "renewed", renewed)
+	if spec.Flow == login.FlowRefresh && kept["refresh_token"] != "" && kept["refresh_token"] != spec.RefreshToken {
+		// a rotated refresh token is written back (sealed, compare-and-set): the stored one is spent
+		if version, err := s.rotateRefresh(ctx, sec, kept["refresh_token"]); err != nil {
+			s.log.Error("a service login's rotated refresh token could not be stored: it lives in this replica only",
+				"login", sec.Name, "error", err.Error())
+		} else {
+			key = keyAt(version) // the next read finds the login at its new version: served from here
+		}
+	}
 	s.logins.mu.Lock()
 	if s.logins.entries == nil {
 		s.logins.entries = map[string]*loginEntry{}
@@ -323,10 +427,40 @@ func (s *Server) loginResult(r *http.Request, c *auth.Caller, sec *state.Secret,
 	return res, nil
 }
 
+// errRotatedElsewhere: the login changed since it was read - another replica stored its own rotation, or an
+// administrator wrote it.
+var errRotatedElsewhere = errors.New("the service login changed meanwhile")
+
+// rotateRefresh writes a login's rotated refresh token back, on the version it was read at; it gives the new
+// version.
+func (s *Server) rotateRefresh(ctx context.Context, sec *state.Secret, token string) (int64, error) {
+	raw, _ := json.Marshal(token)
+	saved, err := s.store.Update(ctx, sec.Name, func(cur *state.Secret) (*state.Secret, error) {
+		if cur == nil {
+			return nil, state.ErrNotFound
+		}
+		if cur.Version != sec.Version {
+			return nil, errRotatedElsewhere
+		}
+		next := state.Clone(cur)
+		next.Params["refresh_token"] = raw
+		next.Version, next.UpdatedAt = cur.Version+1, s.now()
+		return next, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return saved.Version, nil
+}
+
 // loginSpec: the login with its inputs resolved - references read with the service's identity, claims the
 // effective user's.
 func (s *Server) loginSpec(r *http.Request, c *auth.Caller, sec *state.Secret) (*login.Spec, *mintProblem) {
-	params, resolved, err := s.material.Resolve(r.Context(), sec.Params)
+	withUser, problem := claimsIntoRefs(c, sec.Params, s.material.Refs(sec.Params))
+	if problem != nil {
+		return nil, problem
+	}
+	params, resolved, err := s.material.Resolve(r.Context(), withUser) // the allowlist again, the claim in
 	if err != nil {
 		s.log.Error("a service login's reference did not resolve", "login", sec.Name, "error", err.Error())
 		return nil, unavailableMint("a reference of the service login did not resolve")
@@ -352,6 +486,7 @@ func (s *Server) loginSpec(r *http.Request, c *auth.Caller, sec *state.Secret) (
 	if err != nil {
 		return nil, &mintProblem{http.StatusInternalServerError, "service_error", "the service login cannot be read: " + err.Error()}
 	}
+	spec.Name = sec.Name
 	return spec, nil
 }
 

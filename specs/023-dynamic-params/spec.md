@@ -119,13 +119,27 @@ by its **`subject` param**, written by the admin (the user's subject, as the con
   `username: ${claim://preferred_username}`. A claim inside a reference (`ref+vault://kv/users/${claim://sub}`)
   is part 2b: a claim in a path needs its own bounds.
 
-### Rules (`mint+rule://`)
+### Rules (`mint+rule://`) and signed clients - part 2b
 
-A rule is a login with a workload identity instead of a password: `flow: azure | gcp | aws_rds | aws_sts`, the
-identity (the service's own, or one in `dynamic.identities`: a user-assigned identity's client id, a GCP service
-account to impersonate, an AWS role to assume), and the resource (an Entra scope, an RDS host/port/user/region).
-Fields: `access_token`, `password` (RDS), `access_key_id`/`secret_access_key`/`session_token` (STS). A rule is a
-`tresor_service_login` too: `mint+login://` names it; `mint+rule://` is the same form.
+A rule is a login (`flow: rule`) with a workload identity instead of a password; a `jwt_assertion` login's client
+signs. Both name an identity of **`dynamic.identities`** - the operator's, never an administrator's: an admin
+could otherwise ask the service's own identity for a token to its KEK's vault and grant it to a role. Each
+identity is bounded by the operator: `azure` (the service's identity or a user-assigned one; `scopes`), `gcp` (the
+service's or a service account impersonated; `scopes`), `aws_rds` (`endpoints`, `users`; a role optional),
+`aws_sts` (`role_arn`, `duration`), `jwt` (a client's key, as `exchange.client_auth`; `audience`). Fields:
+`access_token`; `password`, `user` (RDS); `access_key_id`, `secret_access_key`, `session_token` (STS). A rule's scope
+is where its fields go (any scheme): it calls nothing. `mint+rule://` is `mint+login://`.
+
+- `jwt_assertion`: `grant: client_credentials` (private_key_jwt) or `jwt_bearer` (RFC 7523 2.1 - ZITADEL's machine
+  users, the JWT profile; a key file's `userId` is the client).
+- `oauth2_refresh`: the stored refresh token; a rotated one written back to the login (sealed, compare-and-set on
+  its version); never a reference or a claim. Renewals take turns per login and user in one replica (the lock
+  keyed without the version; the login read again under it); two replicas may race - documented.
+- Bounds after the review: a rule's identity lists `destinations` (its login's scope within them); a `jwt`
+  identity its `token_urls`; the service's own identity never mints a KEK's or a secrets' scope; each flow takes
+  its own parameters only.
+- A claim inside a reference of a login's input (`ref+vault://kv/users/${claim://sub}#password`): the claim a name
+  or an id only (`[A-Za-z0-9._@-]`, no `..`), the allowlist checked after.
 
 ### Configuration
 
@@ -150,8 +164,9 @@ dynamic:
   `dynamic` on `TresorSecret` (the CRD changes: applied before the upgrade). It is in the row's MAC only when set,
   so the rows written before keep theirs.
 - A login is a secret; `subject` is a param: nothing more in the state.
-- **Two parts**: (1) `exchange` and `claim`, the syntax, the marker, the alias, the pin at tresor `c0e1e38`; (2)
-  service logins and rules.
+- **Three parts**: (1) `exchange` and `claim`, the syntax, the marker, the alias, the pin at tresor `c0e1e38`;
+  (2a) service logins (basic, OAuth2, custom), per-user logins; (2b) rules, `jwt_assertion`, `oauth2_refresh`,
+  claims inside references.
 
 ## Enforcement & security
 

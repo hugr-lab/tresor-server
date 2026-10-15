@@ -14,9 +14,10 @@ type and the provider its DuckDB extension reads - `http` + `config`, `azure` + 
 CREATE PERSISTENT SECRET crm IN corp (TYPE http, SCOPE 'https://crm.corp.example',
   BEARER_TOKEN 'mint+exchange://crm-api');
 
--- Azure SQL through mssql: the caller's own Entra token (an exchange, or On-Behalf-Of: exchange.grant)
-CREATE PERSISTENT SECRET sales_db IN corp (TYPE azure, PROVIDER access_token,
-  ACCESS_TOKEN 'mint+exchange://https://database.windows.net/?scope=https://database.windows.net/.default');
+-- Azure Blob through the azure extension: the caller's own Entra token (an exchange, or On-Behalf-Of)
+CREATE PERSISTENT SECRET lake_blob IN corp (TYPE azure, PROVIDER access_token, ACCOUNT_NAME 'corplake',
+  SCOPE 'az://corplake.blob.core.windows.net/',
+  ACCESS_TOKEN 'mint+exchange://https://storage.azure.com/?scope=https://storage.azure.com/.default');
 
 -- a header made of a claim, inside a MAP
 CREATE PERSISTENT SECRET lake_api IN corp (TYPE http, SCOPE 'https://lake.corp.example',
@@ -116,6 +117,9 @@ CREATE PERSISTENT SECRET crm IN corp (TYPE http, SCOPE 'https://crm.corp.example
 | `oauth2_client_credentials` | `token_url`, `client_id`, `client_secret`, `scope` | the token response's: `access_token`, `token_type`, … |
 | `oauth2_password` | `token_url`, `username`, `password`, `client_id` (`client_secret`), `scope` | the same |
 | `custom` | `login_url`, `login_method` (POST), `login_request`, `login_response`, `content_type` (`json`, `form`); `refresh_url`, `refresh_method`, `refresh_request`, `refresh_response` | what `login_response` names |
+| `oauth2_refresh` | `token_url`, `refresh_token` (the first one), `client_id` (`client_secret`), `scope` | the token response's |
+| `jwt_assertion` | `token_url`, `identity` (a `jwt` one), `scope`, `grant` (`client_credentials`, or `jwt_bearer`) | the token response's |
+| `rule` | `identity`, and what its kind asks: `scope` (azure, gcp), `endpoint`, `user`, `region` (aws_rds) | below |
 
 - **The mappings are jq.** A login request's over the variables `$username`, `$password`, `$client_id`,
   `$client_secret`; a refresh request's over `$refresh_token`, `$client_id`, `$client_secret`; a response's over
@@ -133,15 +137,121 @@ CREATE PERSISTENT SECRET crm IN corp (TYPE http, SCOPE 'https://crm.corp.example
   to 12 hours past the result's expiry, and kept when a refresh gives no new one - else a new login; a refused
   refresh logs in again. What a login got is cached in each replica's memory until shortly
   before it expires; a restart logs in again.
-- **Inputs**: `username`, `password`, `client_id`, `client_secret` may be references (`ref+…`), or hold the
-  caller's claims (`mint+claim://preferred_username`, `${claim://…}` inside): one login for everybody, logged in
-  per user. No other parameter takes a claim or a reference. The inputs are always redacted: the console's shape
-  never shows them.
+- **Inputs**: `username`, `password`, `client_id`, `client_secret` may be references (`ref+…`),
+  or hold the caller's claims (`mint+claim://preferred_username`, `${claim://…}` inside): one login for everybody,
+  logged in per user. A reference may hold a claim too - `ref+vault://kv/users/${claim://sub}#password` - the
+  claim a name or an id only (letters, digits, `.`, `_`, `@`, `-`, no `..`), the allowlist checked with it in. No
+  other parameter takes a claim or a reference. The inputs are always redacted: the console's shape never shows
+  them.
+- **`oauth2_refresh`**: the refresh token an administrator wrote is spent at the first renewal; a rotated one is
+  written back to the login (sealed, compare-and-set on its version - the login's version moves), so a restart
+  and the other replicas renew from the latest. In one replica the renewals take turns. Two replicas renewing at
+  the same moment may spend one token twice: with an IdP that revokes on reuse, prefer `client_credentials` or
+  `jwt_assertion`, or one replica. It is written as it is - never a reference, never a claim.
 - **Use**: a login is granted, as any secret, to roles and groups; a reader of a secret of the login holds `use`
   on both.
 - **Bounds**: 10 seconds a call, 1 MiB a response, 100 ms a jq program. A refusal (4xx) is `403
   mint_refused`, an outage (5xx, no answer) `503`. Nothing a login sends or receives is logged: its name, the
   step and the status only.
+
+### A key, a workload identity: `jwt_assertion` and rules
+
+What gives the service's own power - a workload identity, a client's signing key - is the **operator's**,
+in `dynamic.identities`, each bounded to what it may be asked for. A login names one; it never names a key
+or an identity of its own. The identity's own rights bound the rest: give it only what its tokens are for.
+
+```yaml
+dynamic:
+  login_hosts: [zitadel.corp.example]
+  identities:
+    - {name: catalog-sql, kind: azure, client_id: <a user-assigned identity>,
+       scopes: [https://database.windows.net/.default], destinations: ['mssql://sql.corp.example']}
+    - {name: catalog-cloudsql, kind: gcp, service_account: catalog@proj.iam.gserviceaccount.com,
+       scopes: [https://www.googleapis.com/auth/sqlservice.login], destinations: ['postgres://catalog-cloudsql']}
+    - {name: catalog-rds, kind: aws_rds, role_arn: arn:aws:iam::123456789012:role/catalog,
+       endpoints: ['catalog.abc.eu-west-1.rds.amazonaws.com:5432'], users: [catalog],
+       destinations: ['postgres://catalog.abc.eu-west-1.rds.amazonaws.com:5432']}
+    - {name: lake-read, kind: aws_sts, role_arn: arn:aws:iam::123456789012:role/lake-read, duration: 1h,
+       destinations: ['s3://lake']}
+    - name: zitadel-etl                       # a ZITADEL machine user's key
+      kind: jwt
+      audience: https://zitadel.corp.example  # the assertion's aud: ZITADEL's issuer (default: the token endpoint)
+      token_urls: [https://zitadel.corp.example/oauth/v2/token]
+      client: {client_auth: key_file, key_file: /var/run/tresor/zitadel-etl.json}
+```
+
+| Kind | What it makes | Bounded by | Fields |
+| --- | --- | --- | --- |
+| `azure` | an Entra token of the service's identity, or of a user-assigned one (`client_id`) | `scopes`, `destinations` | `access_token` |
+| `gcp` | an access token of the service's identity, or of a service account it impersonates (it holds Service Account Token Creator on it) | `scopes`, `destinations` | `access_token` |
+| `aws_rds` | an RDS IAM token (15 minutes), with the service's identity or a role it assumes | `endpoints`, `users`, `destinations`; the region is `aws.region` | `password`, `user` |
+| `aws_sts` | temporary credentials of a role it assumes (the session named `tresor-<login>`) | `role_arn`, `duration` (15m-12h; 1h at most when `aws.role_arn` chains roles), `destinations` | `access_key_id`, `secret_access_key`, `session_token` |
+| `jwt` | a client's signed assertion (as `exchange.client_auth`: `keyvault`, `vault`, `awskms`, `gcpkms`, `key_file`) | `token_urls`: the only endpoints its assertions go to | used by `jwt_assertion` |
+
+- **`destinations`**: a rule's login scope must be within them - where the credentials may go. A rule calls
+  nothing; without this bound an administrator could send a database token anywhere.
+- **The service's own identity** (azure with no `client_id`, gcp with no `service_account`) never mints a scope
+  that opens its KEK or its secrets (`https://vault.azure.net/.default`, Managed HSM, `cloud-platform`,
+  `cloudkms`): give a rule an identity of its own.
+
+A rule's scope is where its fields go (`mssql://…`, `postgres://…`, `s3://…`): it calls nothing itself.
+`mint+rule://<login>#<field>` is the same as `mint+login://…`.
+
+```json
+{"type": "tresor_service_login", "provider": "config", "scope": ["mssql://sql.corp.example"],
+ "params": {"flow": "rule", "identity": "catalog-sql", "scope": "https://database.windows.net/.default"}}
+```
+
+```sql
+-- mssql reads the token as its connection's login: no password anywhere. mssql finds an azure secret by its
+-- name (AZURE_SECRET); the SCOPE is this service's bound, within the rule's destinations
+CREATE PERSISTENT SECRET sales_token IN corp (TYPE azure, PROVIDER access_token, SCOPE 'mssql://sql.corp.example/sales',
+  ACCESS_TOKEN 'mint+rule://catalog-sql-login#access_token');
+ATTACH 'Server=sql.corp.example;Database=sales' AS sales (TYPE mssql, AZURE_SECRET 'sales_token');
+
+-- PostgreSQL on RDS (its login, catalog-rds-login: {"flow": "rule", "identity": "catalog-rds",
+--   "endpoint": "catalog.abc.eu-west-1.rds.amazonaws.com:5432", "user": "catalog"},
+--   scope ["postgres://catalog.abc.eu-west-1.rds.amazonaws.com:5432"]): the database's login is the token.
+-- postgres finds a secret by its name only (SECRET, or the name __default_postgres)
+CREATE PERSISTENT SECRET catalog IN corp (TYPE postgres,
+  SCOPE 'postgres://catalog.abc.eu-west-1.rds.amazonaws.com:5432/catalog',
+  HOST 'catalog.abc.eu-west-1.rds.amazonaws.com', PORT 5432, DBNAME 'catalog', USER 'catalog',
+  PASSWORD 'mint+rule://catalog-rds-login#password');
+ATTACH '' AS catalog (TYPE postgres, SECRET catalog);
+```
+
+## Which extension reads what
+
+A generated value reaches an extension when the extension looks the secret up through DuckDB (tresor's storage
+is one of DuckDB's) - and stays fresh only as long as the extension reads it again. From their sources
+(2026-10):
+
+| Extension | Finds the secret | Reads it again |
+| --- | --- | --- |
+| httpfs (s3, gcs, r2, http), azure, delta, bigquery, gsheets | by type and scope | at each file or request: fresh |
+| postgres, mysql, snowflake | by name only (`SECRET`, or `__default_<type>`); SCOPE ignored | the connection string is kept from ATTACH: a token that expires (RDS IAM: 15 minutes) fails new connections after it |
+| mssql (hugr-lab) | by name (`SECRET`, `AZURE_SECRET`) | `AZURE_SECRET`: at each new connection near the token's expiry |
+| iceberg REST | by name, or an unscoped `iceberg` secret | at ATTACH only; serve `token` and `endpoint`, without the client's credentials |
+| airport, adbc_scanner | by type and scope (a named secret: in memory or a file only) | at ATTACH only |
+| unity_catalog, keboola | by name in memory or a file only | - tresor's storage is not searched |
+| motherduck, columnar adbc, http_client | not from a secret (a setting, the environment, the ATTACH string) | - |
+
+- **bigquery** reads a secret of its own class: a secret from tresor's storage is refused today (tresor's client
+  to fix).
+- **Under acl**, a value made per user is the user's when the extension looks up with the session's context; an
+  extension that looks up with none (mssql's `AZURE_SECRET` today, postgres's RDS template) gets the node's.
+
+**ZITADEL**: a machine user logs in with the JWT profile - its key signs, ZITADEL's issuer is the `aud`, the
+assertion is the grant:
+
+```json
+{"type": "tresor_service_login", "provider": "config", "scope": ["https://zitadel.corp.example"],
+ "params": {"flow": "jwt_assertion", "grant": "jwt_bearer", "identity": "zitadel-etl", "token_url": "/oauth/v2/token",
+            "scope": "openid urn:zitadel:iam:org:project:id:<project>:aud"}}
+```
+
+An application's key (private_key_jwt) is `grant: client_credentials`, the default: the assertion authenticates the
+client.
 
 ### Per-user logins
 

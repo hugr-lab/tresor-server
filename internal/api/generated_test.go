@@ -21,7 +21,7 @@ func TestGeneratedValidation(t *testing.T) {
 		"this service's own": `{"bearer_token":"mint+exchange://duckdb-secrets"}`,
 		"no claim":           `{"bearer_token":"mint+claim://"}`,
 		"a session claim":    `{"bearer_token":"mint+claim://sid"}`,
-		"a rule, not yet":    `{"bearer_token":"mint+rule://crm#access_token"}`,
+		"a rule, no field":   `{"bearer_token":"mint+rule://crm"}`,
 		"a login's renewal":  `{"bearer_token":"mint+login://crm#refresh_token"}`,
 		"a login, no field":  `{"bearer_token":"mint+login://crm"}`,
 		"unclosed":           `{"bearer_token":"Bearer ${claim://sub"}`,

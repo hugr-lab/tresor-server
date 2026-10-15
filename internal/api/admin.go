@@ -391,7 +391,7 @@ func (s *Server) adminParams(w http.ResponseWriter, r *http.Request) {
 			}
 			redact = loginRedacted(params, redact)
 		}
-		redact, err = s.material.CheckWrite(current.Provider, params, redact)
+		redact, err = s.material.CheckWrite(current.Provider, claimsStoodIn(current.Type, params), redact)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", errInvalid, err)
 		}
