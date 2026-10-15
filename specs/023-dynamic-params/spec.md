@@ -133,7 +133,11 @@ is where its fields go (any scheme): it calls nothing. `mint+rule://` is `mint+l
 - `jwt_assertion`: `grant: client_credentials` (private_key_jwt) or `jwt_bearer` (RFC 7523 2.1 - ZITADEL's machine
   users, the JWT profile; a key file's `userId` is the client).
 - `oauth2_refresh`: the stored refresh token; a rotated one written back to the login (sealed, compare-and-set on
-  its version); never a reference.
+  its version); never a reference or a claim. Renewals take turns per login and user in one replica (the lock
+  keyed without the version; the login read again under it); two replicas may race - documented.
+- Bounds after the review: a rule's identity lists `destinations` (its login's scope within them); a `jwt`
+  identity its `token_urls`; the service's own identity never mints a KEK's or a secrets' scope; each flow takes
+  its own parameters only.
 - A claim inside a reference of a login's input (`ref+vault://kv/users/${claim://sub}#password`): the claim a name
   or an id only (`[A-Za-z0-9._@-]`, no `..`), the allowlist checked after.
 

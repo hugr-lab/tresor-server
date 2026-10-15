@@ -914,11 +914,11 @@ func identities(ctx context.Context, cfg *config.Config) (map[string]login.Ident
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", where, err)
 			}
-			out[id.Name] = rules.Azure{Cred: cred, Scopes: id.Scopes}
+			out[id.Name] = rules.Azure{Cred: cred, Scopes: id.Scopes, Dest: id.Destinations}
 		case "gcp":
 			allowStatic := cfg.GCP.StaticCredentials == "allow"
 			sa := id.ServiceAccount
-			out[id.Name] = rules.GCP{Scopes: id.Scopes, Source: gcpTokenSource(allowStatic, sa)}
+			out[id.Name] = rules.GCP{Scopes: id.Scopes, Source: gcpTokenSource(allowStatic, sa), Dest: id.Destinations}
 		case "aws_rds":
 			ac, err := awsOf(config.AWS{Region: cfg.AWS.Region, EndpointURL: cfg.AWS.EndpointURL,
 				StaticCredentials: cfg.AWS.StaticCredentials, RoleARN: firstNonEmpty(id.RoleARN, cfg.AWS.RoleARN)})
@@ -926,20 +926,21 @@ func identities(ctx context.Context, cfg *config.Config) (map[string]login.Ident
 				return nil, fmt.Errorf("%s: %w", where, err)
 			}
 			out[id.Name] = rules.RDS{Creds: ac.Credentials, Region: ac.Region, Endpoints: id.Endpoints, Users: id.Users,
-				Now: time.Now}
+				Dest: id.Destinations, Now: time.Now}
 		case "aws_sts":
 			ac, err := awsOf(cfg.AWS)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", where, err)
 			}
-			out[id.Name] = rules.STS{Client: sts.NewFromConfig(ac), RoleARN: id.RoleARN, Duration: id.Duration}
+			out[id.Name] = rules.STS{Client: sts.NewFromConfig(ac), RoleARN: id.RoleARN, Duration: id.Duration,
+				Dest: id.Destinations}
 		case "jwt":
 			aud := clientauth.Audience{Issuer: id.Audience, TokenEndpoint: id.Audience == ""}
 			clientID, source, err := clientAssertion(ctx, cfg, id.Client, aud)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", where, err)
 			}
-			out[id.Name] = rules.JWT{ID: clientID, Source: source}
+			out[id.Name] = rules.JWT{ID: clientID, Source: source, TokenURLs: id.TokenURLs}
 		}
 	}
 	return out, nil

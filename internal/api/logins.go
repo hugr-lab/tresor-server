@@ -101,9 +101,9 @@ func (s *Server) checkLogin(scope []string, params map[string]json.RawMessage) e
 			return err
 		}
 	}
-	if spec.Flow == login.FlowRefresh && refs["refresh_token"] {
-		// rotated tokens are written back: it is the login's own, sealed - never a reference's
-		return errors.New("an oauth2_refresh login's refresh_token is written as it is, not a reference")
+	if refs["refresh_token"] || claims["refresh_token"] {
+		// rotated tokens are written back: it is the login's own, sealed - never a reference's nor a user's claim
+		return errors.New("a login's refresh_token is written as it is: not a reference, not a claim")
 	}
 	return client.CheckIdentity(spec) // a rule's or a jwt_assertion's identity: the operator's, bounded
 }
@@ -337,6 +337,7 @@ func (s *Server) loginResult(r *http.Request, c *auth.Caller, sec *state.Secret,
 		return sec.Name + "\x00" + strconv.FormatInt(version, 10) + "\x00" + userKey
 	}
 	key := keyAt(sec.Version)
+	lockKey := "login\x00" + sec.Name + "\x00" + userKey // not the version: a rotation moves it
 	now := s.now()
 	fresh := func(e *loginEntry) bool { return e != nil && e.result.Expiry.Sub(now) > mintMargin }
 	s.logins.mu.Lock()
@@ -345,11 +346,17 @@ func (s *Server) loginResult(r *http.Request, c *auth.Caller, sec *state.Secret,
 		return e.result, nil
 	}
 	s.logins.mu.Unlock()
-	unlock, err := s.mintLocks.lock(r.Context(), "login\x00"+key)
+	unlock, err := s.mintLocks.lock(r.Context(), lockKey)
 	if err != nil {
 		return nil, unavailableMint("the request ended while the service login was being renewed")
 	}
 	defer unlock()
+	// read again under the lock: a rotation made meanwhile (here or by another replica) moved its version
+	cur, err := s.store.Get(r.Context(), sec.Name)
+	if err != nil || !isLogin(cur) {
+		return nil, unavailableMint("the service login could not be read")
+	}
+	sec, key = cur, keyAt(cur.Version)
 	s.logins.mu.Lock()
 	prev := s.logins.entries[key]
 	s.logins.mu.Unlock()
@@ -359,6 +366,9 @@ func (s *Server) loginResult(r *http.Request, c *auth.Caller, sec *state.Secret,
 	spec, problem := s.loginSpec(r, c, sec)
 	if problem != nil {
 		return nil, problem
+	}
+	if spec.Flow == login.FlowRefresh && prev != nil && prev.kept["refresh_token"] != spec.RefreshToken {
+		prev = nil // what is stored is newer than what this replica kept: renew from it
 	}
 	// detached from the request: a refresh token the service rotated must not be lost with a dropped connection
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), refreshTimeout)

@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"strconv"
+	"sync"
 	"time"
 
 	"context"
@@ -235,7 +236,8 @@ func TestServiceLoginWholeClaim(t *testing.T) {
 
 type ruleID struct{ token string }
 
-func (ruleID) Kind() string { return "azure" }
+func (ruleID) Kind() string           { return "azure" }
+func (ruleID) Destinations() []string { return []string{"mssql://sql.corp.example"} }
 func (ruleID) Check(s *login.Spec) error {
 	if s.OAuthScope != "https://database.windows.net/.default" {
 		return errors.New("not that scope")
@@ -299,10 +301,24 @@ func TestServiceLoginRotation(t *testing.T) {
 	f.do("PUT", "/v1/secrets/api", f.admin, `{"type":"http","provider":"config","scope":["`+srv.URL+`"],
 		"params":{"bearer_token":"mint+login://api-login#access_token"}}`)
 	f.do("PUT", "/v1/secrets/api/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
-	for range 3 {
-		r := f.do("GET", "/v1/secrets/api", f.alice, "")
-		if r.status != 200 || r.json(t)["params"].(map[string]any)["bearer_token"] != "at-1" {
-			t.Fatalf("material: %d %s", r.status, r.body)
+	// concurrent reads spend the stored token once: the rest wait, and are served what it gave
+	var wg sync.WaitGroup
+	statuses := make([]int, 8)
+	for i := range statuses {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := f.do("GET", "/v1/secrets/api", f.alice, "")
+			statuses[i] = r.status
+			if r.status == 200 && r.json(t)["params"].(map[string]any)["bearer_token"] != "at-1" {
+				statuses[i] = -1
+			}
+		}()
+	}
+	wg.Wait()
+	for i, st := range statuses {
+		if st != 200 {
+			t.Fatalf("read %d: %d", i, st)
 		}
 	}
 	sec, _ := f.srv.store.Get(context.Background(), "api-login")
@@ -311,6 +327,11 @@ func TestServiceLoginRotation(t *testing.T) {
 	}
 	if strings.Contains(f.logs.String(), "rt-1") || strings.Contains(f.logs.String(), "at-1") {
 		t.Fatal("a token reached the log")
+	}
+	// a refresh token as a user's claim would be written back over it - one user's session for all: refused
+	if r := f.do("PUT", "/v1/secrets/bad", f.admin, `{"type":"tresor_service_login","provider":"config","scope":["`+srv.URL+`"],
+		"params":{"flow":"oauth2_refresh","token_url":"/token","refresh_token":"mint+claim://preferred_username"}}`); r.status != 422 {
+		t.Fatalf("a claim: %d %s", r.status, r.body)
 	}
 	// a refresh token as a reference cannot be written back: refused
 	if r := f.do("PUT", "/v1/secrets/bad", f.admin, `{"type":"tresor_service_login","provider":"config","scope":["`+srv.URL+`"],

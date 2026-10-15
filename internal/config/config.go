@@ -144,7 +144,16 @@ type Identity struct {
 	// awskms, gcpkms, key_file); Audience is the assertion's aud (default: the token endpoint).
 	Client   *ExchangeClient `yaml:"client"`
 	Audience string          `yaml:"audience"`
+	// TokenURLs: jwt - the token endpoints its assertions may go to (one is redeemable there).
+	TokenURLs []string `yaml:"token_urls"`
+	// Destinations: azure, gcp, aws_rds, aws_sts - where its credentials may go: a rule's scope within these
+	// (mssql://sql.corp.example, postgres://db.example:5432, s3://lake).
+	Destinations []string `yaml:"destinations"`
 }
+
+// ownScopes are scopes the service's own identity never mints for a rule: they open its KEK or its secrets.
+var ownScopes = []string{"https://vault.azure.net/.default", "https://managedhsm.azure.net/.default",
+	"https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/cloudkms"}
 
 // IdentityKinds are the kinds of dynamic.identities.
 var IdentityKinds = []string{"azure", "gcp", "aws_rds", "aws_sts", "jwt"}
@@ -1422,13 +1431,13 @@ func (c *Config) validateIdentities() error {
 		set := map[string]bool{"client_id": id.ClientID != "", "service_account": id.ServiceAccount != "",
 			"scopes": len(id.Scopes) > 0, "role_arn": id.RoleARN != "", "endpoints": len(id.Endpoints) > 0,
 			"users": len(id.Users) > 0, "duration": id.Duration != 0, "client": id.Client != nil,
-			"audience": id.Audience != ""}
+			"audience": id.Audience != "", "token_urls": len(id.TokenURLs) > 0, "destinations": len(id.Destinations) > 0}
 		allowed, ok := map[string][]string{
-			"azure":   {"client_id", "scopes"},
-			"gcp":     {"service_account", "scopes"},
-			"aws_rds": {"role_arn", "endpoints", "users"},
-			"aws_sts": {"role_arn", "duration"},
-			"jwt":     {"client", "audience"},
+			"azure":   {"client_id", "scopes", "destinations"},
+			"gcp":     {"service_account", "scopes", "destinations"},
+			"aws_rds": {"role_arn", "endpoints", "users", "destinations"},
+			"aws_sts": {"role_arn", "duration", "destinations"},
+			"jwt":     {"client", "audience", "token_urls"},
 		}[id.Kind]
 		if !ok {
 			return fmt.Errorf("%s.kind is %s", where, strings.Join(IdentityKinds, " | "))
@@ -1436,6 +1445,16 @@ func (c *Config) validateIdentities() error {
 		for name, on := range set {
 			if on && !slices.Contains(allowed, name) {
 				return fmt.Errorf("%s.%s is not for kind %s", where, name, id.Kind)
+			}
+		}
+		if id.Kind != "jwt" && len(id.Destinations) == 0 {
+			return fmt.Errorf("%s: a rule's identity lists its destinations (where its credentials may go)", where)
+		}
+		own := (id.Kind == "azure" && id.ClientID == "") || (id.Kind == "gcp" && id.ServiceAccount == "")
+		for _, sc := range id.Scopes {
+			if own && slices.Contains(ownScopes, strings.TrimRight(sc, "/")) {
+				return fmt.Errorf("%s: the service's own identity never mints %s (it opens the KEK or the secrets) - "+
+					"use an identity of its own", where, sc)
 			}
 		}
 		switch id.Kind {
@@ -1473,6 +1492,13 @@ func (c *Config) validateIdentities() error {
 		case "jwt":
 			if id.Client == nil {
 				return fmt.Errorf("%s: a jwt identity has a client (client_id, client_auth, key)", where)
+			}
+			if len(id.TokenURLs) == 0 {
+				return fmt.Errorf("%s: a jwt identity lists its token_urls (where its assertions may go)", where)
+			}
+			if id.Client.AssertionAudience != "" || id.Client.Grant != "" || id.Client.OmitClientID {
+				return fmt.Errorf("%s.client: assertion_audience, grant and omit_client_id are exchange's - "+
+					"a jwt identity's aud is its audience", where)
 			}
 			switch id.Client.ClientAuth {
 			case "keyvault", "vault", "awskms", "gcpkms", "key_file":

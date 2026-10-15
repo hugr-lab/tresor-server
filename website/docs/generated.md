@@ -136,15 +136,17 @@ CREATE PERSISTENT SECRET crm IN corp (TYPE http, SCOPE 'https://crm.corp.example
   to 12 hours past the result's expiry, and kept when a refresh gives no new one - else a new login; a refused
   refresh logs in again. What a login got is cached in each replica's memory until shortly
   before it expires; a restart logs in again.
-- **Inputs**: `username`, `password`, `client_id`, `client_secret`, `refresh_token` may be references (`ref+…`),
+- **Inputs**: `username`, `password`, `client_id`, `client_secret` may be references (`ref+…`),
   or hold the caller's claims (`mint+claim://preferred_username`, `${claim://…}` inside): one login for everybody,
   logged in per user. A reference may hold a claim too - `ref+vault://kv/users/${claim://sub}#password` - the
   claim a name or an id only (letters, digits, `.`, `_`, `@`, `-`, no `..`), the allowlist checked with it in. No
   other parameter takes a claim or a reference. The inputs are always redacted: the console's shape never shows
   them.
 - **`oauth2_refresh`**: the refresh token an administrator wrote is spent at the first renewal; a rotated one is
-  written back to the login (sealed, compare-and-set on its version - the login's version moves), so every
-  replica and a restart renew from the latest. It is written as it is, never a reference.
+  written back to the login (sealed, compare-and-set on its version - the login's version moves), so a restart
+  and the other replicas renew from the latest. In one replica the renewals take turns. Two replicas renewing at
+  the same moment may spend one token twice: with an IdP that revokes on reuse, prefer `client_credentials` or
+  `jwt_assertion`, or one replica. It is written as it is - never a reference, never a claim.
 - **Use**: a login is granted, as any secret, to roles and groups; a reader of a secret of the login holds `use`
   on both.
 - **Bounds**: 10 seconds a call, 1 MiB a response, 100 ms a jq program. A refusal (4xx) is `403
@@ -161,25 +163,35 @@ or an identity of its own. The identity's own rights bound the rest: give it onl
 dynamic:
   login_hosts: [zitadel.corp.example]
   identities:
-    - {name: catalog-sql, kind: azure, client_id: <a user-assigned identity>, scopes: [https://database.windows.net/.default]}
+    - {name: catalog-sql, kind: azure, client_id: <a user-assigned identity>,
+       scopes: [https://database.windows.net/.default], destinations: ['mssql://sql.corp.example']}
     - {name: catalog-cloudsql, kind: gcp, service_account: catalog@proj.iam.gserviceaccount.com,
-       scopes: [https://www.googleapis.com/auth/sqlservice.login]}
+       scopes: [https://www.googleapis.com/auth/sqlservice.login], destinations: ['postgres://catalog-cloudsql']}
     - {name: catalog-rds, kind: aws_rds, role_arn: arn:aws:iam::123456789012:role/catalog,
-       endpoints: ['catalog.abc.eu-west-1.rds.amazonaws.com:5432'], users: [catalog]}
-    - {name: lake-read, kind: aws_sts, role_arn: arn:aws:iam::123456789012:role/lake-read, duration: 1h}
+       endpoints: ['catalog.abc.eu-west-1.rds.amazonaws.com:5432'], users: [catalog],
+       destinations: ['postgres://catalog.abc.eu-west-1.rds.amazonaws.com:5432']}
+    - {name: lake-read, kind: aws_sts, role_arn: arn:aws:iam::123456789012:role/lake-read, duration: 1h,
+       destinations: ['s3://lake']}
     - name: zitadel-etl                       # a ZITADEL machine user's key
       kind: jwt
       audience: https://zitadel.corp.example  # the assertion's aud: ZITADEL's issuer (default: the token endpoint)
+      token_urls: [https://zitadel.corp.example/oauth/v2/token]
       client: {client_auth: key_file, key_file: /var/run/tresor/zitadel-etl.json}
 ```
 
 | Kind | What it makes | Bounded by | Fields |
 | --- | --- | --- | --- |
-| `azure` | an Entra token of the service's identity, or of a user-assigned one (`client_id`) | `scopes` | `access_token` |
-| `gcp` | an access token of the service's identity, or of a service account it impersonates (it holds Service Account Token Creator on it) | `scopes` | `access_token` |
-| `aws_rds` | an RDS IAM token (15 minutes), with the service's identity or a role it assumes | `endpoints`, `users`; the region is `aws.region` | `password`, `user` |
-| `aws_sts` | temporary credentials of a role it assumes | `role_arn`, `duration` (15m-12h) | `access_key_id`, `secret_access_key`, `session_token` |
-| `jwt` | a client's signed assertion (as `exchange.client_auth`: `keyvault`, `vault`, `awskms`, `gcpkms`, `key_file`) | the client's own registration | used by `jwt_assertion` |
+| `azure` | an Entra token of the service's identity, or of a user-assigned one (`client_id`) | `scopes`, `destinations` | `access_token` |
+| `gcp` | an access token of the service's identity, or of a service account it impersonates (it holds Service Account Token Creator on it) | `scopes`, `destinations` | `access_token` |
+| `aws_rds` | an RDS IAM token (15 minutes), with the service's identity or a role it assumes | `endpoints`, `users`, `destinations`; the region is `aws.region` | `password`, `user` |
+| `aws_sts` | temporary credentials of a role it assumes (the session named `tresor-<login>`) | `role_arn`, `duration` (15m-12h; 1h at most when `aws.role_arn` chains roles), `destinations` | `access_key_id`, `secret_access_key`, `session_token` |
+| `jwt` | a client's signed assertion (as `exchange.client_auth`: `keyvault`, `vault`, `awskms`, `gcpkms`, `key_file`) | `token_urls`: the only endpoints its assertions go to | used by `jwt_assertion` |
+
+- **`destinations`**: a rule's login scope must be within them - where the credentials may go. A rule calls
+  nothing; without this bound an administrator could send a database token anywhere.
+- **The service's own identity** (azure with no `client_id`, gcp with no `service_account`) never mints a scope
+  that opens its KEK or its secrets (`https://vault.azure.net/.default`, Managed HSM, `cloud-platform`,
+  `cloudkms`): give a rule an identity of its own.
 
 A rule's scope is where its fields go (`mssql://…`, `postgres://…`, `s3://…`): it calls nothing itself.
 `mint+rule://<login>#<field>` is the same as `mint+login://…`.
@@ -193,9 +205,13 @@ A rule's scope is where its fields go (`mssql://…`, `postgres://…`, `s3://�
 -- mssql reads the token as its connection's login: no password anywhere
 CREATE PERSISTENT SECRET sales IN corp (TYPE azure, PROVIDER access_token, SCOPE 'mssql://sql.corp.example/sales',
   ACCESS_TOKEN 'mint+rule://catalog-sql-login#access_token');
--- PostgreSQL on RDS: the database's login is the token
-CREATE PERSISTENT SECRET catalog IN corp (TYPE postgres, HOST 'catalog.abc.eu-west-1.rds.amazonaws.com',
-  PORT 5432, DBNAME 'catalog', USER 'catalog', PASSWORD 'mint+rule://catalog-rds-login#password');
+-- PostgreSQL on RDS (its login, catalog-rds-login: {"flow": "rule", "identity": "catalog-rds",
+--   "endpoint": "catalog.abc.eu-west-1.rds.amazonaws.com:5432", "user": "catalog"},
+--   scope ["postgres://catalog.abc.eu-west-1.rds.amazonaws.com:5432"]): the database's login is the token
+CREATE PERSISTENT SECRET catalog IN corp (TYPE postgres,
+  SCOPE 'postgres://catalog.abc.eu-west-1.rds.amazonaws.com:5432/catalog',
+  HOST 'catalog.abc.eu-west-1.rds.amazonaws.com', PORT 5432, DBNAME 'catalog', USER 'catalog',
+  PASSWORD 'mint+rule://catalog-rds-login#password');
 ```
 
 **ZITADEL**: a machine user logs in with the JWT profile - its key signs, ZITADEL's issuer is the `aud`, the

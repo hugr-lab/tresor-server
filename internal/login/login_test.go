@@ -268,6 +268,8 @@ func (f fakeID) Kind() string                                 { return f.kind }
 func (f fakeID) Check(*Spec) error                            { return f.check }
 func (f fakeID) ClientID() string                             { return "app" }
 func (f fakeID) Make(context.Context, *Spec) (*Result, error) { return f.res, nil }
+func (f fakeID) For(tokenURL string) bool                     { return strings.HasSuffix(tokenURL, "/token") }
+func (f fakeID) Destinations() []string                       { return []string{"mssql://sql.example", "http://127.0.0.1"} }
 func (f fakeID) Assert(_ context.Context, tokenURL string) (string, error) {
 	return "signed-for-" + tokenURL, nil
 }
@@ -291,7 +293,11 @@ func TestIdentityFlows(t *testing.T) {
 		"wide":  fakeID{kind: "azure", check: errors.New("not for that scope")},
 		"signr": fakeID{kind: "jwt"},
 	}
-	rule, err := Parse(map[string]string{"flow": FlowRule, "identity": "db", "scope": "https://database.windows.net/.default"}, []string{srv.URL})
+	far, _ := Parse(map[string]string{"flow": FlowRule, "identity": "db", "scope": "x"}, []string{"mssql://elsewhere.example"})
+	if c.CheckIdentity(far) == nil {
+		t.Fatal("a rule whose scope is outside its identity's destinations")
+	}
+	rule, err := Parse(map[string]string{"flow": FlowRule, "identity": "db", "scope": "https://database.windows.net/.default"}, []string{"mssql://sql.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,6 +324,13 @@ func TestIdentityFlows(t *testing.T) {
 	jwt.Identity = "db"
 	if _, _, err := c.Login(context.Background(), jwt); err == nil {
 		t.Fatal("a jwt_assertion with a rule's identity")
+	}
+	jwt.Identity, jwt.TokenURL = "signr", "/other"
+	if _, _, err := c.Login(context.Background(), jwt); err == nil {
+		t.Fatal("an assertion for a token endpoint the identity is not for")
+	}
+	if _, err := Parse(map[string]string{"flow": FlowJWT, "identity": "s", "token_url": "/t", "client_id": "x"}, []string{srv.URL}); err == nil {
+		t.Fatal("a param another flow takes")
 	}
 	refresh, _ := Parse(map[string]string{"flow": FlowRefresh, "token_url": "/oauth/token", "refresh_token": "rt",
 		"client_id": "app"}, []string{srv.URL})
