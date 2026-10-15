@@ -238,8 +238,9 @@ is one of DuckDB's) - and stays fresh only as long as the extension reads it aga
 
 - **bigquery** reads a secret of its own class: a secret from tresor's storage is refused today (tresor's client
   to fix).
-- **Under acl**, a value made per user is the user's when the extension looks up with the session's context; an
-  extension that looks up with none (mssql's `AZURE_SECRET` today, postgres's RDS template) gets the node's.
+- **Under acl**, a value made per user is the user's when the extension looks up with the session's context. A
+  database ATTACH (mssql, postgres) is the instance's: one secret, resolved by the instance and pooled for every
+  connection - by design. Per-user values are for what each request carries: http, quack, object storage.
 
 **ZITADEL**: a machine user logs in with the JWT profile - its key signs, ZITADEL's issuer is the `aud`, the
 assertion is the grant:
