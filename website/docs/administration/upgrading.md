@@ -87,9 +87,9 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
 
 ### Upgrading to 0.5 (spec 023)
 
-- **Kubernetes store: apply the CRDs first** (`kubectl apply --server-side -f crds/`): `TresorSecret` has a new
-  field, `dynamic`. With the old CRD the API server drops it, and a secret with generated parameters is refused
-  (its MAC no longer verifies).
+- **Kubernetes store: apply the CRDs first** (`kubectl apply --server-side -f crds/`): `TresorSecret` and
+  `TresorVariable` have a new field, `dynamic`. With the old CRDs the API server drops it, and a secret with
+  generated parameters is refused (its MAC no longer verifies).
 - **The SQL stores** migrate at start (a column, `dynamic`): nothing to do.
 - **Roll out every replica before writing a generated parameter**: a replica still on 0.4 serves `mint+…` as the
   text it is.
