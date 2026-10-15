@@ -18,8 +18,10 @@ encryption, references, Azure Container Apps, operations, security.
 [deploy/azure-container-apps](deploy/azure-container-apps/README.md) deploys it on Azure Container Apps - a
 database, the KEK in Key Vault, a managed identity, no password.
 
-Status: phase 1 (the Azure MVP) is done - see [spec 001](specs/001-architecture/spec.md) (the architecture)
-and [spec 002](specs/002-phase1-azure-mvp/spec.md) (phase 1).
+Status: 0.4 - every phase of [spec 001](specs/001-architecture/spec.md) (the architecture) is done: Azure,
+PostgreSQL and SQL Server, Kubernetes, AWS, GCP, OpenBao and Vault. Releases are signed ([verifying](https://hugr-lab.github.io/tresor-server/security#verifying-the-artifacts));
+what is checked: [supported versions](https://hugr-lab.github.io/tresor-server/support); vulnerabilities:
+[SECURITY.md](SECURITY.md).
 
 ## Develop
 
