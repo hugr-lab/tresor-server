@@ -98,6 +98,11 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
   itself: a client fetches a new token sooner.
 - **Secrets written before**: not dynamic, so a `mint+…` or `${…}` stored in one is served as it is, until the
   secret is written again. Only an escape changes: `$${` is served as `${`, `mint++` as `mint+`.
+- **New, off until set**: service logins call nothing until `dynamic.login_hosts` lists a host; rules and
+  `jwt_assertion` use nothing until `dynamic.identities` lists an identity
+  ([Generated parameters](../generated.md#service-logins)). A secret of type `tresor_service_login` is never served.
+- **ZITADEL key files**: a machine user's key (`userId`, no `clientId`) is now read as that user's client - an
+  `exchange.key_file` of such a key names its client by it.
 
 ## Check
 
