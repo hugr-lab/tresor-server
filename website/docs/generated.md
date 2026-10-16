@@ -231,13 +231,23 @@ is one of DuckDB's) - and stays fresh only as long as the extension reads it aga
 | httpfs (s3, gcs, r2, http), azure, delta, bigquery, gsheets | by type and scope | at each file or request: fresh |
 | postgres, mysql, snowflake | by name only (`SECRET`, or `__default_<type>`); SCOPE ignored | the connection string is kept from ATTACH: a token that expires (RDS IAM: 15 minutes) fails new connections after it |
 | mssql (hugr-lab) | by name (`SECRET`, `AZURE_SECRET`) | `AZURE_SECRET`: at each new connection near the token's expiry |
-| iceberg REST | by name, or an unscoped `iceberg` secret | at ATTACH only; serve `token` and `endpoint`, without the client's credentials |
+| iceberg REST | by name, or an unscoped `iceberg` secret (its catalog's `http` one too) | at ATTACH only - see below |
 | airport, adbc_scanner | by type and scope (a named secret: in memory or a file only) | at ATTACH only |
 | unity_catalog, keboola | by name in memory or a file only | - tresor's storage is not searched |
 | motherduck, columnar adbc, http_client | not from a secret (a setting, the environment, the ATTACH string) | - |
 
-- **bigquery** reads a secret of its own class: a secret from tresor's storage is refused today (tresor's client
-  to fix).
+- **bigquery** reads a secret of its own class: tresor builds it through the type's own deserializer (tresor spec
+  032). Serve `external_account_json` (workload identity federation: no key, bigquery renews its tokens) or an
+  `access_token` from a [rule](#a-key-a-workload-identity-jwt_assertion-and-rules) (a GCP identity) - never a
+  service account's key (`service_account_json`): a static secret where the platform has an identity.
+- **postgres** reads libpq's own keys only: `host`, `port`, `dbname`, `user`, `password`. `CREATE SECRET` through
+  tresor writes them so (DuckDB turns `username`, `hostname`, `database` into them); a secret written through the
+  API or the console names them so itself.
+- **iceberg** logs in from nothing it is served: it reads a ready `token` once at ATTACH, and renews only with
+  client credentials or a refresh token of its own. Serve `token` and `endpoint` where an attach as long as the
+  token lives is enough; otherwise give the catalog credentials it renews itself - and never both (it would
+  replace a per-user token with its own). Its `expires_in` is read only as an INTEGER: a generated value is not
+  one.
 - **Whose a database's secret is**: whoever attaches it. On a user's own DuckDB, the user's - a token made for them
   and renewed for them (bigquery, postgres, mssql alike). On a duckdb-acl node, the node's: its users attach
   nothing there, so a delegation never reaches a catalog; the node's tokens are the same for every user. Per-user
