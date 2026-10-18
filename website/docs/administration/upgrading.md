@@ -104,6 +104,19 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
 - **ZITADEL key files**: a machine user's key (`userId`, no `clientId`) is now read as that user's client - an
   `exchange.key_file` of such a key names its client by it.
 
+### Upgrading to 0.6 (spec 024)
+
+- **Nothing to migrate**: no column, no CRD change (variables' `dynamic` came with 0.5).
+- **Variables take generated values** (`mint+exchange://`, `mint+claim://`, `mint+login://`, `${…}`), served
+  `sensitive` with an `expires_at` (tresor spec 037). Roll out every replica before writing one: a replica on 0.5
+  serves it as the text it is.
+- **A variable written before** is served as written, but for its escapes (`mint++`, `$${`); written again, a text
+  that is not a valid generator is refused - write it escaped.
+- **A login's scope** begins with the base URL it calls, then base URLs or `variable://<name>` only (a rule's: any
+  scheme, within its identity's destinations).
+- **A sandboxed DuckDB** (tresor spec 036) stops tresor's own requests: name the service's and the issuers' URLs in
+  `allowed_directories` ([Security](../security.md#a-sandboxed-duckdb)).
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.

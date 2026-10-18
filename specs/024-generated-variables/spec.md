@@ -1,6 +1,6 @@
 # Spec 024: generated values in variables
 
-- **Status**: accepted (the owner, 2026-10-18: "as for secrets"; tresor spec 037, hugr-lab/tresor#61)
+- **Status**: implemented (#72; the owner, 2026-10-18: "as for secrets"; tresor spec 037, hugr-lab/tresor#61)
 - **Date**: 2026-10-18
 - **Author**: hugr lab
 
