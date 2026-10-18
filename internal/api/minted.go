@@ -262,6 +262,30 @@ func (s *Server) grantGenerators(ctx context.Context, actor *auth.Caller) []*gen
 		return nil // minted lazily from the subject token, while it lives
 	}
 	var out []*generator
+	// the variables too (spec 024): a variable's generators are as a secret's
+	vars, err := s.store.Variables().List(ctx)
+	if err != nil {
+		s.log.Error("store read failed", "error", err.Error())
+	}
+	for _, v := range vars {
+		if !v.Dynamic || !policy.Usable(v, actor.Principals) {
+			continue
+		}
+		full, err := s.store.Variables().Get(ctx, v.Name)
+		if err != nil {
+			s.log.Error("store read failed", "variable", v.Name, "error", err.Error())
+			continue // made lazily, or refused at the read with the reason
+		}
+		gens, err := generatorsOf(full.Type, full.Provider, full.Params, s.material.Refs(full.Params))
+		if err != nil {
+			s.log.Warn("a variable's generators do not read: the grant keeps none of them", "variable", v.Name,
+				"error", err.Error())
+			continue
+		}
+		for _, list := range gens {
+			out = append(out, list...)
+		}
+	}
 	for _, listed := range secrets {
 		if isDynamic(listed) && policy.Usable(listed, actor.Principals) {
 			sec, err := s.store.Get(ctx, listed.Name) // a list carries no params: the generators are in them

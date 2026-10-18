@@ -39,9 +39,17 @@ func variableDescriptor(sec *state.Secret, verbs []string) map[string]any {
 		"created_at":  sec.CreatedAt.UTC().Format(time.RFC3339),
 		"updated_at":  sec.UpdatedAt.UTC().Format(time.RFC3339),
 		"version":     strconv.FormatInt(sec.Version, 10),
-		"sensitive":   sec.Provider == providerReference,
+		"sensitive":   sec.Provider == providerReference || sec.Dynamic, // a generated value is (spec 024)
 		"permissions": verbs,
 	}
+}
+
+// variableConsumer is a variable as a generator's consumer: its scope is its name (variable://<name>), which a
+// login feeding it must cover (spec 024).
+func variableConsumer(v *state.Secret) *state.Secret {
+	c := *v
+	c.Scope = []string{"variable://" + v.Name}
+	return &c
 }
 
 func (s *Server) listVariables(w http.ResponseWriter, r *http.Request) {
@@ -97,16 +105,38 @@ func (s *Server) getVariable(w http.ResponseWriter, r *http.Request) {
 		s.log.Info("reference resolved", "variable", v.Name, "ref", res.Ref.String(), "version", res.Version)
 		o.event.Refs = append(o.event.Refs, audit.Ref{Param: res.Param, Ref: res.Ref.String(), Version: res.Version})
 	}
+	// a generated value (spec 024): made for the effective user, as a secret's parameter is
+	out := map[string]json.RawMessage{"value": params["value"]}
+	refKeys := map[string]bool{}
+	for _, res := range resolved {
+		refKeys[res.Param] = true
+	}
+	generatedKeys, expires, refusal := s.generated(r, c, variableConsumer(full), out, refKeys)
+	if refusal != nil {
+		problem(w, refusal.status, refusal.kind, refusal.detail)
+		return
+	}
+	params = out
 	var value string
 	if err := json.Unmarshal(params["value"], &value); err != nil {
 		s.log.Error("a variable's value does not read", "variable", v.Name)
 		problem(w, http.StatusInternalServerError, "service_error", "the variable's value does not read")
 		return
 	}
+	if len(generatedKeys) > 0 && len(value) > maxVariableBytes { // the protocol's bound, after what was made too
+		problem(w, http.StatusForbidden, "mint_refused", "the variable's generated value is longer than 64 KiB")
+		return
+	}
 	body := variableDescriptor(full, verbs)
 	body["value"] = value
-	if len(resolved) > 0 {
-		body["sensitive"] = true // what was resolved is material, whatever the stored marker says
+	if len(resolved) > 0 || len(generatedKeys) > 0 {
+		body["sensitive"] = true // what was resolved or made is material, whatever the stored marker says
+	}
+	switch {
+	case !expires.IsZero():
+		body["expires_at"] = s.expiresAt(expires).UTC().Format(time.RFC3339)
+	case full.Dynamic:
+		body["expires_at"] = s.now().Add(mintNoExpiry).UTC().Format(time.RFC3339) // made now, named no expiry
 	}
 	w.Header().Set("ETag", strconv.Quote(strconv.FormatInt(full.Version, 10)))
 	w.Header().Set("Cache-Control", "no-store")
@@ -144,12 +174,18 @@ func (s *Server) putVariable(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(*body.Value, material.Prefix) {
 		provider = providerReference
 	}
+	// a generated value (spec 024): checked as a secret's, and the row says it is dynamic
+	dynamic, err := s.checkGenerators(variableType, "", params)
+	if err != nil {
+		problem(w, http.StatusUnprocessableEntity, "invalid_secret", err.Error())
+		return
+	}
 	now := s.now()
 	s.upsert(w, r, name, func() *state.Secret {
 		return &state.Secret{Type: variableType, Provider: provider, Params: params, Comment: deref(body.Comment),
-			Owner: c.Owner(), CreatedAt: now, UpdatedAt: now, Version: 1}
+			Owner: c.Owner(), CreatedAt: now, UpdatedAt: now, Version: 1, Dynamic: dynamic}
 	}, func(next *state.Secret) {
-		next.Type, next.Provider, next.Params = variableType, provider, params
+		next.Type, next.Provider, next.Params, next.Dynamic = variableType, provider, params, dynamic
 		if body.Comment != nil {
 			next.Comment = *body.Comment
 		}

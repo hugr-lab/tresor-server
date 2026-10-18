@@ -130,14 +130,17 @@ func Parse(params map[string]string, scope []string) (*Spec, error) {
 	if len(scope) == 0 {
 		return nil, errors.New("a login's scope names the base URLs it may call")
 	}
-	for _, base := range scope {
+	for i, base := range scope {
 		u, err := url.Parse(base)
-		if err != nil || u.Host == "" {
+		variable := err == nil && u.Scheme == "variable" // variable://<name>, or variable:// for every one
+		if err != nil || (u.Host == "" && !(variable && base == "variable://")) {
 			return nil, errors.New("a login's scope is base URLs (https://host[/path])")
 		}
-		// a rule calls nothing: its scope is where its fields may go (mssql://, postgres://, s3://)
-		if params["flow"] != FlowRule && u.Scheme != "https" && u.Scheme != "http" {
-			return nil, errors.New("a login's scope is base URLs it calls (https://host[/path])")
+		// a rule calls nothing: its scope is where its fields may go (mssql://, postgres://, s3://). A login that
+		// calls does so under its first; the others are where else it calls, or the variables its fields feed
+		web := u.Scheme == "https" || u.Scheme == "http"
+		if params["flow"] != FlowRule && ((i == 0 && !web) || (i > 0 && !web && !variable)) {
+			return nil, errors.New("a login's scope begins with the base URL it calls (https://host[/path]); then base URLs, or variable://<name>")
 		}
 	}
 	if t := params["ttl"]; t != "" {
@@ -263,10 +266,16 @@ func (s *Spec) Covers(scope []string) bool {
 }
 
 func (s *Spec) under(target string) bool {
+	if strings.HasPrefix(target, "variable://") { // a variable by its exact name, or all of them
+		return slices.Contains(s.Scope, target) || slices.Contains(s.Scope, "variable://")
+	}
 	if hasDotSegments(target) {
 		return false // a path that climbs out of a base URL is never within it
 	}
 	for _, base := range s.Scope {
+		if strings.HasPrefix(base, "variable://") {
+			continue
+		}
 		b := strings.TrimRight(base, "/")
 		if target == b || strings.HasPrefix(target, b+"/") || strings.HasPrefix(target, b+"?") {
 			return true

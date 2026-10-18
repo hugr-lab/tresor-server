@@ -202,6 +202,16 @@ func TestParseRefusals(t *testing.T) {
 	if _, err := Parse(map[string]string{"flow": "basic", "username": "u", "password": "p"}, nil); err == nil {
 		t.Error("no scope: accepted")
 	}
+	for _, sc := range [][]string{{"variable://x"}, {"https://crm.example", "postgres://db:5432"}, {"https://crm.example", "variable:///x"}} {
+		if _, err := Parse(map[string]string{"flow": "basic", "username": "u", "password": "p"}, sc); err == nil {
+			t.Errorf("scope %v: accepted", sc)
+		}
+	}
+	for _, sc := range [][]string{{"https://crm.example", "variable://tok"}, {"https://crm.example", "variable://", "https://api.example"}} {
+		if _, err := Parse(map[string]string{"flow": "basic", "username": "u", "password": "p"}, sc); err != nil {
+			t.Errorf("scope %v: %v", sc, err)
+		}
+	}
 	s, _ := Parse(map[string]string{"flow": "basic", "username": "u", "password": "p"}, scope)
 	if !s.Covers([]string{"https://crm.example/api"}) || s.Covers([]string{"https://crm.example.evil"}) || s.Covers(nil) {
 		t.Fatal("covers")
