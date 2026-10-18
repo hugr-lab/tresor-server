@@ -60,10 +60,14 @@ SET some_setting = corp.variable('api_token');
 - **`sensitive: true`** and an **`expires_at`** (tresor spec 037): the earliest expiry of what was made, less
   `dynamic.margin`. tresor caches the value per caller until shortly before it.
 - **For whom**: the caller; under a delegation grant, the grant's user - never the server.
-- **A login's field** reaches a variable only when the login's scope names it: `variable://<name>`, or
-  `variable://` for every variable (a rule's identity: in its `destinations` too).
-- Refused as a secret's: `403 mint_refused`, `503` for an outage, never an empty value. A variable written before
-  0.6 is served as it was written.
+- **A login's field** reaches a variable only when the login's scope names it: `variable://<name>` (that name
+  exactly), or `variable://` for every variable (a rule's identity: in its `destinations` too).
+- Refused as a secret's: `403 mint_refused`, `503` for an outage, never an empty value; a value longer than 64
+  KiB once made is refused too.
+- **A variable written before 0.6** is not dynamic and makes nothing: a `mint+…` or `${…}` in it is served as
+  written. Only an escape changes, as for secrets in 0.5: `mint++` is served as `mint+`, `$${` as `${`. Written
+  again, its value is checked: a text that is not a valid generator (`mint+x`, `${claim://sid}`) is refused - write
+  it escaped.
 
 ## Where they are kept
 

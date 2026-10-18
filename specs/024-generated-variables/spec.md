@@ -21,14 +21,19 @@ until shortly before then. A client puts it wherever DuckDB takes a string - a s
   `expires_at` the earliest expiry less `dynamic.margin`, never `null` when generated; `sensitive: true`. A refusal
   is `403 mint_refused`, an outage `503` - never an empty value.
 - **A login's field in a variable**: a variable has no scope, so a login (or rule) feeds one only when its scope (a
-  rule's: and its identity's destinations) names it: `variable://<name>`, or `variable://` for every variable.
+  rule's: and its identity's destinations) names it: `variable://<name>` - that name exactly - or `variable://`
+  for every variable. A calling login's scope begins with the base URL it calls; its further entries are base URLs
+  or `variable://` names, nothing else (a postgres:// there would let a login's fields reach a secret unbounded).
+- A value longer than 64 KiB once made is refused (`403`).
 - **A grant** keeps the claims, and pre-mints the exchanges, the variables its server may use name - as for secrets.
 - No state migration, no protocol change of this service's own (tresor spec 037 is the protocol's).
 
 ## Enforcement & security
 
 Only administrators write a variable (as now). A generated value is always `sensitive`: the client logs and shares
-it as material. A variable written before 0.6 is not dynamic and makes nothing (as a secret, spec 023).
+it as material. A variable written before 0.6 is not dynamic and makes nothing (as a secret, spec 023) - but its
+escapes (`mint++`, `$${`) are read, as a secret's in 0.5; written again, a text that is not a valid generator is
+refused.
 
 ## Testing
 

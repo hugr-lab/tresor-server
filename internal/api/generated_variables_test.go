@@ -85,3 +85,51 @@ func TestGeneratedVariableFromLogin(t *testing.T) {
 		t.Fatalf("not named by the login: %d %s", r.status, r.body)
 	}
 }
+
+// variable://<name> names one variable exactly; variable:// all of them; a value inside a string; a row from
+// before (not dynamic) served as stored; a generated value over 64 KiB refused
+func TestGeneratedVariableBounds(t *testing.T) {
+	f := newFixture(t, "")
+	srv, _ := sessionService(t)
+	withLoginHosts(f, srv)
+	login := func(name string, scope ...string) {
+		quoted := `"` + srv.URL + `"`
+		for _, s := range scope {
+			quoted += `,"` + s + `"`
+		}
+		body := strings.Replace(loginBody(srv.URL, "svc", "pw-svc", ""), `"scope":["`+srv.URL+`"]`, `"scope":[`+quoted+`]`, 1)
+		if r := f.do("PUT", "/v1/secrets/"+name, f.admin, body); r.status != 201 {
+			t.Fatalf("login %s: %d %s", name, r.status, r.body)
+		}
+		f.do("PUT", "/v1/secrets/"+name+"/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	}
+	login("one", "variable://tok")
+	login("all", "variable://")
+	get := func(name, value string) reply {
+		f.do("PUT", "/v1/variables/"+name, f.admin, `{"value":`+value+`}`)
+		f.do("PUT", "/v1/variables/"+name+"/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+		return f.do("GET", "/v1/variables/"+name, f.alice, "")
+	}
+	if r := get("tok", `"mint+login://one#session_id"`); r.status != 200 {
+		t.Fatalf("named exactly: %d %s", r.status, r.body)
+	}
+	if r := get("tok%3Fx", `"mint+login://one#session_id"`); r.status != 403 {
+		t.Fatalf("a name under it is not it: %d %s", r.status, r.body)
+	}
+	if r := get("anything", `"Session ${login://all#session_id}"`); r.status != 200 || r.json(t)["value"] != "Session sess-svc" {
+		t.Fatalf("variable:// for all, inside a string: %d %s", r.status, r.body)
+	}
+	if r := get("hdr", `"Bearer ${exchange://echo-api}"`); r.status != 200 || !strings.HasPrefix(r.json(t)["value"].(string), "Bearer ey") {
+		t.Fatalf("an exchange inside a string: %d %s", r.status, r.body)
+	}
+	// a row from before 0.6: not dynamic, a generator in it served as it was written
+	stored(t, f.srv.store.Variables(), "old", `{"value":"mint+claim://preferred_username"}`)
+	f.do("PUT", "/v1/variables/old/grants/a", f.admin, `{"principal":"role:analysts","verbs":["use"]}`)
+	if r := f.do("GET", "/v1/variables/old", f.alice, ""); r.json(t)["value"] != "mint+claim://preferred_username" || r.json(t)["sensitive"] != false {
+		t.Fatalf("a row from before: %s", r.body)
+	}
+	long := strings.Repeat("x", maxVariableBytes-100) // a token is longer than its generator
+	if r := get("long", `"`+long+`${exchange://echo-api}"`); r.status != 403 {
+		t.Fatalf("over 64 KiB once made: %d %s", r.status, r.body)
+	}
+}

@@ -123,6 +123,10 @@ func (s *Server) getVariable(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusInternalServerError, "service_error", "the variable's value does not read")
 		return
 	}
+	if len(generatedKeys) > 0 && len(value) > maxVariableBytes { // the protocol's bound, after what was made too
+		problem(w, http.StatusForbidden, "mint_refused", "the variable's generated value is longer than 64 KiB")
+		return
+	}
 	body := variableDescriptor(full, verbs)
 	body["value"] = value
 	if len(resolved) > 0 || len(generatedKeys) > 0 {
