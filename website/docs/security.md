@@ -71,6 +71,15 @@ also accept a signature made from a branch.
 
 Report a vulnerability as [SECURITY.md](https://github.com/hugr-lab/tresor-server/blob/main/SECURITY.md) says.
 
+## A sandboxed DuckDB
+
+A DuckDB with `enable_external_access = false` reaches only what `allowed_directories` names - tresor's requests
+included (tresor specs/036). For a client in a sandbox, name the service's URL (`public_url`), every endpoint
+its issuers' discovery names (token, device, revocation), and for a managed identity's login the platform's
+endpoint (`http://169.254.169.254/`), each ending in `/` and spelled as the URL spells it. A secret already
+fetched is served from memory until it expires; nothing new is fetched. See tresor's [DuckDB's
+sandbox](https://hugr-lab.github.io/tresor/security#duckdbs-sandbox).
+
 ## Static secrets that remain
 
 - A **local KEK** and a **database password**: for development and small installs.

@@ -79,6 +79,15 @@ Anyone with the role then reads `s3://lake/...` with no secret of their own. tre
 [getting started](https://hugr-lab.github.io/tresor/getting-started/) goes on from here: people and
 services, servers acting for users, what DuckDB sees.
 
+**A DuckDB in a sandbox** (`enable_external_access = false`) stops tresor's own requests too: name the
+service's URL and the identity provider's hosts first (tresor's [DuckDB's
+sandbox](https://hugr-lab.github.io/tresor/security#duckdbs-sandbox)):
+
+```sql
+SET allowed_directories = ['https://secrets.corp.example/', 'https://login.corp.example/'];
+SET enable_external_access = false;
+```
+
 ## Web pages: tresor in DuckDB-wasm
 
 A page that runs DuckDB in the browser loads tresor there too, and calls the service across origins (tresor's
