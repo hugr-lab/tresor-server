@@ -130,14 +130,15 @@ func Parse(params map[string]string, scope []string) (*Spec, error) {
 	if len(scope) == 0 {
 		return nil, errors.New("a login's scope names the base URLs it may call")
 	}
-	for _, base := range scope {
+	for i, base := range scope {
 		u, err := url.Parse(base)
 		if err != nil || u.Host == "" {
 			return nil, errors.New("a login's scope is base URLs (https://host[/path])")
 		}
-		// a rule calls nothing: its scope is where its fields may go (mssql://, postgres://, s3://)
-		if params["flow"] != FlowRule && u.Scheme != "https" && u.Scheme != "http" {
-			return nil, errors.New("a login's scope is base URLs it calls (https://host[/path])")
+		// a rule calls nothing: its scope is where its fields may go (mssql://, postgres://, s3://). A login that
+		// calls does so under its first; the others may name where else its fields go (variable://<name>)
+		if params["flow"] != FlowRule && i == 0 && u.Scheme != "https" && u.Scheme != "http" {
+			return nil, errors.New("a login's scope begins with the base URL it calls (https://host[/path])")
 		}
 	}
 	if t := params["ttl"]; t != "" {

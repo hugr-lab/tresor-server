@@ -37,3 +37,4 @@ Research lives in the local, gitignored `design/` folder.
 | [021](021-aws-ecs/spec.md) | an AWS recipe: ECS on Fargate, RDS by IAM in private subnets, in Terraform | implemented |
 | [022](022-release-0.4/spec.md) | release 0.4.0: tresor's browsers (CORS), the MAC on by default, signed artifacts | implemented |
 | [023](023-dynamic-params/spec.md) | dynamic parameters: any type, a value made on each read; service logins | implemented |
+| [024](024-generated-variables/spec.md) | generated values in variables, as in secrets | accepted |

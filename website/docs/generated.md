@@ -273,6 +273,11 @@ user** - the caller, or under a delegation grant the grant's user - that the cal
 covers the secret's. User A through acl to service B: B sees A's login, never the node's. No login for the user,
 or more than one: `403 mint_refused`; never another's, never one without `subject`.
 
+## In variables
+
+A [variable](variables.md#generated-values)'s value takes the same generators (spec 024): served `sensitive`, with
+an `expires_at`. A login feeds one only when its scope names `variable://<name>`.
+
 ## `provider: token_exchange`
 
 The older form (tresor specs/010) stays: an `http` (`bearer_token`) or `quack` (`token`) secret with
