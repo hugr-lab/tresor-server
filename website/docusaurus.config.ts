@@ -6,14 +6,23 @@ import type * as Preset from '@docusaurus/preset-classic';
 // site (hugr-lab.github.io/tresor/); published by this repo's Pages workflow to
 // https://hugr-lab.github.io/tresor-server/. The protocol is tresor's: this site links to it, never restates it.
 
+// The same docs are built twice: for GitHub Pages (default) and for hugr-lab.com on IONOS (DOCS_TARGET=ionos).
+// The IONOS copy makes no request to another host (its CSP, and the site's privacy notice, say so): links only.
+const ionos = process.env.DOCS_TARGET === 'ionos';
+const site = ionos
+  ? {url: 'https://hugr-lab.com', baseUrl: '/docs/tresor-server/', home: 'https://hugr-lab.com/', impressum: 'https://hugr-lab.com/impressum/', datenschutz: 'https://hugr-lab.com/datenschutz/'}
+  : {url: 'https://hugr-lab.github.io', baseUrl: '/tresor-server/', home: 'https://hugr-lab.github.io/', impressum: 'https://hugr-lab.github.io/impressum/', datenschutz: 'https://hugr-lab.github.io/datenschutz/'};
+
 const config: Config = {
   title: 'tresor-server',
   tagline: 'The secrets service behind tresor: state in your database, material under your KMS, on Azure first.',
   favicon: 'img/favicon.ico',
 
-  url: 'https://hugr-lab.github.io',
-  baseUrl: '/tresor-server/',
+  url: site.url,
+  baseUrl: site.baseUrl,
   trailingSlash: true,
+  baseUrlIssueBanner: false,
+  customFields: {docsTarget: ionos ? 'ionos' : 'github'},
 
   organizationName: 'hugr-lab',
   projectName: 'tresor-server',
@@ -101,8 +110,15 @@ const config: Config = {
         {
           title: 'Hugr Lab',
           items: [
-            {label: 'Main site', href: 'https://hugr-lab.github.io/'},
+            {label: 'Main site', href: site.home},
             {label: 'GitHub', href: 'https://github.com/hugr-lab/tresor-server'},
+          ],
+        },
+        {
+          title: 'Legal',
+          items: [
+            {label: 'Impressum', href: site.impressum},
+            {label: 'Datenschutz', href: site.datenschutz},
           ],
         },
       ],
