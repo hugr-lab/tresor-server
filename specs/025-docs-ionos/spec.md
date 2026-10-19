@@ -1,6 +1,6 @@
 # Spec 025: the docs on hugr-lab.com too (IONOS)
 
-- **Status**: draft (asked by the hugr-lab.com session, 2026-10-19; the owner accepts it with the PR)
+- **Status**: implemented (#74; asked by the hugr-lab.com session, accepted by the owner 2026-10-19)
 - **Date**: 2026-10-19
 - **Author**: hugr lab
 
