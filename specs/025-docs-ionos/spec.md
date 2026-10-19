@@ -26,3 +26,11 @@ Datenschutz), each its site's.
 ## Enforcement & security
 
 The upload touches the product's folder only. Until `DOCS_IONOS` is set, nothing is built for IONOS nor sent.
+
+## Canonical (2026-10-19, the owner)
+
+While the hugr-lab.com copy exists, search engines are to keep hugr-lab.com, and links to github.io go on working.
+pages.yml sets `DOCS_CANONICAL` (https://hugr-lab.com/docs/tresor-server/) for the GitHub Pages build when
+`DOCS_IONOS` is on: `src/theme/SiteMetadata` (a wrapper, not an eject - its Head after the original one, so it wins
+after hydration too) names the hugr-lab.com page as `canonical` and `og:url`, and that build has no sitemap. Without
+the variable, nothing changes; the IONOS build names itself and keeps its sitemap.

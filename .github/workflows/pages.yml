@@ -32,6 +32,9 @@ jobs:
           cache-dependency-path: website/package-lock.json
       - name: npm ci && docusaurus build
         working-directory: website
+        env:
+          # while the hugr-lab.com copy exists, this copy names it as canonical (and has no sitemap)
+          DOCS_CANONICAL: ${{ vars.DOCS_IONOS == 'true' && 'https://hugr-lab.com/docs/tresor-server/' || '' }}
         run: |
           npm ci
           npx docusaurus build

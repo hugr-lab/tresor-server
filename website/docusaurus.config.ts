@@ -9,6 +9,9 @@ import type * as Preset from '@docusaurus/preset-classic';
 // The same docs are built twice: for GitHub Pages (default) and for hugr-lab.com on IONOS (DOCS_TARGET=ionos).
 // The IONOS copy makes no request to another host (its CSP, and the site's privacy notice, say so): links only.
 const ionos = process.env.DOCS_TARGET === 'ionos';
+// While the hugr-lab.com copy exists (DOCS_IONOS on), pages.yml sets DOCS_CANONICAL for the GitHub Pages build:
+// its pages then name the hugr-lab.com copy as canonical (src/theme/SiteMetadata), and it has no sitemap of its own.
+const canonicalBase = ionos ? '' : process.env.DOCS_CANONICAL ?? '';
 const site = ionos
   ? {url: 'https://hugr-lab.com', baseUrl: '/docs/tresor-server/', home: 'https://hugr-lab.com/', impressum: 'https://hugr-lab.com/impressum/', datenschutz: 'https://hugr-lab.com/datenschutz/'}
   : {url: 'https://hugr-lab.github.io', baseUrl: '/tresor-server/', home: 'https://hugr-lab.github.io/', impressum: 'https://hugr-lab.github.io/impressum/', datenschutz: 'https://hugr-lab.github.io/datenschutz/'};
@@ -22,7 +25,7 @@ const config: Config = {
   baseUrl: site.baseUrl,
   trailingSlash: true,
   baseUrlIssueBanner: false,
-  customFields: {docsTarget: ionos ? 'ionos' : 'github'},
+  customFields: {docsTarget: ionos ? 'ionos' : 'github', canonicalBase},
 
   organizationName: 'hugr-lab',
   projectName: 'tresor-server',
@@ -50,6 +53,7 @@ const config: Config = {
         theme: {
           customCss: './src/css/custom.css',
         },
+        sitemap: canonicalBase ? false : undefined,
       } satisfies Preset.Options,
     ],
   ],
