@@ -33,3 +33,14 @@ jobs:
         run: |
           npm ci
           npx docusaurus build
+      # the copy for hugr-lab.com (IONOS): built, never uploaded here - and no request to another host in it
+      - name: docusaurus build (hugr-lab.com)
+        working-directory: website
+        env:
+          DOCS_TARGET: ionos
+        run: |
+          npx docusaurus build --out-dir build-ionos
+          if grep -rhoE "(src=\"|srcset=\"|url\(|@import )['\"]?https?://[^\"') ]+" build-ionos | sort -u | grep .; then
+            echo "the hugr-lab.com copy requests another host" >&2
+            exit 1
+          fi

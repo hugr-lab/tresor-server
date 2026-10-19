@@ -1,5 +1,7 @@
 # The docs site on GitHub Pages (https://hugr-lab.github.io/tresor-server/), from main. docs-build.yml is the
 # pull requests' gate; this one never runs on a pull request, so it never cancels a deploy in flight.
+# A second build of the same docs goes to hugr-lab.com/docs/tresor-server/ (IONOS) when the organisation's
+# DOCS_IONOS is true - until then those steps are skipped.
 name: Docs site
 
 on:
@@ -37,6 +39,27 @@ jobs:
       - uses: actions/upload-pages-artifact@v5
         with:
           path: website/build
+
+      - name: Build for hugr-lab.com
+        if: ${{ vars.DOCS_IONOS == 'true' }}
+        working-directory: website
+        env:
+          DOCS_TARGET: ionos
+        run: npm run build -- --out-dir build-ionos
+
+      - name: Upload to hugr-lab.com (IONOS)
+        if: ${{ vars.DOCS_IONOS == 'true' }}
+        env:
+          HOST: ${{ secrets.IONOS_SFTP_HOST }}
+          USER: ${{ secrets.IONOS_SFTP_USER }}
+          LFTP_PASSWORD: ${{ secrets.IONOS_SFTP_PASSWORD }}
+          REMOTE: ${{ vars.IONOS_DOCS_ROOT || '/hugr-lab/docs' }}/tresor-server
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq lftp
+          # Mirrors the build into docs/tresor-server/ on IONOS; nothing outside that folder is touched.
+          lftp --env-password -u "$USER" -e "set sftp:auto-confirm yes; set net:max-retries 3; \
+            mirror --reverse --delete --verbose website/build-ionos/ $REMOTE; bye" \
+            "sftp://$HOST"
 
   deploy:
     name: Deploy
