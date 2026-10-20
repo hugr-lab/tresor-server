@@ -797,3 +797,21 @@ func TestDynamicIdentities(t *testing.T) {
 		}
 	}
 }
+
+// an issuer's discovery token goes only where the cluster's CA vouches (spec 026)
+func TestIssuerDiscoveryToken(t *testing.T) {
+	base := strings.Replace(good, "audience: duckdb-secrets", "audience: duckdb-secrets\n    ca_file: /ca.crt\n    discovery_token_file: /token", 1)
+	base = strings.Replace(base, "issuer: http://127.0.0.1:18080/realms/tresor/", "issuer: https://kubernetes.default.svc.cluster.local", 1)
+	if base == good {
+		t.Skip("the fixture has no audience line to extend")
+	}
+	if _, err := Parse([]byte(base)); err != nil {
+		t.Fatalf("with ca_file: %v", err)
+	}
+	if _, err := Parse([]byte(strings.Replace(base, "\n    ca_file: /ca.crt", "", 1))); err == nil {
+		t.Fatal("a token without ca_file: accepted")
+	}
+	if _, err := Parse([]byte(strings.Replace(base, "discovery_token_file: /token", "discovery_token_file: token", 1))); err == nil {
+		t.Fatal("a relative path: accepted")
+	}
+}

@@ -42,6 +42,11 @@ Kubernetes 1.30 or later.
   and so is a named source's (`material.sources[].vault.auth.jwt_file`, spec 008).
   Vault's private CA goes in with `extraVolumes`, named by `vault.ca_file`. See
   [OpenBao and Vault](https://hugr-lab.github.io/tresor-server/vault/).
+- `namespaceOverride`: every object in this namespace instead of the release's (an umbrella chart installs the
+  service beside others). It must exist: Helm creates only the release's.
+- `clusterIssuer`: the service's projected token and the cluster's CA at `/var/run/tresor/cluster/`, for an issuer
+  of the cluster's own ServiceAccounts (its `ca_file`, `discovery_token_file`; spec 026). See
+  [Kubernetes](https://hugr-lab.github.io/tresor-server/kubernetes/#the-clusters-own-accounts).
 - `rbac.secrets: false`: the Roles on Secrets (`material.k8s.allow`, `state.password_ref`) are yours to make.
 - `networkPolicy`: with `tls.offload` the pod serves plain HTTP - bearer tokens on the pod network. Let only
   the ingress controller reach it (`networkPolicy.from`).

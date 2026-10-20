@@ -178,8 +178,13 @@ func (is *issuer) httpClient() (*http.Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("ca_file: %w", err)
 		}
-		pool, err := x509.SystemCertPool()
-		if err != nil || pool == nil {
+		// with a token to send, the cluster's CA only: the token reaches no host a public CA certifies (a cloud's
+		// public issuer, a CDN serving the keys); without one, the system's roots too
+		var pool *x509.CertPool
+		if is.cfg.DiscoveryTokenFile == "" {
+			pool, _ = x509.SystemCertPool()
+		}
+		if pool == nil {
 			pool = x509.NewCertPool()
 		}
 		if !pool.AppendCertsFromPEM(pem) {
@@ -223,10 +228,14 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	raw, err := os.ReadFile(t.file)
 	if err != nil {
-		return nil, errors.New("discovery_token_file does not read")
+		return nil, fmt.Errorf("discovery_token_file: %w", err) // the path's error, never the token
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return nil, errors.New("discovery_token_file is empty")
 	}
 	r := req.Clone(req.Context())
-	r.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(raw)))
+	r.Header.Set("Authorization", "Bearer "+token)
 	return t.next.RoundTrip(r)
 }
 

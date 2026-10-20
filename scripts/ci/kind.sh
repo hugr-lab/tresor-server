@@ -518,7 +518,7 @@ if ! helm install c "$chart" -n tresor-rel -f "$work/c.yaml" --wait --timeout 18
 	kubectl -n tresor-cluster logs -l app.kubernetes.io/instance=c --tail 50 || true
 	exit 1
 fi
-left="$(kubectl -n tresor-rel get deploy,svc,sa,cronjob -o name | grep -v '^serviceaccount/default$' || true)"
+left="$(kubectl -n tresor-rel get deploy,svc,sa,cronjob,role,rolebinding,networkpolicy,pdb -o name | grep -v '^serviceaccount/default$' || true)"
 [ -z "$left" ] || { echo "kind: objects left in the release's namespace: $left" >&2; exit 1; }
 kubectl apply -f - <<'YAML'
 apiVersion: batch/v1
@@ -537,7 +537,7 @@ spec:
           args:
             - |
               T="$(cat /var/run/token/token)"
-              S=http://c-tresor-server.tresor-cluster.svc:8080/v1/secrets/hugr_policy_catalog
+              S=http://c-tresor-server.tresor-cluster.svc/v1/secrets/hugr_policy_catalog
               curl -sf -X PUT "$S" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
                 -H 'If-None-Match: *' -d '{"type":"postgres","provider":"config","params":{"password":"generated-here"},"redact_keys":["password"]}'
               curl -sf -X PUT "$S/grants/nodes" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \

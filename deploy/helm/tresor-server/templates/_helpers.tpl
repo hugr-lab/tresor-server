@@ -105,7 +105,7 @@ others). */}}
 {{- end -}}
 {{- $state := .Values.config.state | default dict -}}
 {{- if and $state.namespace (ne $state.namespace (include "tresor.namespace" .)) -}}
-{{- fail "config.state.namespace: the chart's RBAC and admission policy are the release's namespace - leave it unset" -}}
+{{- fail "config.state.namespace: the chart's RBAC and admission policy are its own namespace (namespaceOverride, or the release's) - leave it unset" -}}
 {{- end -}}
 {{- if and (eq $kind "sqlite") $state.path (not (hasPrefix "/var/lib/tresor/" $state.path)) -}}
 {{- fail "config.state.path: under /var/lib/tresor/, the volume (the root filesystem is read-only)" -}}

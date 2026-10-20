@@ -995,11 +995,15 @@ func (c *Config) validate() error {
 		}
 		for name, path := range map[string]string{"ca_file": is.CAFile, "discovery_token_file": is.DiscoveryTokenFile} {
 			if path != "" && !filepath.IsAbs(path) {
-				return fmt.Errorf("issuers[%d].%s is an absolute path", i, name)
+				return fmt.Errorf("issuers[%d].%s must be an absolute path", i, name)
 			}
 		}
 		if is.DiscoveryTokenFile != "" && !strings.HasPrefix(is.Issuer, "https://") {
 			return fmt.Errorf("issuers[%d].discovery_token_file: a token goes to an https issuer only", i)
+		}
+		if is.DiscoveryTokenFile != "" && is.CAFile == "" {
+			// the token is the service's own Kubernetes credential: it goes only where the cluster's CA vouches
+			return fmt.Errorf("issuers[%d].discovery_token_file needs ca_file: the token goes only to hosts the cluster's CA certifies", i)
 		}
 		for j, alg := range is.Algorithms {
 			if !allowedAlgorithms[alg] {

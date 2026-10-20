@@ -18,15 +18,19 @@ cluster's CA. The Job is a full administrator (the owner: no narrower role).
   namespace (RBAC subjects, the admission policy, NOTES); default: the release's. `clusterIssuer.enabled` mounts the
   service's projected token (the API server's audience) and the cluster's CA (`kube-root-ca.crt`) at
   `/var/run/tresor/cluster/{token,ca.crt}`.
-- **Issuer**: `ca_file` (PEM, added to the system's roots for the issuer's discovery and keys) and
+- **Issuer**: `ca_file` (PEM, for the issuer's discovery and keys: added to the system's roots) and
   `discovery_token_file` (a bearer token read at each request, sent to the issuer's host and, once discovered,
-  its keys' host only; https only).
+  its keys' host only; https only). The token needs `ca_file`, and with it only the cluster's CA is trusted - not
+  the system's roots: the token, the service's Kubernetes credential, reaches no host a public CA certifies (a
+  cloud's public issuer, a CDN serving the keys; from the review).
 - **The account as admin**: by the existing service rule, `service: {claim: kubernetes.io, client_claim: sub}` -
   `client:system:serviceaccount:<ns>:<name>` - or by `subject:<issuer>|system:serviceaccount:<ns>:<name>`.
 
 ## Enforcement & security
 
-The token goes to the issuer's own hosts only, never on a redirect elsewhere; it is never logged. The issuer is
+The token goes to the issuer's own hosts only, certified by the cluster's CA, never on a redirect elsewhere or over
+http; it is never logged. A public issuer (AKS, EKS, GKE) takes neither setting. With another issuer configured, name
+the account by `subject:<issuer>|…`: a `client:` name is not tied to an issuer. The issuer is
 trusted for the accounts it names: list one account as admin, in a namespace no one else creates pods in.
 
 ## Testing

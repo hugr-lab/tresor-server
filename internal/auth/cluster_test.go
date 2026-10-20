@@ -76,3 +76,37 @@ func TestClusterIssuer(t *testing.T) {
 		t.Fatal("verified without the CA")
 	}
 }
+
+// the token goes to the allowed hosts over https only: never another host, never http, never empty
+func TestTokenTransport(t *testing.T) {
+	var got []string
+	next := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		got = append(got, r.URL.Scheme+"://"+r.URL.Host+" "+r.Header.Get("Authorization"))
+		return &http.Response{StatusCode: 200, Body: http.NoBody, Request: r}, nil
+	})
+	dir := t.TempDir()
+	file := filepath.Join(dir, "token")
+	_ = os.WriteFile(file, []byte("sa-token"), 0o600)
+	tt := &tokenTransport{next: next, file: file, hosts: map[string]bool{"api.cluster:6443": true}}
+	for _, u := range []string{"https://api.cluster:6443/x", "https://elsewhere.example/x", "http://api.cluster:6443/x"} {
+		req, _ := http.NewRequest(http.MethodGet, u, nil)
+		if _, err := tt.RoundTrip(req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"https://api.cluster:6443 Bearer sa-token", "https://elsewhere.example ", "http://api.cluster:6443 "}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("request %d: %q, want %q", i, got[i], want[i])
+		}
+	}
+	_ = os.WriteFile(file, nil, 0o600)
+	req, _ := http.NewRequest(http.MethodGet, "https://api.cluster:6443/x", nil)
+	if _, err := tt.RoundTrip(req); err == nil {
+		t.Fatal("an empty token file: sent")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

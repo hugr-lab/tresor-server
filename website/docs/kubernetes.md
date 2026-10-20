@@ -72,7 +72,8 @@ set.
 
 ## The store
 
-The store is custom resources in the release's namespace (see [State stores](state.md#kubernetes)):
+The store is custom resources in the chart's namespace - the release's, or `namespaceOverride` (see [State
+stores](state.md#kubernetes)):
 
 - several replicas, compare-and-set through `resourceVersion`;
 - a MAC over everything not sealed: a resource changed by hand is refused;
@@ -172,17 +173,24 @@ config:
 ```
 
 - **The issuer's discovery**: the API server serves it to authenticated accounts. Bind the service's account to
-  `system:service-account-issuer-discovery` (a ClusterRoleBinding); AKS serves it publicly (then `ca_file` is not
-  needed either: its issuer has a public certificate).
+  `system:service-account-issuer-discovery` (a ClusterRoleBinding). `discovery_token_file` needs `ca_file`, and
+  then the issuer's hosts are trusted by the cluster's CA only: the token - the service's Kubernetes credential -
+  never reaches a host a public CA certifies.
+- **A public issuer** (AKS, EKS, GKE with their OIDC issuers enabled): its discovery is public - set neither
+  `ca_file` nor `discovery_token_file`.
 - **The Job's token**: a projected `serviceAccountToken` with `audience: duckdb-secrets`, sent as a bearer token.
+  Verified offline (the issuer's keys): a deleted account's token holds until its `exp` - keep it short.
 - **Who**: an administrator is all-or-nothing - list the one account, in its own namespace: whoever creates pods
-  there acts as it.
+  there acts as it. With another issuer beside the cluster's, name it by its subject -
+  `subject:<the cluster's issuer>|system:serviceaccount:hugr:hugr-init` - a `client:` name is not tied to an
+  issuer, and another issuer's client of that name would pass for it.
+- **The CA** is read once: a rotation of the cluster's CA reaches the service at its restart.
 
 ## Installed beside others: `namespaceOverride`
 
 An umbrella chart installs tresor-server in a namespace of its own: `namespaceOverride` puts every object of the
-chart there, whatever the release's namespace. The namespace is a trust boundary - whoever creates pods in it can
-act as its accounts, the service's included.
+chart there, whatever the release's namespace. The namespace must exist (Helm creates only the release's). It is a
+trust boundary - whoever creates pods in it can act as its accounts, the service's included.
 
 ## Hardening
 
