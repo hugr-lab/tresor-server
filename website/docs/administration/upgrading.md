@@ -117,6 +117,15 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
 - **A sandboxed DuckDB** (tresor spec 036) stops tresor's own requests: name the service's and the issuers' URLs in
   `allowed_directories` ([Security](../security.md#a-sandboxed-duckdb)).
 
+### Upgrading to 0.7 (spec 026)
+
+- **Nothing to migrate**: no column, no CRD change.
+- **New, off until set**: `namespaceOverride` and `clusterIssuer` in the chart; an issuer's `ca_file` and
+  `discovery_token_file` ([Kubernetes](../kubernetes.md#the-clusters-own-accounts)). `discovery_token_file` needs
+  `ca_file`.
+- **The chart's objects now name their namespace** (`metadata.namespace`): the same one as before unless
+  `namespaceOverride` is set.
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.

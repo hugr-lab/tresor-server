@@ -1,6 +1,6 @@
 # Spec 026: an unattended install - the cluster's own accounts, a namespace of its own
 
-- **Status**: accepted (the owner, 2026-10-20; asked by the duckdb-acl session for hugr-platform spec 005)
+- **Status**: implemented (#76; the owner, 2026-10-20; asked by the duckdb-acl session for hugr-platform spec 005)
 - **Date**: 2026-10-20
 - **Author**: hugr lab
 
