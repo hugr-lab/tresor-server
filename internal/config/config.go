@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -693,6 +694,13 @@ type Issuer struct {
 	// Exchange is the service's own confidential client at this issuer (specs/010): with it the service
 	// mints `token_exchange` secrets - a token for the caller - by RFC 8693 token exchange.
 	Exchange *ExchangeClient `yaml:"exchange"`
+	// CAFile: PEM certificates trusted for this issuer's discovery and keys, besides the system's (spec 026) -
+	// a cluster's own CA for its ServiceAccount issuer.
+	CAFile string `yaml:"ca_file"`
+	// DiscoveryTokenFile: a bearer token sent to read this issuer's discovery and keys, read at each request
+	// (spec 026) - the service's projected ServiceAccount token, for a Kubernetes API server that serves its
+	// issuer's discovery to authenticated accounts only.
+	DiscoveryTokenFile string `yaml:"discovery_token_file"`
 }
 
 // ExchangeClient names the service's client at an issuer; its secret comes from the environment, never
@@ -984,6 +992,18 @@ func (c *Config) validate() error {
 		}
 		if len(is.Algorithms) == 0 {
 			is.Algorithms = []string{"RS256", "ES256"}
+		}
+		for name, path := range map[string]string{"ca_file": is.CAFile, "discovery_token_file": is.DiscoveryTokenFile} {
+			if path != "" && !filepath.IsAbs(path) {
+				return fmt.Errorf("issuers[%d].%s must be an absolute path", i, name)
+			}
+		}
+		if is.DiscoveryTokenFile != "" && !strings.HasPrefix(is.Issuer, "https://") {
+			return fmt.Errorf("issuers[%d].discovery_token_file: a token goes to an https issuer only", i)
+		}
+		if is.DiscoveryTokenFile != "" && is.CAFile == "" {
+			// the token is the service's own Kubernetes credential: it goes only where the cluster's CA vouches
+			return fmt.Errorf("issuers[%d].discovery_token_file needs ca_file: the token goes only to hosts the cluster's CA certifies", i)
 		}
 		for j, alg := range is.Algorithms {
 			if !allowedAlgorithms[alg] {

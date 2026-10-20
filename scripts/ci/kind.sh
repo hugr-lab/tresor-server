@@ -8,6 +8,8 @@
 #     Kubernetes store; a second OpenBao as a named source (ref+bao2).
 #   - Keycloak 26.6 in the cluster: the service's exchange client authenticated by its projected ServiceAccount
 #     token (federated client authentication), a token minted by exchange.
+#   - the cluster's own ServiceAccount issuer (spec 026), the objects in another namespace (namespaceOverride): an
+#     install Job writes and grants a secret as an administrator, by its projected token.
 # Each is checked through the protocol (scripts/ci/kindcheck). Needs docker, kind, kubectl, helm, go, openssl.
 #
 #   scripts/ci/kind.sh            # TRESOR_KIND_KEEP=1 keeps the cluster afterwards
@@ -474,6 +476,84 @@ if ! KC_ADMIN_SECRET="$kc_admin_secret" KC_CALLER_SECRET="$kc_caller_secret" \
 	exit 1
 fi
 echo "kind: Keycloak minted by exchange, the service authenticated by its ServiceAccount token"
+
+echo "kind: an install Job as an administrator, by its ServiceAccount token; the chart in another namespace (spec 026)"
+# the release in tresor-rel, its objects in tresor-cluster (namespaceOverride); the service trusts the cluster's
+# ServiceAccount issuer, reading its discovery with its own projected token and the cluster's CA (clusterIssuer)
+kubectl create namespace tresor-rel
+kubectl create namespace tresor-cluster
+kubectl -n tresor-cluster create secret generic kek --from-literal=key="$(openssl rand -base64 32)"
+kubectl create namespace hugr
+kubectl apply -f - <<'YAML'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: tresor-issuer-discovery}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:service-account-issuer-discovery}
+subjects: [{kind: ServiceAccount, name: c-tresor-server, namespace: tresor-cluster}]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: hugr-init, namespace: hugr}
+YAML
+cluster_issuer="$(kubectl get --raw /.well-known/openid-configuration | python3 -c 'import json,sys; print(json.load(sys.stdin)["issuer"])')"
+cat >"$work/c.yaml" <<VALUES
+image: {repository: tresor-server, tag: ci, pullPolicy: Never}
+namespaceOverride: tresor-cluster
+localKEK: {secretName: kek}
+clusterIssuer: {enabled: true}
+resources: {requests: {cpu: 10m, memory: 32Mi}}
+config:
+  public_url: https://c.example.com
+  state: {kind: kubernetes}
+  issuers:
+    - issuer: $cluster_issuer
+      audience: duckdb-secrets
+      ca_file: /var/run/tresor/cluster/ca.crt
+      discovery_token_file: /var/run/tresor/cluster/token
+      service: {claim: kubernetes.io, client_claim: sub}
+  policy: {admins: ["client:system:serviceaccount:hugr:hugr-init"]}
+VALUES
+if ! helm install c "$chart" -n tresor-rel -f "$work/c.yaml" --wait --timeout 180s; then
+	kubectl -n tresor-cluster get pods -o wide || true
+	kubectl -n tresor-cluster logs -l app.kubernetes.io/instance=c --tail 50 || true
+	exit 1
+fi
+left="$(kubectl -n tresor-rel get deploy,svc,sa,cronjob,role,rolebinding,networkpolicy,pdb -o name | grep -v '^serviceaccount/default$' || true)"
+[ -z "$left" ] || { echo "kind: objects left in the release's namespace: $left" >&2; exit 1; }
+kubectl apply -f - <<'YAML'
+apiVersion: batch/v1
+kind: Job
+metadata: {name: hugr-init, namespace: hugr}
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      serviceAccountName: hugr-init
+      restartPolicy: Never
+      containers:
+        - name: init
+          image: curlimages/curl:8.11.1
+          command: [sh, -ec]
+          args:
+            - |
+              T="$(cat /var/run/token/token)"
+              S=http://c-tresor-server.tresor-cluster.svc/v1/secrets/hugr_policy_catalog
+              curl -sf -X PUT "$S" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+                -H 'If-None-Match: *' -d '{"type":"postgres","provider":"config","params":{"password":"generated-here"},"redact_keys":["password"]}'
+              curl -sf -X PUT "$S/grants/nodes" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+                -d '{"principal":"role:nodes","verbs":["use"]}'
+              curl -sf "$S/grants" -H "Authorization: Bearer $T" | grep -q 'role:nodes'
+          volumeMounts: [{name: token, mountPath: /var/run/token, readOnly: true}]
+      volumes:
+        - name: token
+          projected: {sources: [{serviceAccountToken: {path: token, audience: duckdb-secrets, expirationSeconds: 600}}]}
+YAML
+if ! kubectl -n hugr wait --for=condition=complete job/hugr-init --timeout 180s; then
+	kubectl -n hugr logs job/hugr-init --tail 30 || true
+	kubectl -n tresor-cluster logs -l app.kubernetes.io/instance=c --tail 40 || true
+	exit 1
+fi
+echo "kind: hugr-init wrote and granted a secret as an administrator, by its ServiceAccount token"
 
 echo "kind: the Kubernetes store's namespace deleted: the namespace controller deletes its resources"
 # the policy stays (cluster-scoped): a namespace that would not delete would hang here

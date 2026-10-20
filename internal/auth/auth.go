@@ -8,12 +8,16 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -82,6 +86,7 @@ type Verifier struct {
 
 type issuer struct {
 	cfg        config.Issuer
+	client     *http.Client // its discovery's and keys': ca_file trusted, discovery_token_file sent (spec 026)
 	mu         sync.Mutex
 	verifier   *oidc.IDTokenVerifier
 	tokenURL   string    // the issuer's token endpoint, from the same discovery (specs/010: exchanges)
@@ -121,7 +126,12 @@ func (is *issuer) get(ctx context.Context, now func() time.Time) (*oidc.IDTokenV
 	// everyone, and a hung IdP must not hold the lock for long
 	discoverCtx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
 	defer cancel()
-	discoverCtx = oidc.ClientContext(discoverCtx, &http.Client{Timeout: discoveryTimeout})
+	client, err := is.httpClient()
+	if err != nil {
+		is.failedAt, is.lastFailed = now(), fmt.Errorf("issuer %s: %w", is.cfg.Issuer, err)
+		return nil, is.lastFailed
+	}
+	discoverCtx = oidc.ClientContext(discoverCtx, client)
 	provider, err := oidc.NewProvider(discoverCtx, is.cfg.Issuer) // discovery + the RFC 8414 issuer check
 	if err != nil {
 		is.failedAt, is.lastFailed = now(), fmt.Errorf("issuer %s not reachable yet: %w", is.cfg.Issuer, err)
@@ -133,6 +143,11 @@ func (is *issuer) get(ctx context.Context, now func() time.Time) (*oidc.IDTokenV
 	}
 	if err := provider.Claims(&meta); err == nil {
 		is.jwksURL = meta.JWKS
+		if t, ok := client.Transport.(*tokenTransport); ok { // its keys are read with the token too
+			if u, err := url.Parse(meta.JWKS); err == nil && u.Scheme == "https" {
+				t.allow(u.Host)
+			}
+		}
 	}
 	// the JWKS is fetched later, by Verify, under the same bounded client (go-oidc keeps the client
 	// of this context, not its deadline)
@@ -144,6 +159,84 @@ func (is *issuer) get(ctx context.Context, now func() time.Time) (*oidc.IDTokenV
 		Now:                  now,
 	})
 	return is.verifier, nil
+}
+
+// httpClient is the issuer's client for its discovery and keys, made once: the system's roots plus ca_file,
+// and discovery_token_file's token sent to the issuer's host (and, once discovered, its keys' host) only.
+// Called under is.mu.
+func (is *issuer) httpClient() (*http.Client, error) {
+	if is.client != nil {
+		return is.client, nil
+	}
+	if is.cfg.CAFile == "" && is.cfg.DiscoveryTokenFile == "" {
+		is.client = &http.Client{Timeout: discoveryTimeout}
+		return is.client, nil
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if is.cfg.CAFile != "" {
+		pem, err := os.ReadFile(is.cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("ca_file: %w", err)
+		}
+		// with a token to send, the cluster's CA only: the token reaches no host a public CA certifies (a cloud's
+		// public issuer, a CDN serving the keys); without one, the system's roots too
+		var pool *x509.CertPool
+		if is.cfg.DiscoveryTokenFile == "" {
+			pool, _ = x509.SystemCertPool()
+		}
+		if pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, errors.New("ca_file holds no PEM certificate")
+		}
+		transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	}
+	var rt http.RoundTripper = transport
+	if is.cfg.DiscoveryTokenFile != "" {
+		u, err := url.Parse(is.cfg.Issuer)
+		if err != nil {
+			return nil, err
+		}
+		rt = &tokenTransport{next: transport, file: is.cfg.DiscoveryTokenFile, hosts: map[string]bool{u.Host: true}}
+	}
+	is.client = &http.Client{Timeout: discoveryTimeout, Transport: rt}
+	return is.client, nil
+}
+
+// tokenTransport sends a token read from a file, at each request, to the hosts it allows - https only, never
+// on a redirect elsewhere. The token is never logged.
+type tokenTransport struct {
+	next  http.RoundTripper
+	file  string
+	mu    sync.Mutex
+	hosts map[string]bool
+}
+
+func (t *tokenTransport) allow(host string) {
+	t.mu.Lock()
+	t.hosts[host] = true
+	t.mu.Unlock()
+}
+
+func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.mu.Lock()
+	allowed := t.hosts[req.URL.Host]
+	t.mu.Unlock()
+	if !allowed || req.URL.Scheme != "https" {
+		return t.next.RoundTrip(req)
+	}
+	raw, err := os.ReadFile(t.file)
+	if err != nil {
+		return nil, fmt.Errorf("discovery_token_file: %w", err) // the path's error, never the token
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return nil, errors.New("discovery_token_file is empty")
+	}
+	r := req.Clone(req.Context())
+	r.Header.Set("Authorization", "Bearer "+token)
+	return t.next.RoundTrip(r)
 }
 
 // Issuers are the configured issuers' identifiers, in the configuration's order.
@@ -172,7 +265,10 @@ func (v *Verifier) CheckIssuer(ctx context.Context, iss string) error {
 	if err != nil {
 		return fmt.Errorf("issuer %s: jwks_uri: %w", is.cfg.Issuer, err)
 	}
-	resp, err := (&http.Client{Timeout: discoveryTimeout}).Do(req)
+	is.mu.Lock()
+	client := is.client
+	is.mu.Unlock()
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("issuer %s: its signing keys are not reachable: %w", is.cfg.Issuer, err)
 	}

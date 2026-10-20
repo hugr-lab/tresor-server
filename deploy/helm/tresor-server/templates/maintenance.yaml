@@ -8,11 +8,12 @@
 {{- $schedule := ternary $.Values.maintenance.reseal.schedule "" (eq $name "reseal") }}
 ---
 {{- $cron := include "tresor.jobName" (dict "root" $ "name" $name) }}
-# tresor-server {{ join " " $args }} (spec 019): kubectl -n {{ $.Release.Namespace }} create job --from=cronjob/{{ $cron }} <job>
+# tresor-server {{ join " " $args }} (spec 019): kubectl -n {{ include "tresor.namespace" $ }} create job --from=cronjob/{{ $cron }} <job>
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: {{ $cron }}
+  namespace: {{ include "tresor.namespace" $ }}
   labels:
     {{- include "tresor.labels" $ | nindent 4 }}
     app.kubernetes.io/component: maintenance

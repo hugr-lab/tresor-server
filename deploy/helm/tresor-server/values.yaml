@@ -72,6 +72,21 @@ exchangeToken:
   audience: ""
   expirationSeconds: 3600
 
+# The namespace of every object (default: the release's). An umbrella chart installs tresor-server in its own
+# namespace beside the platform's: a namespace is a trust boundary - whoever creates pods there can act as its
+# accounts. It must exist: Helm creates only the release's (--create-namespace).
+namespaceOverride: ""
+
+# The cluster's own ServiceAccount issuer (spec 026): a projected token of the service's ServiceAccount (the API
+# server's audience) and the cluster's CA, at /var/run/tresor/cluster/{token,ca.crt} - for an issuer of
+# config.issuers whose discovery the API server serves to authenticated accounts only (ca_file,
+# discovery_token_file). Accounts of this cluster then log in with their projected tokens (a Job's, say). The token
+# is a Kubernetes API credential the pod otherwise may not hold (with a SQL store): its rights are the issuer's
+# discovery only, plus the chart's RBAC. Not for a public issuer (AKS, EKS, GKE with their OIDC issuers).
+clusterIssuer:
+  enabled: false
+  expirationSeconds: 3600
+
 # A projected ServiceAccount token for the Vault login (spec 007: vault.auth.method kubernetes or jwt): mounted
 # at /var/run/tresor/vault-token/token, and config.vault.auth.jwt_file set to it when unset (and a named source's,
 # config.material.sources[].vault.auth.jwt_file). Bound to an audience

@@ -77,6 +77,15 @@ These are the reference server's, unchanged. tresor documents them:
 
 For Microsoft Entra ID, see tresor's [Entra guide](https://hugr-lab.github.io/tresor/entra/).
 
+Two settings of an issuer are this service's own (spec 026):
+
+| Setting | |
+| --- | --- |
+| `ca_file` | PEM certificates trusted for the issuer's discovery and keys, besides the system's - a cluster's own CA. |
+| `discovery_token_file` | A bearer token sent (to the issuer's host, and its keys' host) to read its discovery and keys, read at each request - a Kubernetes API server serves them to authenticated accounts only. https issuers only. |
+
+A cluster's own ServiceAccounts then log in with their projected tokens: [Kubernetes](kubernetes.md#the-clusters-own-accounts).
+
 ### `state`
 
 Where the service keeps secrets, grants and delegation grants. See [State stores](state.md).

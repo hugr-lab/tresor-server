@@ -3,6 +3,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "tresor.fullname" . }}
+  namespace: {{ include "tresor.namespace" $ }}
   labels: {{- include "tresor.labels" . | nindent 4 }}
   annotations:
     helm.sh/resource-policy: keep   # the database outlives an uninstall

@@ -72,7 +72,8 @@ set.
 
 ## The store
 
-The store is custom resources in the release's namespace (see [State stores](state.md#kubernetes)):
+The store is custom resources in the chart's namespace - the release's, or `namespaceOverride` (see [State
+stores](state.md#kubernetes)):
 
 - several replicas, compare-and-set through `resourceVersion`;
 - a MAC over everything not sealed: a resource changed by hand is refused;
@@ -151,6 +152,45 @@ kubectl -n tresor logs -f job/reseal-…        # its log: counts and names, nev
 - The jobs' pods carry `podLabels` (a policy that admits the service admits them) and
   `maintenance.podAnnotations`, not `podAnnotations` - a mesh's sidecar would keep a Job from completing.
 - The right to create Jobs in the namespace is the KEK's: whoever has it acts as the service.
+
+## The cluster's own accounts
+
+A Job of the cluster - an install Job, say - logs in with its ServiceAccount's projected token when the service
+trusts the cluster's ServiceAccount issuer (spec 026). Outside Azure there is no identity provider account for
+it; on AKS a federated managed identity is the other way.
+
+```yaml
+clusterIssuer: {enabled: true}           # the service's own projected token and the cluster's CA, mounted
+config:
+  issuers:
+    - issuer: https://kubernetes.default.svc.cluster.local   # the cluster's: kubectl get --raw /.well-known/openid-configuration
+      audience: duckdb-secrets                               # the Job's projected token's audience
+      ca_file: /var/run/tresor/cluster/ca.crt
+      discovery_token_file: /var/run/tresor/cluster/token
+      service: {claim: kubernetes.io, client_claim: sub}     # a ServiceAccount is a service: client:system:serviceaccount:<ns>:<name>
+  policy:
+    admins: ["client:system:serviceaccount:hugr:hugr-init"]
+```
+
+- **The issuer's discovery**: the API server serves it to authenticated accounts. Bind the service's account to
+  `system:service-account-issuer-discovery` (a ClusterRoleBinding). `discovery_token_file` needs `ca_file`, and
+  then the issuer's hosts are trusted by the cluster's CA only: the token - the service's Kubernetes credential -
+  never reaches a host a public CA certifies.
+- **A public issuer** (AKS, EKS, GKE with their OIDC issuers enabled): its discovery is public - set neither
+  `ca_file` nor `discovery_token_file`.
+- **The Job's token**: a projected `serviceAccountToken` with `audience: duckdb-secrets`, sent as a bearer token.
+  Verified offline (the issuer's keys): a deleted account's token holds until its `exp` - keep it short.
+- **Who**: an administrator is all-or-nothing - list the one account, in its own namespace: whoever creates pods
+  there acts as it. With another issuer beside the cluster's, name it by its subject -
+  `subject:<the cluster's issuer>|system:serviceaccount:hugr:hugr-init` - a `client:` name is not tied to an
+  issuer, and another issuer's client of that name would pass for it.
+- **The CA** is read once: a rotation of the cluster's CA reaches the service at its restart.
+
+## Installed beside others: `namespaceOverride`
+
+An umbrella chart installs tresor-server in a namespace of its own: `namespaceOverride` puts every object of the
+chart there, whatever the release's namespace. The namespace must exist (Helm creates only the release's). It is a
+trust boundary - whoever creates pods in it can act as its accounts, the service's included.
 
 ## Hardening
 

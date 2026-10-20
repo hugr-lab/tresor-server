@@ -24,6 +24,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
+{{/* The namespace of every namespaced object (namespaceOverride: an umbrella chart installs this one beside
+others). */}}
+{{- define "tresor.namespace" -}}
+{{- default .Release.Namespace .Values.namespaceOverride | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "tresor.serviceAccountName" -}}
 {{- $name := .Values.serviceAccount.name | default "" -}}
 {{- if .Values.serviceAccount.create -}}
@@ -98,8 +104,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- fail "maintenance.reseal.schedule: not on sqlite - its commands need the service scaled to 0 first" -}}
 {{- end -}}
 {{- $state := .Values.config.state | default dict -}}
-{{- if and $state.namespace (ne $state.namespace .Release.Namespace) -}}
-{{- fail "config.state.namespace: the chart's RBAC and admission policy are the release's namespace - leave it unset" -}}
+{{- if and $state.namespace (ne $state.namespace (include "tresor.namespace" .)) -}}
+{{- fail "config.state.namespace: the chart's RBAC and admission policy are its own namespace (namespaceOverride, or the release's) - leave it unset" -}}
 {{- end -}}
 {{- if and (eq $kind "sqlite") $state.path (not (hasPrefix "/var/lib/tresor/" $state.path)) -}}
 {{- fail "config.state.path: under /var/lib/tresor/, the volume (the root filesystem is read-only)" -}}
@@ -152,7 +158,7 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- if not .namespace -}}
 {{- fail "config.material.k8s.allow: every entry names a namespace" -}}
 {{- end -}}
-{{- if eq .namespace $.Release.Namespace -}}
+{{- if eq .namespace (include "tresor.namespace" $) -}}
 {{- fail "config.material.k8s.allow names the service's own namespace: its credentials are there (the service refuses it)" -}}
 {{- end -}}
 {{- end -}}
@@ -229,6 +235,9 @@ volumeMounts:
   {{- if .Values.vaultToken.enabled }}
   - {name: vault-token, mountPath: /var/run/tresor/vault-token, readOnly: true}
   {{- end }}
+  {{- if .Values.clusterIssuer.enabled }}
+  - {name: cluster-issuer, mountPath: /var/run/tresor/cluster, readOnly: true}
+  {{- end }}
   {{- if eq $kind "sqlite" }}
   - {name: data, mountPath: /var/lib/tresor}
   {{- end }}
@@ -278,6 +287,17 @@ volumes:
             path: token
             audience: {{ required "vaultToken.audience: the Vault role's" .Values.vaultToken.audience | quote }}
             expirationSeconds: {{ .Values.vaultToken.expirationSeconds }}
+  {{- end }}
+  {{- if .Values.clusterIssuer.enabled }}
+  - name: cluster-issuer
+    projected:
+      sources:
+        - serviceAccountToken:
+            path: token
+            expirationSeconds: {{ .Values.clusterIssuer.expirationSeconds }}
+        - configMap:
+            name: kube-root-ca.crt
+            items: [{key: ca.crt, path: ca.crt}]
   {{- end }}
   {{- if eq $kind "sqlite" }}
   - name: data

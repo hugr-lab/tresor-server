@@ -1,5 +1,5 @@
 {{- if and (eq (include "tresor.stateKind" .) "kubernetes") .Values.admissionPolicy.enabled }}
-{{- $name := printf "%s-%s" (include "tresor.fullname" .) .Release.Namespace }}
+{{- $name := printf "%s-%s" (include "tresor.fullname" .) (include "tresor.namespace" .) }}
 # Only the service writes its resources (spec 003). Deletes by the cluster's own controllers, narrowly: the
 # garbage collector only the minted tokens (the one kind the store gives an owner); the namespace controller
 # only while the namespace is being deleted. A deletecollection is admitted as one DELETE per object.
@@ -13,7 +13,7 @@ spec:
   matchConstraints:
     matchPolicy: Equivalent
     namespaceSelector:
-      matchLabels: {kubernetes.io/metadata.name: {{ .Release.Namespace }}}
+      matchLabels: {kubernetes.io/metadata.name: {{ include "tresor.namespace" . }}}
     resourceRules:
       - apiGroups: [tresor.hugr-lab.io]
         apiVersions: ["*"]
@@ -21,7 +21,7 @@ spec:
         resources: ["*/*"]   # every resource and subresource
   validations:
     - expression: >-
-        request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:{{ include "tresor.serviceAccountName" . }}' ||
+        request.userInfo.username == 'system:serviceaccount:{{ include "tresor.namespace" . }}:{{ include "tresor.serviceAccountName" . }}' ||
         (request.operation == 'DELETE' && request.resource.resource == 'tresormintedtokens' &&
           request.userInfo.username in ['system:serviceaccount:kube-system:generic-garbage-collector', 'system:kube-controller-manager']) ||
         (request.operation == 'DELETE' && has(namespaceObject.metadata.deletionTimestamp) &&
