@@ -39,4 +39,4 @@ Research lives in the local, gitignored `design/` folder.
 | [023](023-dynamic-params/spec.md) | dynamic parameters: any type, a value made on each read; service logins | implemented |
 | [024](024-generated-variables/spec.md) | generated values in variables, as in secrets | implemented |
 | [025](025-docs-ionos/spec.md) | the docs on hugr-lab.com too (IONOS), legal links on both | implemented |
-| [026](026-cluster-install/spec.md) | an unattended install: the cluster's own accounts, namespaceOverride | accepted |
+| [026](026-cluster-install/spec.md) | an unattended install: the cluster's own accounts, namespaceOverride | implemented |
