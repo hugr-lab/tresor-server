@@ -1,7 +1,7 @@
 tresor-server {{ .Chart.AppVersion }} on the {{ include "tresor.stateKind" . }} store, {{ include "tresor.replicas" . }} replica(s).
 
-  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "tresor.fullname" . }}
-  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "tresor.fullname" . }} 8080:{{ .Values.service.port }}
+  kubectl -n {{ include "tresor.namespace" . }} rollout status deploy/{{ include "tresor.fullname" . }}
+  kubectl -n {{ include "tresor.namespace" . }} port-forward svc/{{ include "tresor.fullname" . }} 8080:{{ .Values.service.port }}
   curl {{ ternary "https" "http" (ne .Values.tlsSecret "") }}://127.0.0.1:8080/readyz
 {{- if eq (include "tresor.stateKind" .) "kubernetes" }}
 
@@ -16,7 +16,7 @@ copy back (a revoked grant, a deleted secret): the MAC refuses a changed resourc
 
 {{- if and .Values.maintenance.enabled (ne (include "tresor.stateKind" .) "memory") }}
 The commands (reseal, rewrap, refs{{ if has (include "tresor.stateKind" .) (list "sqlite" "postgres" "sqlserver") }}, mac{{ end }}) run as jobs with the service's identity:
-  kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ include "tresor.jobName" (dict "root" . "name" "reseal") }} reseal-$(date +%Y%m%d%H%M)
+  kubectl -n {{ include "tresor.namespace" . }} create job --from=cronjob/{{ include "tresor.jobName" (dict "root" . "name" "reseal") }} reseal-$(date +%Y%m%d%H%M)
 {{- end }}
 {{- if eq (include "tresor.stateKind" .) "sqlite" }}
 
@@ -24,7 +24,7 @@ WARNING: SQLite on a cluster is not recommended: one replica, a ReadWriteOnce vo
 the service scaled to 0 first. Use PostgreSQL or SQL Server.
 {{- end }}
 
-Whoever can create pods or Jobs in {{ .Release.Namespace }}, create a token for the service's ServiceAccount or
+Whoever can create pods or Jobs in {{ include "tresor.namespace" . }}, create a token for the service's ServiceAccount or
 impersonate it can act as the service: keep these rights to the platform's operators.
 {{- if and (.Values.config.tls | default dict).offload (not .Values.networkPolicy.enabled) }}
 

@@ -1,6 +1,6 @@
 {{- if and .Values.maintenance.enabled .Values.maintenance.refsBeforeUpgrade (not (has (include "tresor.stateKind" .) (list "memory" "sqlite"))) }}
 {{- $image := printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) }}
-{{- $deployed := lookup "apps/v1" "Deployment" .Release.Namespace (include "tresor.fullname" .) }}
+{{- $deployed := lookup "apps/v1" "Deployment" (include "tresor.namespace" .) (include "tresor.fullname" .) }}
 {{- $running := "" }}
 {{- with $deployed }}{{ range .spec.template.spec.containers }}{{ if eq .name "tresor-server" }}{{ $running = .image }}{{ end }}{{ end }}{{ end }}
 {{- /* a configuration change only: the running version reads its database as it is; a new image may need a
@@ -14,6 +14,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ $next }}
+  namespace: {{ include "tresor.namespace" $ }}
   labels:
     {{- include "tresor.labels" . | nindent 4 }}
     app.kubernetes.io/component: maintenance
@@ -29,6 +30,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "tresor.jobName" (dict "root" . "name" "refs-before-upgrade") }}
+  namespace: {{ include "tresor.namespace" $ }}
   labels:
     {{- include "tresor.labels" . | nindent 4 }}
     app.kubernetes.io/component: maintenance

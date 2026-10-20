@@ -152,6 +152,38 @@ kubectl -n tresor logs -f job/reseal-…        # its log: counts and names, nev
   `maintenance.podAnnotations`, not `podAnnotations` - a mesh's sidecar would keep a Job from completing.
 - The right to create Jobs in the namespace is the KEK's: whoever has it acts as the service.
 
+## The cluster's own accounts
+
+A Job of the cluster - an install Job, say - logs in with its ServiceAccount's projected token when the service
+trusts the cluster's ServiceAccount issuer (spec 026). Outside Azure there is no identity provider account for
+it; on AKS a federated managed identity is the other way.
+
+```yaml
+clusterIssuer: {enabled: true}           # the service's own projected token and the cluster's CA, mounted
+config:
+  issuers:
+    - issuer: https://kubernetes.default.svc.cluster.local   # the cluster's: kubectl get --raw /.well-known/openid-configuration
+      audience: duckdb-secrets                               # the Job's projected token's audience
+      ca_file: /var/run/tresor/cluster/ca.crt
+      discovery_token_file: /var/run/tresor/cluster/token
+      service: {claim: kubernetes.io, client_claim: sub}     # a ServiceAccount is a service: client:system:serviceaccount:<ns>:<name>
+  policy:
+    admins: ["client:system:serviceaccount:hugr:hugr-init"]
+```
+
+- **The issuer's discovery**: the API server serves it to authenticated accounts. Bind the service's account to
+  `system:service-account-issuer-discovery` (a ClusterRoleBinding); AKS serves it publicly (then `ca_file` is not
+  needed either: its issuer has a public certificate).
+- **The Job's token**: a projected `serviceAccountToken` with `audience: duckdb-secrets`, sent as a bearer token.
+- **Who**: an administrator is all-or-nothing - list the one account, in its own namespace: whoever creates pods
+  there acts as it.
+
+## Installed beside others: `namespaceOverride`
+
+An umbrella chart installs tresor-server in a namespace of its own: `namespaceOverride` puts every object of the
+chart there, whatever the release's namespace. The namespace is a trust boundary - whoever creates pods in it can
+act as its accounts, the service's included.
+
 ## Hardening
 
 - With `tls.offload` the pod serves plain HTTP. Set `networkPolicy.from` to the ingress controller.
