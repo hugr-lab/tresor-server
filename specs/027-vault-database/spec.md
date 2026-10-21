@@ -1,6 +1,6 @@
 # Spec 027: the state's database credentials from a Vault database secrets engine
 
-- **Status**: accepted (the owner, 2026-10-21; asked by the duckdb-acl session for hugr-platform's umbrella chart)
+- **Status**: implemented (#79; the owner, 2026-10-21; asked by the duckdb-acl session for hugr-platform's umbrella chart)
 - **Date**: 2026-10-21
 - **Author**: hugr lab
 
