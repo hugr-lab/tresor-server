@@ -1,6 +1,6 @@
 # Spec 029: the TLS certificate read again when it changes
 
-- **Status**: accepted (the owner, 2026-10-21; asked by the duckdb-acl session for the umbrella chart's cert-manager)
+- **Status**: implemented (#82; the owner, 2026-10-21; asked by the duckdb-acl session for the umbrella chart's cert-manager)
 - **Date**: 2026-10-21
 - **Author**: hugr lab
 

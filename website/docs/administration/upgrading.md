@@ -136,6 +136,12 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
 - **`configTemplate`** (spec 028, the chart): `config` rendered through `tpl` - off by default, the render
   unchanged.
 
+### Upgrading to 0.7.3 (spec 029)
+
+- **Nothing to migrate**; the chart and the configuration are unchanged.
+- **The TLS certificate is read again when it changes** (every 30 s): a renewal in place needs no restart. A bad
+  new pair leaves the old one serving, and readiness's `tls` check says so (degraded).
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.
