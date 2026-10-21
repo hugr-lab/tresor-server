@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -118,4 +120,64 @@ func (l GCPLogin) Password(context.Context) (string, error) {
 		return "", errors.New("the database login: the service's GCP identity did not get a token")
 	}
 	return t.AccessToken, nil
+}
+
+// UserLogin is a login that names the user too, for each new connection (a database secrets engine's: spec 027).
+type UserLogin interface {
+	Login
+	Credentials(ctx context.Context) (user, password string, err error)
+}
+
+// ConnLifetime is a connection's longest life: a login's credentials must outlive the connections made with them.
+const ConnLifetime = 30 * time.Minute
+
+// vaultMargin: new credentials are fetched this long before a connection made with the current ones could outlive
+// their lease.
+const vaultMargin = 2 * time.Minute
+
+// VaultCredentials are a lease of a database secrets engine: a user, a password, and how long they live.
+type VaultCredentials struct {
+	User, Password string
+	Lease          time.Duration
+}
+
+// VaultLogin logs in with a database secrets engine's credentials (spec 027): a user and a password Vault made for
+// this service, used for every new connection while a connection made with them ends (ConnLifetime) before their
+// lease does; then new ones. Old leases are left to expire: a connection still open with them keeps working. The
+// credentials are never logged.
+type VaultLogin struct {
+	Fetch func(ctx context.Context) (VaultCredentials, error)
+	Now   func() time.Time
+
+	mu      sync.Mutex
+	current VaultCredentials
+	until   time.Time // new connections take the current credentials until then
+}
+
+func (l *VaultLogin) Credentials(ctx context.Context) (string, string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.Now()
+	if l.current.User != "" && now.Before(l.until) {
+		return l.current.User, l.current.Password, nil
+	}
+	c, err := l.Fetch(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("the database login: Vault gave no credentials: %w", err)
+	}
+	if c.User == "" || c.Password == "" {
+		return "", "", errors.New("the database login: Vault gave no user or no password")
+	}
+	usable := c.Lease - ConnLifetime - vaultMargin
+	if usable <= 0 {
+		return "", "", fmt.Errorf("the database login: the role's credentials live %s - more than %s is needed (the "+
+			"connections live %s): raise the role's default_ttl", c.Lease, ConnLifetime+vaultMargin, ConnLifetime)
+	}
+	l.current, l.until = c, now.Add(usable)
+	return c.User, c.Password, nil
+}
+
+func (l *VaultLogin) Password(ctx context.Context) (string, error) {
+	_, pw, err := l.Credentials(ctx)
+	return pw, err
 }

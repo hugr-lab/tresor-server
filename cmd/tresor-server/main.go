@@ -360,7 +360,8 @@ func openState(ctx context.Context, cfg *config.Config, log *slog.Logger, readOn
 			return nil, nil, err
 		}
 		st, err := open(ctx, cfg.State.DSN, login, cfg.State.MaxOpenConns, wrapper, sqlstore.Options{
-			Log: log, Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}, ReadOnly: readOnly, MAC: cfg.State.MACOn()})
+			Log: log, Keys: keys.Options{DataKeyMaxAge: cfg.Keys.DataKeyMaxAge, CacheTTL: cfg.Keys.CacheTTL}, ReadOnly: readOnly, MAC: cfg.State.MACOn(),
+			SetRole: stateSetRole(cfg)})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -430,6 +431,9 @@ func databaseLogin(cfg *config.Config, scope string) (sqlstore.Login, error) {
 		return sqlstore.AWSLogin{Endpoint: net.JoinHostPort(pc.Host, strconv.Itoa(int(pc.Port))), Region: cfg.AWS.Region,
 			User: pc.User, Credentials: ac.Credentials}, nil
 	}
+	if cfg.State.Auth == "vault" {
+		return vaultDatabaseLogin(cfg)
+	}
 	if cfg.State.Auth == "entra" {
 		cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
 		if err != nil {
@@ -445,6 +449,47 @@ func databaseLogin(cfg *config.Config, scope string) (sqlstore.Login, error) {
 		return sqlstore.RefLogin{Resolve: func(ctx context.Context) (string, error) { return r.ResolveOne(ctx, ref) }}, nil
 	}
 	return sqlstore.PasswordLogin{Env: cfg.State.PasswordEnv, File: cfg.State.PasswordFile}, nil
+}
+
+// stateSetRole is the group role each connection sets (state.vault.set_role, spec 027), or "".
+func stateSetRole(cfg *config.Config) string {
+	if cfg.State.Vault == nil {
+		return ""
+	}
+	return cfg.State.Vault.SetRole
+}
+
+// vaultDatabaseLogin is a database secrets engine's credentials (spec 027): <mount>/creds/<role> through the vault:
+// connection, or a named vault source's.
+func vaultDatabaseLogin(cfg *config.Config) (sqlstore.Login, error) {
+	sv := cfg.State.Vault
+	var client *vault.Client
+	var err error
+	if sv.Source != "" {
+		src, _ := cfg.Source(sv.Source)
+		client, err = vaultOf(cfg, src)
+	} else {
+		client, err = vaultClient(cfg)
+	}
+	if err != nil {
+		return nil, err
+	}
+	path := sv.Mount + "/creds/" + sv.Role
+	return &sqlstore.VaultLogin{Now: time.Now, Fetch: func(ctx context.Context) (sqlstore.VaultCredentials, error) {
+		var out struct {
+			LeaseDuration int64 `json:"lease_duration"`
+			Data          struct {
+				Username string `json:"username"`
+				Password string `json:"password"`
+			} `json:"data"`
+		}
+		if err := client.Do(ctx, http.MethodGet, path, nil, &out); err != nil {
+			return sqlstore.VaultCredentials{}, fmt.Errorf("%s: %w", path, err)
+		}
+		slog.Info("database credentials from Vault", "path", path, "lease", (time.Duration(out.LeaseDuration) * time.Second).String())
+		return sqlstore.VaultCredentials{User: out.Data.Username, Password: out.Data.Password,
+			Lease: time.Duration(out.LeaseDuration) * time.Second}, nil
+	}}, nil
 }
 
 // passwordResolver reads the database's password reference, and nothing else: its source's allowlist is that

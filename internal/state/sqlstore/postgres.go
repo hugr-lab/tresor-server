@@ -58,7 +58,22 @@ func OpenPostgres(ctx context.Context, dsn string, login Login, maxOpen int, wra
 	if cfg.ConnectTimeout == 0 {
 		cfg.ConnectTimeout = 10 * time.Second
 	}
-	db := stdlib.OpenDB(*cfg, stdlib.OptionBeforeConnect(func(ctx context.Context, cc *pgx.ConnConfig) error {
+	afterConnect := stdlib.OptionAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
+		if opts.SetRole == "" {
+			return nil
+		}
+		_, err := conn.Exec(ctx, "SET ROLE "+pgx.Identifier{opts.SetRole}.Sanitize())
+		return err
+	})
+	db := stdlib.OpenDB(*cfg, afterConnect, stdlib.OptionBeforeConnect(func(ctx context.Context, cc *pgx.ConnConfig) error {
+		if ul, ok := login.(UserLogin); ok { // the user too (spec 027): the DSN's is replaced
+			user, pw, err := ul.Credentials(ctx)
+			if err != nil {
+				return err
+			}
+			cc.User, cc.Password = user, pw
+			return nil
+		}
 		pw, err := login.Password(ctx)
 		if err != nil {
 			return err
@@ -71,7 +86,7 @@ func OpenPostgres(ctx context.Context, dsn string, login Login, maxOpen int, wra
 	}
 	db.SetMaxOpenConns(maxOpen)
 	db.SetMaxIdleConns(maxOpen)
-	db.SetConnMaxLifetime(30 * time.Minute) // a connection's token expires; a new one logs in afresh
+	db.SetConnMaxLifetime(ConnLifetime) // a connection's token expires; a new one logs in afresh
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("state: the PostgreSQL database: %w", err)

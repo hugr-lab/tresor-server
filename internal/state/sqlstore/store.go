@@ -55,6 +55,9 @@ type Options struct {
 	ReadOnly bool
 	// MAC checks every row's MAC (spec 014: state.mac): a row with none, or a wrong one, is refused.
 	MAC bool
+	// SetRole (PostgreSQL) is set on every new connection (spec 027: a database secrets engine's users, one per
+	// lease, all in this group role, which owns what the migrations make).
+	SetRole string
 }
 
 // open wires a store over db: the envelope, the lease where the dialect needs one, the migrations. On a
