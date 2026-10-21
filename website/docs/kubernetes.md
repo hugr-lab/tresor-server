@@ -186,11 +186,26 @@ config:
   issuer, and another issuer's client of that name would pass for it.
 - **The CA** is read once: a rotation of the cluster's CA reaches the service at its restart.
 
-## Installed beside others: `namespaceOverride`
+## Installed beside others: `namespaceOverride`, `configTemplate`
 
 An umbrella chart installs tresor-server in a namespace of its own: `namespaceOverride` puts every object of the
 chart there, whatever the release's namespace. The namespace must exist (Helm creates only the release's). It is a
 trust boundary - whoever creates pods in it can act as its accounts, the service's included.
+
+`configTemplate: true` renders `config` through `tpl` first, so an umbrella chart's `global` values reach tresor's
+settings without being written twice:
+
+```yaml
+configTemplate: true
+config:
+  state:
+    dsn: "host={{ .Values.global.database.host }} dbname=tresor sslmode=verify-full"
+  policy:
+    admins: ["subject:{{ .Values.global.clusterIssuer }}|system:serviceaccount:{{ .Release.Namespace }}:hugr-init"]
+```
+
+Off by default: with it, a literal `{{` in `config` is written `{{ "{{" }}`. Only the values are rendered: the
+service's own syntax (`${…}`, `mint+…`) lives in its secrets, not in `config`.
 
 ## Hardening
 

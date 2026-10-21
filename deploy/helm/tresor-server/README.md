@@ -42,6 +42,10 @@ Kubernetes 1.30 or later.
   and so is a named source's (`material.sources[].vault.auth.jwt_file`, spec 008).
   Vault's private CA goes in with `extraVolumes`, named by `vault.ca_file`. See
   [OpenBao and Vault](https://hugr-lab.github.io/tresor-server/vault/).
+- `configTemplate: true`: `config` is rendered through `tpl` with the chart's context first - an umbrella chart's
+  `global` values (a database host, an issuer, a namespace) in tresor's settings:
+  `dsn: "host={{ .Values.global.database.host }} dbname=tresor sslmode=verify-full"`. Off by default; on, a literal
+  `{{` in `config` is written `{{ "{{" }}`. The RBAC and checks the chart derives from `config` see the rendered one.
 - `namespaceOverride`: every object in this namespace instead of the release's (an umbrella chart installs the
   service beside others). It must exist: Helm creates only the release's.
 - `clusterIssuer`: the service's projected token and the cluster's CA at `/var/run/tresor/cluster/`, for an issuer

@@ -1,3 +1,13 @@
+{{/* The service's configuration as the values give it - rendered through tpl first with configTemplate (an
+umbrella chart's global values: a host, an issuer, a namespace). Every use of config reads it from here. */}}
+{{- define "tresor.cfg" -}}
+{{- if .Values.configTemplate -}}
+{{- tpl (toYaml .Values.config) . -}}
+{{- else -}}
+{{- toYaml .Values.config -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "tresor.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
@@ -45,12 +55,12 @@ others). */}}
 {{- end -}}
 
 {{- define "tresor.stateKind" -}}
-{{- (.Values.config.state | default dict).kind | default "" -}}
+{{- ((include "tresor.cfg" . | fromYaml).state | default dict).kind | default "" -}}
 {{- end -}}
 
 {{/* The service's configuration as rendered: the chart's listen, sqlite's path, the TLS secret's files. */}}
 {{- define "tresor.config" -}}
-{{- $cfg := deepCopy .Values.config -}}
+{{- $cfg := deepCopy (include "tresor.cfg" . | fromYaml) -}}
 {{- $_ := set $cfg "listen" ":8080" -}}
 {{- $state := $cfg.state | default dict -}}
 {{- if and (eq (include "tresor.stateKind" .) "sqlite") (not $state.path) -}}
@@ -97,31 +107,31 @@ others). */}}
 {{- if not (has $kind (list "memory" "sqlite" "postgres" "sqlserver" "kubernetes")) -}}
 {{- fail "config.state.kind is memory, sqlite, postgres, sqlserver or kubernetes" -}}
 {{- end -}}
-{{- if not .Values.config.issuers -}}
+{{- if not (include "tresor.cfg" . | fromYaml).issuers -}}
 {{- fail "config.issuers: at least one issuer is required" -}}
 {{- end -}}
 {{- if and (eq $kind "sqlite") .Values.maintenance.enabled .Values.maintenance.reseal.schedule -}}
 {{- fail "maintenance.reseal.schedule: not on sqlite - its commands need the service scaled to 0 first" -}}
 {{- end -}}
-{{- $state := .Values.config.state | default dict -}}
+{{- $state := (include "tresor.cfg" . | fromYaml).state | default dict -}}
 {{- if and $state.namespace (ne $state.namespace (include "tresor.namespace" .)) -}}
 {{- fail "config.state.namespace: the chart's RBAC and admission policy are its own namespace (namespaceOverride, or the release's) - leave it unset" -}}
 {{- end -}}
 {{- if and (eq $kind "sqlite") $state.path (not (hasPrefix "/var/lib/tresor/" $state.path)) -}}
 {{- fail "config.state.path: under /var/lib/tresor/, the volume (the root filesystem is read-only)" -}}
 {{- end -}}
-{{- $keys := .Values.config.keys | default dict -}}
+{{- $keys := (include "tresor.cfg" . | fromYaml).keys | default dict -}}
 {{- if and (ne $kind "memory") (not $keys) (not .Values.localKEK.secretName) -}}
 {{- fail "a KEK is required: localKEK.secretName, or config.keys (azurekeyvault, vault)" -}}
 {{- end -}}
-{{- $vault := .Values.config.vault | default dict -}}
+{{- $vault := (include "tresor.cfg" . | fromYaml).vault | default dict -}}
 {{- $auth := $vault.auth | default dict -}}
 {{- if and (or (eq ($keys.kind | default "") "vault") $auth.method) (not $vault.address) -}}
 {{- fail "config.vault.address is required (a vault KEK, config.vault.auth)" -}}
 {{- end -}}
 {{- /* the logins the chart's token serves: the top-level vault's, and named sources' own (spec 008) */ -}}
 {{- $tokenLogin := has ($auth.method | default "") (list "kubernetes" "jwt") -}}
-{{- range (((.Values.config.material | default dict).sources | default list)) -}}
+{{- range ((((include "tresor.cfg" . | fromYaml).material | default dict).sources | default list)) -}}
 {{- if and (eq (.kind | default "") "vault") .vault -}}
 {{- $sauth := (.vault.auth | default dict) -}}
 {{- if not .vault.address -}}
@@ -154,7 +164,7 @@ others). */}}
 {{- if and (hasPrefix "/var/run/tresor/kek/" ($keys.key_file | default "")) (not .Values.localKEK.secretName) -}}
 {{- fail "config.keys.key_file is under the chart's KEK volume: localKEK.secretName names its Secret" -}}
 {{- end -}}
-{{- range (((.Values.config.material | default dict).k8s | default dict).allow | default list) -}}
+{{- range ((((include "tresor.cfg" . | fromYaml).material | default dict).k8s | default dict).allow | default list) -}}
 {{- if not .namespace -}}
 {{- fail "config.material.k8s.allow: every entry names a namespace" -}}
 {{- end -}}
@@ -171,7 +181,7 @@ others). */}}
 
 {{/* state.password_ref's Secret, when it is a ref+k8s://<namespace>/<secret>/<key>: "namespace secret". */}}
 {{- define "tresor.passwordSecret" -}}
-{{- $ref := ((.Values.config.state | default dict).password_ref | default "") -}}
+{{- $ref := (((include "tresor.cfg" . | fromYaml).state | default dict).password_ref | default "") -}}
 {{- if hasPrefix "ref+k8s://" $ref -}}
 {{- $parts := splitList "/" (trimPrefix "ref+k8s://" $ref) -}}
 {{- if eq (len $parts) 3 -}}{{ index $parts 0 }} {{ index $parts 1 }}{{- end -}}
@@ -181,11 +191,11 @@ others). */}}
 {{/* Whether the pod needs its ServiceAccount token: the store, ref+k8s, a password from a Secret (the Kubernetes
 API), or Vault's kubernetes login with no token of its own (vaultToken). */}}
 {{- define "tresor.usesAPI" -}}
-{{- $k8s := ((.Values.config.material | default dict).k8s | default dict).allow -}}
-{{- $auth := ((.Values.config.vault | default dict).auth | default dict) -}}
+{{- $k8s := (((include "tresor.cfg" . | fromYaml).material | default dict).k8s | default dict).allow -}}
+{{- $auth := (((include "tresor.cfg" . | fromYaml).vault | default dict).auth | default dict) -}}
 {{- $vaultPod := and (eq ($auth.method | default "") "kubernetes") (not $auth.jwt_file) (not .Values.vaultToken.enabled) -}}
 {{- if not .Values.vaultToken.enabled -}}
-{{- range (((.Values.config.material | default dict).sources | default list)) -}}
+{{- range ((((include "tresor.cfg" . | fromYaml).material | default dict).sources | default list)) -}}
 {{- $sauth := ((.vault | default dict).auth | default dict) -}}
 {{- if and (eq (.kind | default "") "vault") (eq ($sauth.method | default "") "kubernetes") (not $sauth.jwt_file) -}}
 {{- $vaultPod = true -}}

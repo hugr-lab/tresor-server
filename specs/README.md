@@ -41,3 +41,4 @@ Research lives in the local, gitignored `design/` folder.
 | [025](025-docs-ionos/spec.md) | the docs on hugr-lab.com too (IONOS), legal links on both | implemented |
 | [026](026-cluster-install/spec.md) | an unattended install: the cluster's own accounts, namespaceOverride | implemented |
 | [027](027-vault-database/spec.md) | the state's database credentials from a Vault database secrets engine | accepted |
+| [028](028-chart-config-tpl/spec.md) | the chart's config through tpl (configTemplate) | accepted |

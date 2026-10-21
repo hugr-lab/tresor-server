@@ -23,7 +23,7 @@ subjects:
   - {kind: ServiceAccount, name: {{ $sa }}, namespace: {{ include "tresor.namespace" . }}}
 {{- end }}
 {{- if .Values.rbac.secrets }}
-{{- range (((.Values.config.material | default dict).k8s | default dict).allow | default list) }}
+{{- range ((((include "tresor.cfg" . | fromYaml).material | default dict).k8s | default dict).allow | default list) }}
 ---
 # ref+k8s: get on Secrets in a namespace of material.k8s.allow (the prefixes are the allowlist's alone)
 apiVersion: rbac.authorization.k8s.io/v1
