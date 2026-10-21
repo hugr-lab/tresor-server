@@ -26,7 +26,7 @@ the service scaled to 0 first. Use PostgreSQL or SQL Server.
 
 Whoever can create pods or Jobs in {{ include "tresor.namespace" . }}, create a token for the service's ServiceAccount or
 impersonate it can act as the service: keep these rights to the platform's operators.
-{{- if and (.Values.config.tls | default dict).offload (not .Values.networkPolicy.enabled) }}
+{{- if and ((include "tresor.cfg" . | fromYaml).tls | default dict).offload (not .Values.networkPolicy.enabled) }}
 
 The pod serves plain HTTP (tls.offload): networkPolicy.from can let only the ingress controller reach it.
 {{- end }}
