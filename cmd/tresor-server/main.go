@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -64,6 +65,7 @@ import (
 	"github.com/hugr-lab/tresor-server/internal/state/memory"
 	"github.com/hugr-lab/tresor-server/internal/state/sqlstore"
 	"github.com/hugr-lab/tresor-server/internal/telemetry"
+	"github.com/hugr-lab/tresor-server/internal/tlsreload"
 	"github.com/hugr-lab/tresor-server/internal/traced"
 	"github.com/hugr-lab/tresor-server/internal/vault"
 	"github.com/hugr-lab/tresor-server/web/console"
@@ -856,6 +858,16 @@ func serve(configPath string, log *slog.Logger) error {
 			Soft: func() bool { return verifier.Answered(iss) },
 		})
 	}
+	// spec 029: the certificate and key read again when they change (a renewal in place); a bad new pair leaves the
+	// old one serving, and readiness says so (degraded: restarting would not help)
+	var certs *tlsreload.Reloader
+	if cfg.TLS.Cert != "" {
+		if certs, err = tlsreload.New(cfg.TLS.Cert, cfg.TLS.Key, log); err != nil {
+			return err
+		}
+		go certs.Watch(ctx, 30*time.Second)
+		checks = append(checks, health.Check{Name: "tls", Run: certs.Check, Soft: func() bool { return true }})
+	}
 	checker = health.New(log, readyInterval, checks...)
 	checker.Start(ctx)
 	go purgeGrants(ctx, st, log)
@@ -869,6 +881,9 @@ func serve(configPath string, log *slog.Logger) error {
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 	}
+	if certs != nil {
+		server.TLSConfig = &tls.Config{GetCertificate: certs.GetCertificate, MinVersion: tls.VersionTLS12}
+	}
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
@@ -879,7 +894,7 @@ func serve(configPath string, log *slog.Logger) error {
 	errs := make(chan error, 1)
 	go func() {
 		if cfg.TLS.Cert != "" {
-			errs <- server.ServeTLS(listener, cfg.TLS.Cert, cfg.TLS.Key)
+			errs <- server.ServeTLS(listener, "", "") // the reloader's pair (spec 029)
 		} else {
 			errs <- server.Serve(listener)
 		}

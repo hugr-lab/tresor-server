@@ -56,7 +56,7 @@ Secrets are never in the configuration itself. A setting names where a secret is
 | --- | --- |
 | `listen` | `host:port` to listen on. |
 | `public_url` | The URL clients reach the service at; the discovery's `api`. It may have a path. |
-| `tls.cert`, `tls.key` | The certificate to serve HTTPS with. |
+| `tls.cert`, `tls.key` | The certificate to serve HTTPS with - read again when the files change (every 30 s; spec 029): a certificate renewed in place (cert-manager's Secret) is served without a restart. A new pair serves once it checks whole (the key the certificate's, the certificate in date); a bad one leaves the old pair serving, logs an error and makes readiness's `tls` degraded. |
 | `tls.offload` | TLS ends at the platform's ingress (Container Apps, an ingress controller). |
 
 Plain http is allowed only on a loopback address, unless `tls.offload` is set. With it:
