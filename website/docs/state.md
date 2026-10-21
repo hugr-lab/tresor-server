@@ -64,7 +64,9 @@ azure: {identity: managed}
     managed identity's;
   - `auth: password`: from `password_env`, `password_file` or `password_ref` (a Kubernetes Secret,
     `ref+k8s://<namespace>/<secret>/<key>`, a Key Vault secret, or a Vault KV field), read again for each connection - a rotation
-    needs no restart.
+    needs no restart;
+  - `auth: vault`: a user and a password a Vault/OpenBao database secrets engine makes for the service
+    ([OpenBao and Vault](vault.md#the-databases-credentials), spec 027) - the DSN's user is replaced by its.
 - **Off this machine, `sslmode=verify-full` is required.** The password (a token) goes over the
   connection. pgx's default, `prefer`, falls back to plain text; `require` checks no certificate.
 - The pool: 10 connections unless `max_open_conns` says otherwise, 30-minute connections, a 10 s connect

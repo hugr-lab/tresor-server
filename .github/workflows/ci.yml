@@ -54,6 +54,8 @@ jobs:
       TRESOR_TEST_SQLSERVER_PASSWORD: Tresor-Test-2026!
       TRESOR_TEST_VAULT: http://127.0.0.1:18200,http://127.0.0.1:18201
       TRESOR_TEST_VAULT_TOKEN: root
+      # spec 027: PostgreSQL as the Vault servers reach it (the services' network)
+      TRESOR_TEST_VAULT_DB_HOST: postgres:5432
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

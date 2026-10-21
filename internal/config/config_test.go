@@ -815,3 +815,26 @@ func TestIssuerDiscoveryToken(t *testing.T) {
 		t.Fatal("a relative path: accepted")
 	}
 }
+
+// state.auth: vault (spec 027): a role of a database secrets engine, through a vault connection
+func TestStateVaultAuth(t *testing.T) {
+	pg := strings.Replace(good, "state: {kind: memory}", "state: {kind: postgres, dsn: 'host=db dbname=tresor sslmode=verify-full', auth: vault, vault: {mount: database, role: tresor, set_role: tresor_owner}}", 1) +
+		"keys: {kind: local, key_file: /k}\n"
+	withVault := pg + "vault: {address: https://bao.example:8200, auth: {method: kubernetes, role: tresor}}\n"
+	if _, err := Parse([]byte(withVault)); err != nil {
+		t.Fatalf("auth vault: %v", err)
+	}
+	for name, doc := range map[string]string{
+		"no vault connection": pg,
+		"no role":             strings.Replace(withVault, " role: tresor,", "", 1),
+		"no set_role":         strings.Replace(withVault, ", set_role: tresor_owner", "", 1),
+		"a bad set_role":      strings.Replace(withVault, "set_role: tresor_owner", "set_role: 'a; drop'", 1),
+		"a password too":      strings.Replace(withVault, "auth: vault,", "auth: vault, password_env: PGPASS,", 1),
+		"a missing source":    strings.Replace(withVault, "set_role: tresor_owner}}", "set_role: tresor_owner, source: nope}}", 1),
+		"vault without auth":  strings.Replace(withVault, "auth: vault,", "auth: password, password_env: PGPASS,", 1),
+	} {
+		if _, err := Parse([]byte(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
