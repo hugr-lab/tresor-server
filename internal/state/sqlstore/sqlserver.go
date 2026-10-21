@@ -47,7 +47,7 @@ func OpenSQLServer(ctx context.Context, dsn string, login Login, maxOpen int, wr
 	}
 	db.SetMaxOpenConns(maxOpen)
 	db.SetMaxIdleConns(maxOpen)
-	db.SetConnMaxLifetime(30 * time.Minute) // a connection's token expires; a new one logs in afresh
+	db.SetConnMaxLifetime(ConnLifetime) // a connection's token expires; a new one logs in afresh
 	pingCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
@@ -70,11 +70,19 @@ type passwordConnector struct {
 }
 
 func (c *passwordConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	cfg := c.cfg
+	if ul, ok := c.login.(UserLogin); ok { // the user too (spec 027)
+		user, pw, err := ul.Credentials(ctx)
+		if err != nil {
+			return nil, err
+		}
+		cfg.User, cfg.Password = user, pw
+		return mssql.NewConnectorConfig(cfg).Connect(ctx)
+	}
 	pw, err := c.login.Password(ctx)
 	if err != nil {
 		return nil, err
 	}
-	cfg := c.cfg
 	cfg.Password = pw
 	return mssql.NewConnectorConfig(cfg).Connect(ctx)
 }

@@ -79,8 +79,52 @@ path "transit/sign/zitadel-app/sha2-256" { capabilities = ["update"] }
 ```
 
 - Give `hmac` on the KEK to the service alone: whoever holds it computes the root.
+- With `state.auth: vault`, `read` on `database/creds/<role>` too (below).
 - Admins write `ref+vault` references; the service reads them. Keep `read` under the prefixes the allowlist
   names.
+
+## The database's credentials
+
+The state's database (PostgreSQL, SQL Server) logs the service in with credentials a **database secrets engine**
+makes for it (spec 027): no password stored anywhere, a user of its own for each lease.
+
+```yaml
+vault: {address: https://bao.example:8200, auth: {method: kubernetes, role: tresor}}
+state:
+  kind: postgres
+  dsn: host=pg.example dbname=tresor sslmode=verify-full     # no user: the engine's is taken
+  auth: vault
+  vault: {mount: database, role: tresor, set_role: tresor_owner}   # source: <name> for a named vault source's connection
+```
+
+Each lease is another user. On PostgreSQL every one of them is granted one group role, which the service sets on
+each connection (`set_role`, required there): it owns the tables, so the next lease's user reads and writes them,
+and Vault drops an expired user cleanly. Once, as the database's owner:
+
+```sql
+CREATE ROLE tresor_owner NOLOGIN;
+GRANT ALL ON DATABASE tresor TO tresor_owner;
+GRANT ALL ON SCHEMA public TO tresor_owner;
+```
+
+and the engine's role:
+
+```sh
+bao write database/roles/tresor db_name=tresor-pg default_ttl=1h max_ttl=24h \
+  creation_statements="CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}' IN ROLE tresor_owner;"
+```
+
+On SQL Server the tables are the schema's: give each lease's user a database role (`db_owner`, or one with the
+rights the migrations need) in its creation statements; there is no `set_role`.
+
+- **How**: `GET <mount>/creds/<role>` gives a user and a password with a lease. New connections take them while a
+  connection made with them ends before the lease does (connections live 30 minutes); then the service takes new
+  ones. Old leases are left to expire: a connection still open with them keeps working, then closes.
+- **The role's `default_ttl`** must be more than 32 minutes (an hour or more is usual); a shorter lease is
+  refused, with what to raise. Each replica takes credentials of its own, about once per `default_ttl` minus 32
+  minutes.
+- **The policy**: `path "database/creds/tresor" { capabilities = ["read"] }`.
+- Nothing of the credentials is logged: the path and the lease's length only.
 
 ## The chart
 

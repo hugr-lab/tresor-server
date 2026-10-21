@@ -72,8 +72,11 @@ type State struct {
 	// PasswordRef is a reference to the password (ref+k8s://, ref+azkv:// or ref+vault://), read for each new
 	// connection. It
 	// must be outside material's allowlists: an administrator must not be able to read it.
-	PasswordRef  string `yaml:"password_ref"`
-	MaxOpenConns int    `yaml:"max_open_conns"`
+	PasswordRef string `yaml:"password_ref"`
+	// Vault: auth vault - credentials from a Vault/OpenBao database secrets engine (spec 027), a user and a
+	// password for each lease, through the vault: connection (or a named source's).
+	Vault        *StateVault `yaml:"vault"`
+	MaxOpenConns int         `yaml:"max_open_conns"`
 	// MAC checks every row's MAC on a SQL store (spec 014): who may use what cannot change without the KEK. The
 	// MAC is written always; tresor-server mac fills the rows written before. On by default (spec 022); false
 	// turns the checks off. MACOn says what applies.
@@ -831,6 +834,9 @@ func (c *Config) validate() error {
 	if err := c.State.validateServer(c.Azure.Identity, c.AWS.Region != ""); err != nil {
 		return err
 	}
+	if err := c.validateStateVault(); err != nil {
+		return err
+	}
 	if c.State.MAC != nil && *c.State.MAC && !c.State.SQL() {
 		return fmt.Errorf("state.mac is for the SQL stores: %s %s", c.State.Kind,
 			map[bool]string{true: "always has one (spec 003)", false: "keeps nothing at rest"}[c.State.Kind == "kubernetes"])
@@ -1036,10 +1042,41 @@ func (c *Config) validate() error {
 	return nil
 }
 
+// validateStateVault: auth vault reads through a vault connection - the top-level one, or a named vault source's.
+func (c *Config) validateStateVault() error {
+	if c.State.Auth != "vault" || c.State.Vault == nil {
+		return nil
+	}
+	if name := c.State.Vault.Source; name != "" {
+		if src, ok := c.Source(name); !ok || src.Kind != "vault" {
+			return fmt.Errorf("state.vault.source: no vault source is named %s", name)
+		}
+		return nil
+	}
+	if !c.Vault.used() {
+		return errors.New("state.auth: vault reads through vault: (its address and login) - or name a source")
+	}
+	return nil
+}
+
+// pgRole is a PostgreSQL role's name, as state.vault.set_role takes it.
+var pgRole = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$-]{0,62}$`)
+
+// StateVault is a database secrets engine's role (spec 027): <mount>/creds/<role> gives a user and a password.
+type StateVault struct {
+	Mount  string `yaml:"mount"`  // the engine's mount (database)
+	Role   string `yaml:"role"`   // the role whose credentials the service logs in with
+	Source string `yaml:"source"` // a named vault source's connection; empty - the top-level vault:
+	// SetRole (PostgreSQL): the group role every lease's user is granted, set on each connection - it owns what
+	// the migrations make, so the next lease's user reads and writes it, and an expired user drops cleanly.
+	SetRole string `yaml:"set_role"`
+}
+
 // validateServer checks a database server's settings (postgres, sqlserver).
 func (s *State) validateServer(identity string, aws bool) error {
 	if s.Kind != "postgres" && s.Kind != "sqlserver" {
-		if s.DSN != "" || s.Auth != "" || s.PasswordEnv != "" || s.PasswordFile != "" || s.PasswordRef != "" || s.MaxOpenConns != 0 {
+		if s.DSN != "" || s.Auth != "" || s.PasswordEnv != "" || s.PasswordFile != "" || s.PasswordRef != "" || s.MaxOpenConns != 0 ||
+			s.Vault != nil {
 			return fmt.Errorf("state: dsn, auth, password_env, password_file, password_ref, max_open_conns are for a database server, not %s", s.Kind)
 		}
 		return nil
@@ -1077,6 +1114,23 @@ func (s *State) validateServer(identity string, aws bool) error {
 		if s.PasswordEnv != "" || s.PasswordFile != "" || s.PasswordRef != "" {
 			return errors.New("state.auth: aws takes no password")
 		}
+	case "vault":
+		if s.Vault == nil || !vaultMount.MatchString(s.Vault.Mount) || !vaultMount.MatchString(s.Vault.Role) {
+			return errors.New("state.auth: vault names state.vault.mount and state.vault.role (a database secrets engine's role)")
+		}
+		if s.Kind == "postgres" && s.Vault.SetRole == "" {
+			return errors.New("state.vault.set_role is required on PostgreSQL: the group role every lease's user is granted, " +
+				"which owns the tables (each lease is another user)")
+		}
+		if s.Kind != "postgres" && s.Vault.SetRole != "" {
+			return errors.New("state.vault.set_role is PostgreSQL's (SQL Server: the users' database role owns the schema)")
+		}
+		if s.Vault.SetRole != "" && !pgRole.MatchString(s.Vault.SetRole) {
+			return errors.New("state.vault.set_role is a role's name")
+		}
+		if s.PasswordEnv != "" || s.PasswordFile != "" || s.PasswordRef != "" {
+			return errors.New("state.auth: vault takes no password: the engine gives a user and a password")
+		}
 	case "password":
 		n := 0
 		for _, v := range []string{s.PasswordEnv, s.PasswordFile, s.PasswordRef} {
@@ -1098,7 +1152,10 @@ func (s *State) validateServer(identity string, aws bool) error {
 				"variable of its own", s.PasswordEnv)
 		}
 	default:
-		return errors.New("state.auth is entra, aws, gcp or password")
+		return errors.New("state.auth is entra, aws, gcp, vault or password")
+	}
+	if s.Vault != nil && s.Auth != "vault" {
+		return errors.New("state.vault is for state.auth: vault")
 	}
 	return nil
 }
