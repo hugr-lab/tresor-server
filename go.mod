@@ -1,6 +1,6 @@
 module github.com/hugr-lab/tresor-server
 
-go 1.27.2
+go 1.27.3
 
 require (
 	cloud.google.com/go/kms v1.35.0
