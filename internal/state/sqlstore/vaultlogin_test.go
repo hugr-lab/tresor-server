@@ -146,8 +146,12 @@ func TestPostgresVaultLogin(t *testing.T) {
 // statetestCreate writes one secret.
 func statetestCreate(t *testing.T, st state.Store, name string) {
 	t.Helper()
-	if _, err := st.Update(ctx, name, func(*state.Secret) (*state.Secret, error) {
-		return &state.Secret{Name: name, Type: "s3", Provider: "config", Params: map[string]json.RawMessage{"k": json.RawMessage(`"v"`)}, Version: 1}, nil
+	if _, err := st.Update(ctx, name, func(cur *state.Secret) (*state.Secret, error) {
+		next := &state.Secret{Name: name, Type: "s3", Provider: "config", Params: map[string]json.RawMessage{"k": json.RawMessage(`"v"`)}, Version: 1}
+		if cur != nil { // another server's subtest wrote it first: the same database
+			next.Version = cur.Version + 1
+		}
+		return next, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
