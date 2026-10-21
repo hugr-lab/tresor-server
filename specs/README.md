@@ -42,4 +42,4 @@ Research lives in the local, gitignored `design/` folder.
 | [026](026-cluster-install/spec.md) | an unattended install: the cluster's own accounts, namespaceOverride | implemented |
 | [027](027-vault-database/spec.md) | the state's database credentials from a Vault database secrets engine | implemented |
 | [028](028-chart-config-tpl/spec.md) | the chart's config through tpl (configTemplate) | implemented |
-| [029](029-tls-reload/spec.md) | the TLS certificate read again when it changes | accepted |
+| [029](029-tls-reload/spec.md) | the TLS certificate read again when it changes | implemented |
