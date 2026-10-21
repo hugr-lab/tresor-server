@@ -1,6 +1,6 @@
 # Spec 028: the chart's config through tpl
 
-- **Status**: accepted (the owner, 2026-10-21; asked by the duckdb-acl session for the umbrella chart `hugr`)
+- **Status**: implemented (#80; the owner, 2026-10-21; asked by the duckdb-acl session for the umbrella chart `hugr`)
 - **Date**: 2026-10-21
 - **Author**: hugr lab
 

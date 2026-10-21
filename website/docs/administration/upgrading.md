@@ -126,6 +126,16 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
 - **The chart's objects now name their namespace** (`metadata.namespace`): the same one as before unless
   `namespaceOverride` is set.
 
+### Upgrading to 0.7.2 (specs 027, 028)
+
+- **Nothing to migrate**: no column, no CRD change; nothing changes until set.
+- **`state.auth: vault`** (spec 027): the state's database credentials from a Vault/OpenBao database secrets
+  engine, a user per lease; on PostgreSQL `state.vault.set_role` names the group role that owns the tables
+  ([OpenBao and Vault](../vault.md#the-databases-credentials)). A database already in use moves to it once its
+  tables belong to that group role (`ALTER TABLE … OWNER TO tresor_owner`, or `REASSIGN OWNED BY`).
+- **`configTemplate`** (spec 028, the chart): `config` rendered through `tpl` - off by default, the render
+  unchanged.
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.
