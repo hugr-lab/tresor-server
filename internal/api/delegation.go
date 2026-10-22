@@ -128,7 +128,7 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := actor.Client()
-	if !actor.Service || !s.policy.ActorAllowed(client, actor.Issuer) {
+	if !actor.Service || !s.policy.ActorAllowed(client, actor.Issuer, actor.Principals) {
 		problem(w, http.StatusForbidden, "actor_not_allowed", "this caller may not act for users")
 		return
 	}
@@ -171,7 +171,7 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// the user's tokens for what the server may mint (specs/010): now, while the subject token lives
-	mayMint := slices.Contains(s.policy.ActorVerbs(client, actor.Issuer), "use")
+	mayMint := slices.Contains(s.policy.ActorVerbs(client, actor.Issuer, actor.Principals), "use")
 	var minted map[string]mintResult
 	var gens []*generator
 	if mayMint {

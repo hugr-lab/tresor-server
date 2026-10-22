@@ -1036,8 +1036,17 @@ func (c *Config) validate() error {
 		}
 	}
 	for i, a := range c.Policy.Actors {
-		if !strings.HasPrefix(a.Principal, "client:") || len(a.Principal) <= len("client:") {
-			return fmt.Errorf("policy.actors[%d]: an actor is a service, client:<id>", i)
+		client := strings.HasPrefix(a.Principal, "client:") && len(a.Principal) > len("client:")
+		role := strings.HasPrefix(a.Principal, "role:") && len(a.Principal) > len("role:")
+		if !client && !role {
+			return fmt.Errorf("policy.actors[%d]: an actor is a service: client:<id>, or role:<name> (spec 031)", i)
+		}
+		if role && a.Issuer == "" {
+			// a role is the issuer's to give: pinned, so another issuer's same-named role does not pass for it
+			return fmt.Errorf("policy.actors[%d]: an actor by role names its issuer", i)
+		}
+		if role && !slices.ContainsFunc(c.Issuers, func(is Issuer) bool { return IssuerKey(is.Issuer) == IssuerKey(a.Issuer) }) {
+			return fmt.Errorf("policy.actors[%d]: the issuer is not one of issuers", i)
 		}
 		if len(a.Verbs) == 0 {
 			return fmt.Errorf("policy.actors[%d] lists no verbs - leave it out instead", i)

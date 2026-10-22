@@ -28,6 +28,11 @@ func TestGood(t *testing.T) {
 	if cfg.Issuers[0].Issuer != "http://127.0.0.1:18080/realms/tresor/" || IssuerKey(cfg.Issuers[0].Issuer) != "http://127.0.0.1:18080/realms/tresor" {
 		t.Fatal("the issuer is kept verbatim (RFC 8414 compares exactly); only its lookup key is normalised")
 	}
+	// spec 031: an actor by role, from one of the issuers
+	if _, err := Parse([]byte(strings.Replace(good, "{principal: client:node, verbs: [use]}",
+		"{principal: role:hugr_node, issuer: http://127.0.0.1:18080/realms/tresor, verbs: [use]}", 1))); err != nil {
+		t.Fatalf("an actor by role: %v", err)
+	}
 	if len(cfg.Issuers[0].Algorithms) != 2 {
 		t.Fatal("algorithms default to RS256, ES256")
 	}
@@ -50,7 +55,11 @@ func TestRefused(t *testing.T) {
 		"an actor with no verbs":       strings.Replace(good, "verbs: [use]", "verbs: []", 1),
 		"an actor's unknown verb":      strings.Replace(good, "verbs: [use]", "verbs: [use, fly]", 1),
 		"the old create policy":        good + "  create:\n    - {principal: role:analysts, names: [\"*\"]}\n",
-		"no issuers":                   "listen: 127.0.0.1:1\npublic_url: http://127.0.0.1:1\nstate: {kind: memory}\n",
+		"a group as an actor":          strings.Replace(good, "client:node", "group:nodes", 1),
+		"an actor by role, no issuer":  strings.Replace(good, "client:node", "role:hugr_node", 1),
+		"an actor by role, an unknown issuer": strings.Replace(good, "{principal: client:node, verbs: [use]}",
+			"{principal: role:hugr_node, issuer: https://elsewhere.example, verbs: [use]}", 1),
+		"no issuers": "listen: 127.0.0.1:1\npublic_url: http://127.0.0.1:1\nstate: {kind: memory}\n",
 	}
 	for name, doc := range cases {
 		if _, err := Parse([]byte(doc)); err == nil {
