@@ -5,7 +5,7 @@ import { NavLink } from 'react-router-dom'
 import { ChevronDown, KeyRound, LogOut, Moon, ServerCog, ShieldCheck, Sun, Users, Variable } from 'lucide-react'
 import { useApp } from '../context'
 import { useToast } from './ui'
-import iconOnDark from '../assets/hugr-icon-on-dark.svg'
+import iconOnDark from '../assets/tresor-icon-dark.svg'
 
 const items = [
   { to: '/secrets', label: 'Secrets', icon: KeyRound, count: 'secrets' as const },
@@ -38,7 +38,7 @@ function Sidebar({ counts }: { counts: { secrets?: number; variables?: number } 
   return (
     <nav aria-label="Main" className="flex w-[232px] flex-none flex-col gap-1 bg-[#0A3146] px-3.5 py-5 text-[#E8F1F2]">
       <div className="flex items-center gap-2.5 px-2 pb-5">
-        <img src={iconOnDark} alt="hugr" width={28} height={28} />
+        <img src={iconOnDark} alt="" width={28} height={28} />
         <div className="flex flex-col leading-[18px]">
           <span className="text-[17px] font-bold text-white">tresor</span>
           <span className="text-[12px] text-[#9CB1BA]">secrets for DuckDB</span>

@@ -4,14 +4,17 @@ import { CircleAlert, LogIn } from 'lucide-react'
 import type { ConsoleConfig } from '../lib/config'
 import type { Session } from '../lib/auth'
 import { here } from '../lib/paths'
-import logo from '../assets/hugr-logo.svg'
-import logoOnDark from '../assets/hugr-logo-on-dark.svg'
+import logo from '../assets/tresor-icon.svg'
+import logoOnDark from '../assets/tresor-icon-dark.svg'
 
 function Card({ children, theme }: { children: React.ReactNode; theme: string }) {
   return (
     <div className="app flex items-center justify-center bg-surface p-8">
       <div className="flex w-full max-w-[440px] flex-col gap-6 rounded-lg border border-line bg-surface p-10">
-        <img src={theme === 'dark' ? logoOnDark : logo} alt="hugr" width={120} />
+        <div className="flex items-center gap-3">
+          <img src={theme === 'dark' ? logoOnDark : logo} alt="" width={48} height={48} />
+          <span className="text-[22px] font-bold text-ink">tresor</span>
+        </div>
         {children}
       </div>
     </div>
