@@ -34,7 +34,7 @@ export function Shell({ counts, children }: { counts: { secrets?: number; variab
 function Sidebar({ counts }: { counts: { secrets?: number; variables?: number } }) {
   const { service } = useApp()
   const link = ({ isActive }: { isActive: boolean }) =>
-    `flex items-center gap-2.5 rounded-full px-3 py-2 no-underline ${isActive ? 'bg-[#1E4A60] font-semibold text-white' : 'text-[#C9DCE0] hover:text-white'}`
+    `flex items-center gap-2.5 rounded-full px-3 py-2 no-underline ${isActive ? 'bg-[#1E4A60] font-semibold text-white hover:text-white' : 'text-[#C9DCE0] hover:text-white'}`
   return (
     <nav aria-label="Main" className="flex w-[232px] flex-none flex-col gap-1 bg-[#0A3146] px-3.5 py-5 text-[#E8F1F2]">
       <div className="flex items-center gap-2.5 px-2 pb-5">
@@ -158,7 +158,7 @@ function UserMenu() {
 
 function EmbeddedFrame({ children }: { children: ReactNode }) {
   const tab = ({ isActive }: { isActive: boolean }) =>
-    `rounded-full px-4 py-1.5 no-underline ${isActive ? 'bg-strong font-semibold text-on-brand' : 'border border-line text-ink'}`
+    `rounded-full px-4 py-1.5 no-underline ${isActive ? 'bg-strong font-semibold text-on-brand hover:text-on-brand' : 'border border-line text-ink'}`
   return (
     <div className="mfe flex flex-col gap-4">
       <nav aria-label="tresor" className="flex flex-wrap gap-1.5">
