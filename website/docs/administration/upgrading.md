@@ -142,6 +142,14 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
 - **The TLS certificate is read again when it changes** (every 30 s): a renewal in place needs no restart. A bad
   new pair leaves the old one serving, and readiness's `tls` check says so (degraded).
 
+### Upgrading to 0.7.4 (spec 030)
+
+- **Nothing to migrate**; nothing changes until set.
+- **`whoami` names the person** (`name`), for people to read; a delegation grant made before 0.7.4 has none (a
+  new session carries it).
+- **An issuer's `ignore_roles`**: roles never taken as principals - before adding one, check no grant or
+  `policy.admins` names those roles.
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.

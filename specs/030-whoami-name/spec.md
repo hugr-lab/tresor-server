@@ -1,6 +1,6 @@
 # Spec 030: whoami names the person; an IdP's own roles left out
 
-- **Status**: accepted (the owner, 2026-10-22: "wait for tresor, then do it"; tresor spec 041)
+- **Status**: implemented (#86; the owner, 2026-10-22: "wait for tresor, then do it"; tresor spec 041)
 - **Date**: 2026-10-22
 - **Author**: hugr lab
 
