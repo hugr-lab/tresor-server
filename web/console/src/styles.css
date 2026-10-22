@@ -38,16 +38,16 @@ body, .mfe-root { font-family: Manrope, system-ui, sans-serif; font-size: 14px; 
 .mfe-root { background: var(--surface); color: var(--ink); }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 a { color: var(--brand-strong); }
-a:hover { color: var(--ink); }
+a:hover { color: var(--ink); } /* a link styled as a pill or a button keeps its own colour (its hover: class) */
 dialog::backdrop { background: rgba(6, 28, 40, 0.45); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
 @layer components {
   .btn { @apply inline-flex items-center gap-2 rounded-full px-4 py-2 font-semibold text-[14px] leading-5 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed; }
-  .btn-primary { @apply btn bg-strong text-on-brand; }
-  .btn-secondary { @apply btn border border-strong text-strong bg-transparent; }
-  .btn-danger { @apply btn border border-danger text-danger bg-transparent; }
-  .btn-danger-fill { @apply btn bg-danger text-white; }
+  .btn-primary { @apply btn bg-strong text-on-brand hover:text-on-brand; }
+  .btn-secondary { @apply btn border border-strong text-strong bg-transparent hover:text-strong; }
+  .btn-danger { @apply btn border border-danger text-danger bg-transparent hover:text-danger; }
+  .btn-danger-fill { @apply btn bg-danger text-white hover:text-white; }
   .btn-ghost { @apply btn text-ink bg-transparent hover:bg-soft; }
   .icon-btn { @apply inline-flex h-8 w-8 items-center justify-center rounded-full text-muted hover:bg-soft cursor-pointer; }
   .chip { @apply inline-flex items-center gap-1 rounded-full px-2 text-[12px] leading-5 font-semibold whitespace-nowrap; }
