@@ -108,7 +108,7 @@ function UserMenu() {
       document.removeEventListener('keydown', close)
     }
   }, [open])
-  const full = displayName || me.subject
+  const full = displayName || me.name || me.subject
   const name = full.length > 24 ? full.slice(0, 22) + '…' : full
   return (
     <div className="relative" ref={ref}>

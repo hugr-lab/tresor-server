@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -48,6 +49,10 @@ type Caller struct {
 	// generated parameter may serve (spec 023, mint+claim://) - never the session's or a token's binding
 	// (sid, jti, nonce, …), never a list or an object. Kept with a delegation grant: the grant's user's.
 	Claims map[string]string `json:",omitempty"`
+	// Name is who the subject is, for people to read (spec 030, tresor spec 041: whoami's name): the first
+	// non-blank of preferred_username, name, email, upn. Never an identity: nothing is granted, owned or audited
+	// by it. Kept with a delegation grant: the grant's user's.
+	Name string `json:",omitempty"`
 }
 
 // Client is the caller's client: principal (a service), or "".
@@ -352,6 +357,33 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Caller, error) {
 	return callerFrom(is.cfg, token.Issuer, token.Subject, token.Expiry, claims), nil
 }
 
+// displayName is who the subject is, for people to read: the first non-blank of preferred_username, name, email,
+// upn (Entra v1) - trimmed, no control character, 256 characters at most.
+func displayName(claims map[string]any) string {
+	for _, k := range []string{"preferred_username", "name", "email", "upn"} {
+		s, _ := claims[k].(string)
+		s = strings.TrimSpace(s)
+		if s == "" || strings.IndexFunc(s, unicode.IsControl) >= 0 {
+			continue
+		}
+		if r := []rune(s); len(r) > 256 {
+			s = string(r[:256])
+		}
+		return s
+	}
+	return ""
+}
+
+// ignored: a role an issuer's ignore_roles names (glob patterns, path.Match's).
+func ignored(patterns []string, role string) bool {
+	for _, p := range patterns {
+		if ok, _ := path.Match(p, role); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // maxClaim bounds a kept claim's text: a claim is a name or an id, not a document.
 const maxClaim = 4096
 
@@ -390,9 +422,12 @@ func textClaims(claims map[string]any) map[string]string {
 // callerFrom maps claims to principals: identity is iss+sub, never an email or a username. A service
 // is recognised only by the issuer's configured rule: no claim marks one by convention.
 func callerFrom(cfg config.Issuer, iss, sub string, exp time.Time, claims map[string]any) *Caller {
-	c := &Caller{Issuer: iss, Subject: sub, ExpiresAt: exp, Claims: textClaims(claims)}
+	c := &Caller{Issuer: iss, Subject: sub, ExpiresAt: exp, Claims: textClaims(claims), Name: displayName(claims)}
 	c.Principals = append(c.Principals, "subject:"+iss+"|"+sub)
 	for _, r := range stringsAt(claims, cfg.RolesClaim) {
+		if ignored(cfg.IgnoreRoles, r) {
+			continue // an IdP's own roles (Keycloak's offline_access, default-roles-*): never a principal here
+		}
 		c.Principals = append(c.Principals, "role:"+r)
 	}
 	for _, g := range stringsAt(claims, cfg.GroupsClaim) {

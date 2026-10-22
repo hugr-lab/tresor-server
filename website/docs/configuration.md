@@ -77,10 +77,11 @@ These are the reference server's, unchanged. tresor documents them:
 
 For Microsoft Entra ID, see tresor's [Entra guide](https://hugr-lab.github.io/tresor/entra/).
 
-Two settings of an issuer are this service's own (spec 026):
+Three settings of an issuer are this service's own (specs 026, 030):
 
 | Setting | |
 | --- | --- |
+| `ignore_roles` | Roles of the roles claim never taken as principals - glob patterns: an identity provider's own, Keycloak's `offline_access`, `uma_authorization`, `default-roles-*`. They grant nothing anyway unless a grant or `policy.admins` names them; this keeps them out of `whoami` and the console. |
 | `ca_file` | PEM certificates trusted for the issuer's discovery and keys, besides the system's - a cluster's own CA. |
 | `discovery_token_file` | A bearer token sent (to the issuer's host, and its keys' host) to read its discovery and keys, read at each request - a Kubernetes API server serves them to authenticated accounts only. https issuers only. |
 

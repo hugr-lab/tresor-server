@@ -86,6 +86,7 @@ export interface DataKeysInfo {
 export interface Whoami {
   issuer: string
   subject: string
+  name?: string // for people to read (tresor spec 041): never an identity
   roles: string[]
   actor: string | null
   expires_at: string
