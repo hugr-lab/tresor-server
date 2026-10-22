@@ -1,6 +1,6 @@
 # Spec 031: a delegation actor by role
 
-- **Status**: accepted (the owner, 2026-10-22: "да давай"; asked by duckdb-acl)
+- **Status**: implemented (#90; the owner, 2026-10-22: "да давай"; asked by duckdb-acl)
 - **Date**: 2026-10-22
 - **Author**: hugr lab
 

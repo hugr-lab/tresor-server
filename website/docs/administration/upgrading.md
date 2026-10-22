@@ -150,6 +150,14 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
 - **An issuer's `ignore_roles`**: roles never taken as principals - before adding one, check no grant or
   `policy.admins` names those roles.
 
+### Upgrading to 0.7.5 (spec 031)
+
+- **Nothing to migrate**; nothing changes until set.
+- **An actor by role** (`policy.actors`, `role:<name>` with its `issuer`): before adding one, check who can give
+  the role in the identity provider - every client given it acts for users.
+- **A delegation grant is presented by a service token of its own client**: a grant used with another kind of
+  token of the same identity stops working.
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.

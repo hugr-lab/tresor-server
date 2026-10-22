@@ -44,4 +44,4 @@ Research lives in the local, gitignored `design/` folder.
 | [028](028-chart-config-tpl/spec.md) | the chart's config through tpl (configTemplate) | implemented |
 | [029](029-tls-reload/spec.md) | the TLS certificate read again when it changes | implemented |
 | [030](030-whoami-name/spec.md) | whoami names the person; an IdP's own roles left out | implemented |
-| [031](031-actor-role/spec.md) | a delegation actor by role | accepted |
+| [031](031-actor-role/spec.md) | a delegation actor by role | implemented |
