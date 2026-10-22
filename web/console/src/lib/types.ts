@@ -68,7 +68,7 @@ export interface ServiceInfo {
   kek: { kind: string; current?: string; error?: string; previous?: { kind: string; key: string }[] } // previous: spec 011
   issuers: { issuer: string; audience: string; client_id?: string; exchange?: { client_id: string; client_auth: string } }[]
   sources: Source[]
-  policy: { admins: string[]; actors: { principal: string; verbs: string[] }[] }
+  policy: { admins: string[]; actors: { principal: string; verbs: string[]; issuer?: string }[] }
   audit: string
   ready: { ready: boolean; checks: Record<string, string> }
   data_keys?: boolean // spec 019: the store keeps data keys - their state at /admin/v1/data-keys

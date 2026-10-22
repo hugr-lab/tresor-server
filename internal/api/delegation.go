@@ -107,7 +107,8 @@ func (s *Server) delegated(r *http.Request, actor *auth.Caller) (*auth.Caller, *
 	if gr == nil {
 		return nil, nil, errors.New("no such delegation grant (or expired)")
 	}
-	if gr.actorOwner != actor.Owner() {
+	// the same service, by the same client: an actor by role (spec 031) acts as a service only
+	if gr.actorOwner != actor.Owner() || !actor.Service || actor.Client() != gr.actorClient {
 		return nil, nil, errors.New("a delegation grant presented by another actor")
 	}
 	user := gr.user
@@ -128,7 +129,7 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := actor.Client()
-	if !actor.Service || !s.policy.ActorAllowed(client, actor.Issuer) {
+	if !actor.Service || !s.policy.ActorAllowed(client, actor.Issuer, actor.Principals) {
 		problem(w, http.StatusForbidden, "actor_not_allowed", "this caller may not act for users")
 		return
 	}
@@ -171,7 +172,7 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// the user's tokens for what the server may mint (specs/010): now, while the subject token lives
-	mayMint := slices.Contains(s.policy.ActorVerbs(client, actor.Issuer), "use")
+	mayMint := slices.Contains(s.policy.ActorVerbs(client, actor.Issuer, actor.Principals), "use")
 	var minted map[string]mintResult
 	var gens []*generator
 	if mayMint {

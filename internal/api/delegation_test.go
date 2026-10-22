@@ -146,6 +146,38 @@ func TestDelegation(t *testing.T) {
 	}
 }
 
+// spec 031: one rule for every node group - a service whose token carries the role acts for users
+func TestActorByRole(t *testing.T) {
+	f := newFixture(t, "")
+	groupA := f.idp.Service(t, "duckdb-secrets", "group-a", "hugr_node")
+	groupB := f.idp.Service(t, "duckdb-secrets", "group-b", "hugr_node")
+	f.do("PUT", "/v1/secrets/lake", f.etl, s3Secret)
+	f.do("PUT", "/v1/secrets/lake/grants/n", f.etl, `{"principal":"role:hugr_node","verbs":["use"]}`)
+	for name, node := range map[string]string{"a": groupA, "b": groupB} {
+		g, r := f.grantFor(node, f.alice)
+		if g == "" || r.json(t)["actor"] != "client:group-"+name {
+			t.Fatalf("group %s: %d %s", name, r.status, r.body)
+		}
+		if m := f.do("GET", "/v1/secrets/lake", node, "", "Delegation", g); m.status != 200 {
+			t.Fatalf("group %s through its grant: %d", name, m.status)
+		}
+		if m := f.do("PUT", "/v1/secrets/new_"+name, node, s3Secret, "Delegation", g); m.status != 403 {
+			t.Fatalf("group %s: the rule has no create: %d", name, m.status)
+		}
+	}
+	// the role taken from the node: its grant no longer works
+	g, _ := f.grantFor(groupA, f.alice)
+	demoted := f.idp.Service(t, "duckdb-secrets", "group-a")
+	if m := f.do("GET", "/v1/secrets/lake", demoted, "", "Delegation", g); m.status == 200 {
+		t.Fatalf("the grant without the role: %d", m.status)
+	}
+	// a person with the role is no actor
+	person := f.idp.Person(t, "duckdb-secrets", "hugr_node")
+	if _, r := f.grantFor(person, f.alice); r.status != 403 || r.problemType(t) != "actor_not_allowed" {
+		t.Fatalf("a person with the role as actor: %d", r.status)
+	}
+}
+
 func TestExchangeRefusals(t *testing.T) {
 	f := newFixture(t, "")
 	node := f.idp.Service(t, "duckdb-secrets", "node")

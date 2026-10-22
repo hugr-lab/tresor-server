@@ -31,12 +31,24 @@ func (p *Policy) IsAdmin(c *auth.Caller) bool {
 	return slices.ContainsFunc(p.admins, c.Has)
 }
 
-// ActorVerbs is what the policy lets this server (its client: principal, from this issuer) do for users; nil
-// when it may not act at all.
-func (p *Policy) ActorVerbs(client, issuer string) []string {
+// ActorVerbs is what the policy lets this server (its client: principal, from this issuer; principals, its token's)
+// do for users; nil when it may not act at all. A rule naming the client wins; else one naming a role the server's
+// token carries, from the rule's issuer (spec 031: every node group of a platform under one rule). Services only:
+// with no client: principal, nothing.
+func (p *Policy) ActorVerbs(client, issuer string, principals []string) []string {
+	if client == "" {
+		return nil
+	}
+	same := func(a config.ActorRule) bool {
+		return a.Issuer == "" || config.IssuerKey(a.Issuer) == config.IssuerKey(issuer)
+	}
 	for _, a := range p.actors {
-		if client != "" && a.Principal == client &&
-			(a.Issuer == "" || config.IssuerKey(a.Issuer) == config.IssuerKey(issuer)) {
+		if a.Principal == client && same(a) {
+			return a.Verbs
+		}
+	}
+	for _, a := range p.actors {
+		if strings.HasPrefix(a.Principal, "role:") && a.Issuer != "" && same(a) && slices.Contains(principals, a.Principal) {
 			return a.Verbs
 		}
 	}
@@ -44,8 +56,8 @@ func (p *Policy) ActorVerbs(client, issuer string) []string {
 }
 
 // ActorAllowed says whether this server may act for users at all.
-func (p *Policy) ActorAllowed(client, issuer string) bool {
-	return len(p.ActorVerbs(client, issuer)) > 0
+func (p *Policy) ActorAllowed(client, issuer string, principals []string) bool {
+	return len(p.ActorVerbs(client, issuer, principals)) > 0
 }
 
 // Verbs is what the caller may do with sec (specs/009): `use` when a grant names one of its roles or groups,
@@ -55,7 +67,7 @@ func (p *Policy) ActorAllowed(client, issuer string) bool {
 func (p *Policy) Verbs(c *auth.Caller, sec *state.Secret) []string {
 	out := []string{} // a list, never null
 	if c.Actor != "" {
-		allowed := p.ActorVerbs(c.Actor, c.ActorIssuer)
+		allowed := p.ActorVerbs(c.Actor, c.ActorIssuer, c.ActorPrincipals)
 		if slices.Contains(allowed, "use") && Usable(sec, c.ActorPrincipals) {
 			out = append(out, "use")
 		}
@@ -83,7 +95,7 @@ func (p *Policy) MayCreate(c *auth.Caller) bool {
 	if !p.IsAdmin(c) {
 		return false
 	}
-	return c.Actor == "" || slices.Contains(p.ActorVerbs(c.Actor, c.ActorIssuer), "create")
+	return c.Actor == "" || slices.Contains(p.ActorVerbs(c.Actor, c.ActorIssuer, c.ActorPrincipals), "create")
 }
 
 // Usable: a grant gives `use` to one of these principals - a role: or group: grant only. A grant a store kept

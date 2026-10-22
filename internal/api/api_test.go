@@ -68,6 +68,7 @@ policy:
     - {principal: client:admin-node, verbs: [use, create, update, delete, annotate, grant]}
     - {principal: client:other-node, verbs: [use]}
     - {principal: client:pinned, issuer: https://elsewhere.example, verbs: [use]}
+    - {principal: role:hugr_node, issuer: ` + idp.URL + `, verbs: [use]}
 `))
 	if err != nil {
 		t.Fatal(err)
