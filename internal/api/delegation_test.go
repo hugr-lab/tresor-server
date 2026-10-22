@@ -165,6 +165,12 @@ func TestActorByRole(t *testing.T) {
 			t.Fatalf("group %s: the rule has no create: %d", name, m.status)
 		}
 	}
+	// the role taken from the node: its grant no longer works
+	g, _ := f.grantFor(groupA, f.alice)
+	demoted := f.idp.Service(t, "duckdb-secrets", "group-a")
+	if m := f.do("GET", "/v1/secrets/lake", demoted, "", "Delegation", g); m.status == 200 {
+		t.Fatalf("the grant without the role: %d", m.status)
+	}
 	// a person with the role is no actor
 	person := f.idp.Person(t, "duckdb-secrets", "hugr_node")
 	if _, r := f.grantFor(person, f.alice); r.status != 403 || r.problemType(t) != "actor_not_allowed" {

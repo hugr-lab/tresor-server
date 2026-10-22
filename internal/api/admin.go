@@ -123,7 +123,11 @@ func (s *Server) adminService(w http.ResponseWriter, r *http.Request) {
 	}
 	actors := []map[string]any{}
 	for _, a := range cfg.Policy.Actors {
-		actors = append(actors, map[string]any{"principal": a.Principal, "verbs": a.Verbs})
+		actor := map[string]any{"principal": a.Principal, "verbs": a.Verbs}
+		if a.Issuer != "" {
+			actor["issuer"] = a.Issuer // what scopes an actor by role
+		}
+		actors = append(actors, actor)
 	}
 	auditLevel := cfg.Audit.Level
 	if auditLevel == "" {

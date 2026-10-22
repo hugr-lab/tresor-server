@@ -107,7 +107,8 @@ func (s *Server) delegated(r *http.Request, actor *auth.Caller) (*auth.Caller, *
 	if gr == nil {
 		return nil, nil, errors.New("no such delegation grant (or expired)")
 	}
-	if gr.actorOwner != actor.Owner() {
+	// the same service, by the same client: an actor by role (spec 031) acts as a service only
+	if gr.actorOwner != actor.Owner() || !actor.Service || actor.Client() != gr.actorClient {
 		return nil, nil, errors.New("a delegation grant presented by another actor")
 	}
 	user := gr.user

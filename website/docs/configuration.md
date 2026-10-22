@@ -88,7 +88,10 @@ policy:
 Only a service's token counts (a person given the role is no actor), and a rule naming the client wins over a
 role's. A role is broader than a client id: whoever can give the role in the identity provider - to any of its
 clients - lets that client act for every user. Give such a role to service accounts only, and keep the verbs to
-`use` unless the nodes manage secrets for their users.
+`use` unless the nodes manage secrets for their users. A role rule is only as strong as the issuer's `service`
+rule: name the claim's value (`equals`) where people's tokens could carry the claim too. A token with roles of
+two rules gets the first rule's verbs, in the order listed. A grant stops working once its node's token no
+longer carries the role; revoking by actor is per client.
 
 For Microsoft Entra ID, see tresor's [Entra guide](https://hugr-lab.github.io/tresor/entra/).
 
