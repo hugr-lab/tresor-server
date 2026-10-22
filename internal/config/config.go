@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -686,10 +687,13 @@ type Issuer struct {
 	ServiceFlows []string `yaml:"service_flows"`
 	// AudienceParameter asks clients to send `audience=<audience>` on the IdP's requests: an IdP that picks a
 	// token's audience from that parameter rather than its configuration (Auth0; tresor specs/013).
-	AudienceParameter bool     `yaml:"audience_parameter"`
-	RolesClaim        string   `yaml:"roles_claim"`
-	GroupsClaim       string   `yaml:"groups_claim"`
-	Algorithms        []string `yaml:"algorithms"`
+	AudienceParameter bool   `yaml:"audience_parameter"`
+	RolesClaim        string `yaml:"roles_claim"`
+	// IgnoreRoles: roles of the roles claim never taken as principals - glob patterns (spec 030): an IdP's own,
+	// Keycloak's offline_access, uma_authorization, default-roles-*.
+	IgnoreRoles []string `yaml:"ignore_roles"`
+	GroupsClaim string   `yaml:"groups_claim"`
+	Algorithms  []string `yaml:"algorithms"`
 	// Service says how this issuer's client-credentials tokens are told apart from people's. Without
 	// it every caller of the issuer is a person: no claim is a service marker by convention (RFC 9068
 	// puts client_id into every access token, a person's included).
@@ -998,6 +1002,11 @@ func (c *Config) validate() error {
 		}
 		if len(is.Algorithms) == 0 {
 			is.Algorithms = []string{"RS256", "ES256"}
+		}
+		for j, p := range is.IgnoreRoles {
+			if _, err := path.Match(p, ""); err != nil || strings.TrimSpace(p) == "" {
+				return fmt.Errorf("issuers[%d].ignore_roles[%d] is not a pattern", i, j)
+			}
 		}
 		for name, path := range map[string]string{"ca_file": is.CAFile, "discovery_token_file": is.DiscoveryTokenFile} {
 			if path != "" && !filepath.IsAbs(path) {

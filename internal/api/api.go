@@ -420,14 +420,18 @@ func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
 			roles = append(roles, p)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"issuer":      c.Issuer,
 		"subject":     c.Subject,
 		"roles":       roles,
 		"actor":       nilIfEmpty(c.Actor),
 		"expires_at":  c.ExpiresAt.UTC().Format(time.RFC3339),
 		"permissions": map[string]any{"create": create},
-	})
+	}
+	if c.Name != "" { // for people to read only (tresor spec 041): never an identity
+		body["name"] = c.Name
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func nilIfEmpty(v string) any {

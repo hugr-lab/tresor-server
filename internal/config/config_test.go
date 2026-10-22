@@ -838,3 +838,14 @@ func TestStateVaultAuth(t *testing.T) {
 		}
 	}
 }
+
+// an issuer's ignore_roles are glob patterns (spec 030)
+func TestIgnoreRolesPatterns(t *testing.T) {
+	ok := strings.Replace(good, "audience: duckdb-secrets", "audience: duckdb-secrets\n    ignore_roles: [offline_access, 'default-roles-*']", 1)
+	if _, err := Parse([]byte(ok)); err != nil {
+		t.Fatalf("patterns: %v", err)
+	}
+	if _, err := Parse([]byte(strings.Replace(ok, "'default-roles-*'", "'[bad'", 1))); err == nil {
+		t.Fatal("a bad pattern: accepted")
+	}
+}
