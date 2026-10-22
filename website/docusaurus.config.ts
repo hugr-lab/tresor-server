@@ -19,7 +19,7 @@ const site = ionos
 const config: Config = {
   title: 'tresor-server',
   tagline: 'The secrets service behind tresor: state in your database, material under your KMS, on Azure first.',
-  favicon: 'img/favicon.ico',
+  favicon: 'img/tresor-favicon.svg',
 
   url: site.url,
   baseUrl: site.baseUrl,
@@ -75,8 +75,9 @@ const config: Config = {
     navbar: {
       title: 'tresor-server',
       logo: {
-        alt: 'Hugr Lab',
-        src: 'img/logo-circle.svg',
+        alt: 'tresor',
+        src: 'img/tresor-icon.svg',
+        srcDark: 'img/tresor-icon-dark.svg',
         href: '/',
       },
       items: [
