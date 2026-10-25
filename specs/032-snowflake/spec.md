@@ -58,7 +58,8 @@ build), a tresor-server on this machine (`scripts/dev/snowflake_live.sh` for the
   SECRET …, ACCESS_DELEGATION_MODE 'vended_credentials')` reads the rows, the token redacted;
 - per user: the owner signed in to DuckDB (`LOGIN 'device'`, Entra); the service minted their Snowflake token by
   OBO (scp `session:role:TRESOR_READER`, upn); DuckDB read the table as `TRESOR_PERSON`;
-- a reader of the secret needs `use` on the login as well (`403 mint_refused` otherwise) - see Follow-ups.
+- a reader of the secret needs `use` on the login as well (`403 mint_refused` otherwise) - see Follow-ups;
+- one ATTACH held 75 minutes: fine to 55, failing past the token's hour - see Follow-ups.
 
 Planned:
 
@@ -83,5 +84,7 @@ Planned:
   decide whether the secret's grant should carry the login's use (an admin wrote both), or the login be granted
   implicitly to the secret's readers, and what that means for per-user logins.
 
-- iceberg renews a token only with its own OAuth2 client; a generated token past its hour fails a long
-  `ATTACH` until it is attached again (checked live; if it bites, a tresor-side renewal).
+- **A long ATTACH**: checked live (one DuckDB session, PAT and key pair): the table read at 0, 30 and 55 minutes,
+  failed at 65 and 75 - iceberg keeps the token it read at `ATTACH` and renews only with an OAuth2 client of its
+  own. A session longer than the token's hour attaches again (the docs say so). A fix belongs in iceberg (look
+  the secret up again when its token expires) - for tresor's and DuckDB's side to raise.
