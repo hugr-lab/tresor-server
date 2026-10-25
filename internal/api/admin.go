@@ -129,6 +129,20 @@ func (s *Server) adminService(w http.ResponseWriter, r *http.Request) {
 		}
 		actors = append(actors, actor)
 	}
+	// what discovery says, and token_exchange only where an issuer has an exchange client
+	caps := []string{}
+	for name, on := range capabilities {
+		if on {
+			caps = append(caps, name)
+		}
+	}
+	slices.Sort(caps)
+	for _, is := range cfg.Issuers {
+		if is.Exchange != nil {
+			caps = append(caps, "token_exchange")
+			break
+		}
+	}
 	auditLevel := cfg.Audit.Level
 	if auditLevel == "" {
 		auditLevel = "all"
@@ -136,7 +150,7 @@ func (s *Server) adminService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"data_keys": s.console.Keys != nil, // their state: /admin/v1/data-keys
 		"version":   s.console.Version, "protocol": Protocol, "environment": cfg.UI.Environment,
-		"capabilities": []string{"write", "annotate", "delegation", "variables", "token_exchange"},
+		"capabilities": caps,
 		"state":        cfg.State.Kind, "kek": kek, "issuers": issuers, "sources": sources,
 		"policy": map[string]any{"admins": cfg.Policy.Admins, "actors": actors},
 		"audit":  auditLevel,
