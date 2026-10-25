@@ -19,7 +19,7 @@ and the secrets the caller's roles may use become part of DuckDB's own secret lo
 **Run it**: the image is `ghcr.io/hugr-lab/tresor-server` (`:edge` from main, `:vX.Y.Z` from a release); the Helm
 chart is `oci://ghcr.io/hugr-lab/charts/tresor-server`; recipes deploy it on
 [Azure Container Apps](deploy/azure-container-apps/README.md), [ECS](deploy/aws-ecs/README.md) and
-[Cloud Run](deploy/gcp-cloud-run/README.md).
+[Cloud Run](deploy/gcp-cloud-run/README.md); [Docker Compose](deploy/docker) runs it to try, or on one host.
 
 Status: 0.7.5. Releases are signed ([verifying](https://hugr-lab.github.io/tresor-server/security#verifying-the-artifacts));
 what is checked: [supported versions](https://hugr-lab.github.io/tresor-server/support); vulnerabilities:
