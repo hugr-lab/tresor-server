@@ -1,6 +1,6 @@
 # Spec 032: Snowflake - Iceberg through Horizon with generated tokens
 
-- **Status**: draft
+- **Status**: accepted (the owner, 2026-10-25: "вживую, trial"; PAT, key pair and per-user)
 - **Date**: 2026-10-25
 - **Author**: hugr lab
 
@@ -32,7 +32,8 @@ signs, and a user's own token from the identity provider (External OAuth).
   (`client_auth`: `key_file`, `keyvault`, `vault`, `awskms`, `gcpkms` - an RSA key), `token_urls`. A
   `jwt_assertion` login naming it sends its JWT (a minute's life) as `client_secret`, `grant_type`
   `client_credentials`, the login's `scope`.
-- **Per user**: no code expected; `mint+exchange` for the Snowflake resource's scope. Documented with Entra.
+- **Per user**: no code - `mint+exchange` (Entra On-Behalf-Of) for the Snowflake app's scope
+  `session:role:<ROLE>`; Snowflake's External OAuth integration maps `upn` to `login_name`.
 - **Docs**: a Snowflake recipe in Generated parameters: the iceberg secret (`TOKEN` generated, the catalog's
   URI), the `ATTACH` (`ACCESS_DELEGATION_MODE 'vended_credentials'` where needed), the three logins, the
   Snowflake side (the role, `session:role:`, PAT or `RSA_PUBLIC_KEY`, the External OAuth integration), and a
@@ -45,6 +46,18 @@ The PAT, the private key and users' tokens never leave the service; DuckDB gets 
 role. `token_urls` bound where a key's JWT goes; login hosts as for every login. Nothing logged but names.
 
 ## Testing
+
+Done 2026-10-25 against the owner's Snowflake Enterprise trial (AWS), DuckDB 2.0.0 and tresor v0.1.0 (its CI
+build), a tresor-server on this machine (`scripts/dev/snowflake_live.sh` for the Entra side):
+
+- the PAT and the key pair: Horizon's token endpoint gives an hour's token for `session:role:TRESOR_READER`;
+  Horizon lists the namespace, loads the table with vended S3 credentials; DuckDB `ATTACH … (TYPE iceberg,
+  SECRET …, ACCESS_DELEGATION_MODE 'vended_credentials')` reads the rows, the token redacted;
+- per user: the owner signed in to DuckDB (`LOGIN 'device'`, Entra); the service minted their Snowflake token by
+  OBO (scp `session:role:TRESOR_READER`, upn); DuckDB read the table as `TRESOR_PERSON`;
+- a reader of the secret needs `use` on the login as well (`403 mint_refused` otherwise) - see Follow-ups.
+
+Planned:
 
 - Go: the PAT form (no Basic, no client id), the Snowflake JWT's claims and signature, config refusals.
 - **Live** (owner's Snowflake trial; `scripts/dev/snowflake_live.sh up|check|down`): a Snowflake-managed
@@ -60,6 +73,12 @@ role. `token_urls` bound where a key's JWT goes; login hosts as for every login.
 - A `custom` (jq) login for the PAT: works today, but a PAT is common enough to be plain configuration.
 
 ## Follow-ups
+
+- **`use` on the login** (the owner, 2026-10-25: noted, to be thought through - not changed now): a secret that
+  generates from a service login (`mint+login://…`) is served only to a caller who holds `use` on the login as
+  well as on the secret (else `403 mint_refused`). Two grants for one thing an administrator meant as one; to
+  decide whether the secret's grant should carry the login's use (an admin wrote both), or the login be granted
+  implicitly to the secret's readers, and what that means for per-user logins.
 
 - iceberg renews a token only with its own OAuth2 client; a generated token past its hour fails a long
   `ATTACH` until it is attached again (checked live; if it bites, a tresor-side renewal).
