@@ -44,7 +44,12 @@ func service(t *testing.T) (*httptest.Server, *int) {
 		_ = r.ParseForm()
 		id, secret, _ := r.BasicAuth()
 		switch {
-		case r.Form.Get("grant_type") == "client_credentials" && id == "app" && secret == "s3cret":
+		// Snowflake's PAT (spec 032): the secret in the form, no client id, no Basic
+		case r.Form.Get("grant_type") == "client_credentials" && id == "" && r.Form.Get("client_id") == "" &&
+			r.Form.Get("client_secret") == "pat-1" && r.Form.Get("scope") == "session:role:READER":
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at-pat", "expires_in": 3600})
+		case r.Form.Get("grant_type") == "client_credentials" && id == "app" && secret == "s3cret" &&
+			r.Form.Get("client_secret") == "":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at-cc", "expires_in": 300, "token_type": "Bearer"})
 		case r.Form.Get("grant_type") == "password" && r.Form.Get("username") == "u" && r.Form.Get("password") == "p":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at-pw", "refresh_token": "rt", "expires_in": 300})
@@ -118,6 +123,18 @@ func TestOAuth2Flows(t *testing.T) {
 	res, _, err := c.Login(context.Background(), cc)
 	if err != nil || res.Fields["access_token"] != "at-cc" || res.Fields["token_type"] != "Bearer" {
 		t.Fatalf("client credentials: %+v %v", res, err)
+	}
+	pat, err := Parse(map[string]string{"flow": FlowClientCredentials, "token_url": "/oauth/token",
+		"client_secret": "pat-1", "scope": "session:role:READER"}, []string{srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, _, err := c.Login(context.Background(), pat); err != nil || res.Fields["access_token"] != "at-pat" {
+		t.Fatalf("a PAT: %+v %v", res, err)
+	}
+	if _, err := Parse(map[string]string{"flow": FlowClientCredentials, "token_url": "/oauth/token", "client_id": "app"},
+		[]string{srv.URL}); err == nil {
+		t.Fatal("client credentials without a secret")
 	}
 	pw, _ := Parse(map[string]string{"flow": FlowPassword, "token_url": "/oauth/token", "username": "u",
 		"password": "p", "client_id": "app"}, []string{srv.URL})
@@ -269,10 +286,13 @@ func TestInputsAndPaths(t *testing.T) {
 }
 
 type fakeID struct {
-	kind  string
-	check error
-	res   *Result
+	kind     string
+	check    error
+	res      *Result
+	asSecret bool
 }
+
+func (f fakeID) AssertionAsSecret() bool { return f.asSecret }
 
 func (f fakeID) Kind() string                                 { return f.kind }
 func (f fakeID) Check(*Spec) error                            { return f.check }
@@ -302,6 +322,7 @@ func TestIdentityFlows(t *testing.T) {
 		"db":    fakeID{kind: "azure", res: &Result{Fields: map[string]string{"access_token": "entra"}, Expiry: time.Now().Add(time.Hour)}},
 		"wide":  fakeID{kind: "azure", check: errors.New("not for that scope")},
 		"signr": fakeID{kind: "jwt"},
+		"sf":    fakeID{kind: "jwt", asSecret: true},
 	}
 	far, _ := Parse(map[string]string{"flow": FlowRule, "identity": "db", "scope": "x"}, []string{"mssql://elsewhere.example"})
 	if c.CheckIdentity(far) == nil {
@@ -331,6 +352,19 @@ func TestIdentityFlows(t *testing.T) {
 		form.Get("grant_type") != "urn:ietf:params:oauth:grant-type:jwt-bearer" || form.Get("client_assertion") != "" {
 		t.Fatalf("the JWT profile: %v %v", err, form)
 	}
+	// a Snowflake key pair: the JWT is the client's secret, no client id, no client assertion
+	jwt.Identity, jwt.Grant, jwt.OAuthScope = "sf", "", "session:role:READER"
+	if res, _, err := c.Login(context.Background(), jwt); err != nil || res.Fields["access_token"] != "at-jwt" ||
+		form.Get("client_secret") != "signed-for-"+tok.URL+"/token" || form.Get("client_id") != "" ||
+		form.Get("client_assertion") != "" || form.Get("grant_type") != "client_credentials" ||
+		form.Get("scope") != "session:role:READER" {
+		t.Fatalf("a Snowflake key pair: %+v %v %v", res, err, form)
+	}
+	jwt.Grant = "jwt_bearer"
+	if _, _, err := c.Login(context.Background(), jwt); err == nil {
+		t.Fatal("a secret-assertion as the grant")
+	}
+	jwt.Grant, jwt.OAuthScope = "", ""
 	jwt.Identity = "db"
 	if _, _, err := c.Login(context.Background(), jwt); err == nil {
 		t.Fatal("a jwt_assertion with a rule's identity")

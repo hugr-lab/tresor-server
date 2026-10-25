@@ -68,6 +68,11 @@ type Asserter interface {
 	For(tokenURL string) bool
 }
 
+// SecretAsserter is an Asserter whose assertion is the client's secret, with no client id (Snowflake's key pair).
+type SecretAsserter interface {
+	AssertionAsSecret() bool
+}
+
 // Bounded is a rule's identity: the scopes (where its credentials may go) the operator lets a login use.
 type Bounded interface {
 	Destinations() []string
@@ -159,8 +164,9 @@ func Parse(params map[string]string, scope []string) (*Spec, error) {
 			return nil, errors.New("a basic login has a username and a password")
 		}
 	case FlowClientCredentials:
-		if s.TokenURL == "" || s.ClientID == "" || s.ClientSecret == "" {
-			return nil, errors.New("an oauth2_client_credentials login has a token_url, a client_id and a client_secret")
+		// no client_id: the secret alone, in the form - Snowflake's PAT (spec 032)
+		if s.TokenURL == "" || s.ClientSecret == "" {
+			return nil, errors.New("an oauth2_client_credentials login has a token_url and a client_secret (and a client_id)")
 		}
 	case FlowPassword:
 		if s.TokenURL == "" || s.Username == "" || s.Password == "" {
@@ -355,6 +361,9 @@ func (c *Client) CheckIdentity(s *Spec) error {
 		if !a.For(target) {
 			return fmt.Errorf("the identity %q signs for other token endpoints (the operator's)", s.Identity)
 		}
+		if sa, ok := a.(SecretAsserter); ok && sa.AssertionAsSecret() && s.Grant == "jwt_bearer" {
+			return fmt.Errorf("the identity %q's assertion is a client secret: grant client_credentials", s.Identity)
+		}
 	}
 	if b, ok := id.(Bounded); ok && s.Flow == FlowRule {
 		dest := &Spec{Scope: b.Destinations()}
@@ -507,7 +516,9 @@ func (c *Client) oauth(ctx context.Context, s *Spec, form url.Values) (*Result, 
 		if err != nil {
 			return nil, nil, outage("the client's assertion could not be made")
 		}
-		if s.Grant == "jwt_bearer" {
+		if sa, ok := asserter.(SecretAsserter); ok && sa.AssertionAsSecret() {
+			form.Set("client_secret", assertion)
+		} else if s.Grant == "jwt_bearer" {
 			form.Set("assertion", assertion)
 		} else {
 			form.Set("client_id", asserter.ClientID())
@@ -516,6 +527,8 @@ func (c *Client) oauth(ctx context.Context, s *Spec, form url.Values) (*Result, 
 		}
 	} else if s.ClientSecret == "" && s.ClientID != "" {
 		form.Set("client_id", s.ClientID)
+	} else if s.ClientSecret != "" && s.ClientID == "" {
+		form.Set("client_secret", s.ClientSecret) // a secret that names its client: Snowflake's PAT
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -523,7 +536,7 @@ func (c *Client) oauth(ctx context.Context, s *Spec, form url.Values) (*Result, 
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	if s.ClientSecret != "" && s.Flow != FlowJWT {
+	if s.ClientSecret != "" && s.ClientID != "" && s.Flow != FlowJWT {
 		req.SetBasicAuth(url.QueryEscape(s.ClientID), url.QueryEscape(s.ClientSecret))
 	}
 	resp, err := c.call(req)

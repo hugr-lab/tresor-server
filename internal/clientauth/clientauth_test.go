@@ -136,3 +136,26 @@ func TestCertificateFirstAndX5T(t *testing.T) {
 		t.Fatal("a 1024-bit RSA key")
 	}
 }
+
+// spec 032: Snowflake's key-pair JWT - iss the qualified user and the key's fingerprint, sub the qualified user,
+// upper-cased, a minute's life, RS256; an EC key refused
+func TestSnowflake(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	src, err := Snowflake("myorg.acct", "tresor_svc", "SHA256:abc=", rsaSigner{key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertion, err := src(ctx, "https://x/token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := verify(t, assertion, &key.PublicKey, jose.RS256)
+	if c.Issuer != "MYORG-ACCT.TRESOR_SVC.SHA256:abc=" || c.Subject != "MYORG-ACCT.TRESOR_SVC" ||
+		c.Expiry.Time().Sub(c.IssuedAt.Time()) != time.Minute || len(c.Audience) != 0 {
+		t.Fatalf("claims: %+v", c)
+	}
+	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if _, err := Snowflake("a", "u", "SHA256:abc=", ecSigner{ec}); err == nil {
+		t.Fatal("an EC key for Snowflake")
+	}
+}

@@ -131,7 +131,7 @@ type Dynamic struct {
 // Identity is a workload identity, or a client's signing key, a service login may use (spec 023).
 type Identity struct {
 	Name string `yaml:"name"` // what a login's identity names
-	Kind string `yaml:"kind"` // azure | gcp | aws_rds | aws_sts | jwt
+	Kind string `yaml:"kind"` // azure | gcp | aws_rds | aws_sts | jwt | snowflake
 	// azure: a user-assigned identity's client id (managed, or workload with its federated credential); empty -
 	// the service's own (azure.identity). gcp: a service account impersonated; empty - the service's own.
 	ClientID       string `yaml:"client_id"`
@@ -149,8 +149,13 @@ type Identity struct {
 	// awskms, gcpkms, key_file); Audience is the assertion's aud (default: the token endpoint).
 	Client   *ExchangeClient `yaml:"client"`
 	Audience string          `yaml:"audience"`
-	// TokenURLs: jwt - the token endpoints its assertions may go to (one is redeemable there).
+	// TokenURLs: jwt, snowflake - the token endpoints its assertions may go to (one is redeemable there).
 	TokenURLs []string `yaml:"token_urls"`
+	// Account, User, PublicKeyFP: snowflake (spec 032) - a key-pair login's account identifier, user and the
+	// public key's fingerprint (SHA256:..., as DESC USER shows it); Client holds the private key (no client id).
+	Account     string `yaml:"account"`
+	User        string `yaml:"user"`
+	PublicKeyFP string `yaml:"public_key_fp"`
 	// Destinations: azure, gcp, aws_rds, aws_sts - where its credentials may go: a rule's scope within these
 	// (mssql://sql.corp.example, postgres://db.example:5432, s3://lake).
 	Destinations []string `yaml:"destinations"`
@@ -161,7 +166,10 @@ var ownScopes = []string{"https://vault.azure.net/.default", "https://managedhsm
 	"https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/cloudkms"}
 
 // IdentityKinds are the kinds of dynamic.identities.
-var IdentityKinds = []string{"azure", "gcp", "aws_rds", "aws_sts", "jwt"}
+var IdentityKinds = []string{"azure", "gcp", "aws_rds", "aws_sts", "jwt", "snowflake"}
+
+// snowflakeFP is a public key's fingerprint as Snowflake shows it: SHA256: and the digest, base64.
+var snowflakeFP = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{43}=$`)
 
 // CORS: the web pages that call the service - tresor in DuckDB-wasm (spec 022). The console's hosts are
 // ui.allowed_origins; neither implies the other.
@@ -1526,13 +1534,15 @@ func (c *Config) validateIdentities() error {
 		set := map[string]bool{"client_id": id.ClientID != "", "service_account": id.ServiceAccount != "",
 			"scopes": len(id.Scopes) > 0, "role_arn": id.RoleARN != "", "endpoints": len(id.Endpoints) > 0,
 			"users": len(id.Users) > 0, "duration": id.Duration != 0, "client": id.Client != nil,
-			"audience": id.Audience != "", "token_urls": len(id.TokenURLs) > 0, "destinations": len(id.Destinations) > 0}
+			"audience": id.Audience != "", "token_urls": len(id.TokenURLs) > 0, "destinations": len(id.Destinations) > 0,
+			"account": id.Account != "", "user": id.User != "", "public_key_fp": id.PublicKeyFP != ""}
 		allowed, ok := map[string][]string{
-			"azure":   {"client_id", "scopes", "destinations"},
-			"gcp":     {"service_account", "scopes", "destinations"},
-			"aws_rds": {"role_arn", "endpoints", "users", "destinations"},
-			"aws_sts": {"role_arn", "duration", "destinations"},
-			"jwt":     {"client", "audience", "token_urls"},
+			"azure":     {"client_id", "scopes", "destinations"},
+			"gcp":       {"service_account", "scopes", "destinations"},
+			"aws_rds":   {"role_arn", "endpoints", "users", "destinations"},
+			"aws_sts":   {"role_arn", "duration", "destinations"},
+			"jwt":       {"client", "audience", "token_urls"},
+			"snowflake": {"client", "token_urls", "account", "user", "public_key_fp"},
 		}[id.Kind]
 		if !ok {
 			return fmt.Errorf("%s.kind is %s", where, strings.Join(IdentityKinds, " | "))
@@ -1542,7 +1552,7 @@ func (c *Config) validateIdentities() error {
 				return fmt.Errorf("%s.%s is not for kind %s", where, name, id.Kind)
 			}
 		}
-		if id.Kind != "jwt" && len(id.Destinations) == 0 {
+		if id.Kind != "jwt" && id.Kind != "snowflake" && len(id.Destinations) == 0 {
 			return fmt.Errorf("%s: a rule's identity lists its destinations (where its credentials may go)", where)
 		}
 		own := (id.Kind == "azure" && id.ClientID == "") || (id.Kind == "gcp" && id.ServiceAccount == "")
@@ -1583,6 +1593,34 @@ func (c *Config) validateIdentities() error {
 			}
 			if c.AWS.Region == "" {
 				return fmt.Errorf("%s: aws_sts needs aws.region", where)
+			}
+		case "snowflake":
+			if id.Account == "" || id.User == "" || !snowflakeFP.MatchString(id.PublicKeyFP) {
+				return fmt.Errorf("%s: a snowflake identity has an account, a user and the public key's public_key_fp "+
+					"(SHA256:..., as DESC USER shows it)", where)
+			}
+			if len(id.TokenURLs) == 0 {
+				return fmt.Errorf("%s: a snowflake identity lists its token_urls (where its assertions may go)", where)
+			}
+			ex := id.Client
+			if ex == nil {
+				return fmt.Errorf("%s: a snowflake identity has a client (client_auth and its key)", where)
+			}
+			if ex.ClientID != "" || ex.ClientSecretEnv != "" || ex.AssertionFile != "" || ex.KID != "" || ex.X5T != "" ||
+				ex.AssertionAudience != "" || ex.Grant != "" || ex.OmitClientID {
+				return fmt.Errorf("%s.client: a snowflake key names no client_id, kid, x5t or audience - only client_auth "+
+					"and key (or key_file)", where)
+			}
+			switch ex.ClientAuth {
+			case "keyvault", "vault", "awskms", "gcpkms", "key_file":
+			default:
+				return fmt.Errorf("%s.client.client_auth is keyvault, vault, awskms, gcpkms or key_file", where)
+			}
+			// the key's checks are a signed client's: a placeholder id and kid stand for what Snowflake needs not
+			probe := *ex
+			probe.ClientID, probe.KID = "snowflake", "snowflake"
+			if err := probe.validate(c.Azure.Identity, c.Vault.used(), c.AWS.Region != ""); err != nil {
+				return fmt.Errorf("%s.client: %w", where, err)
 			}
 		case "jwt":
 			if id.Client == nil {

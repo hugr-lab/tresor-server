@@ -772,11 +772,12 @@ func TestStateMAC(t *testing.T) {
 // dynamic.identities (spec 023): each bounded to what it may be asked for
 func TestDynamicIdentities(t *testing.T) {
 	ok := map[string]string{
-		"azure":   "azure: {identity: managed}\ndynamic: {identities: [{name: sql, kind: azure, scopes: [https://database.windows.net/.default], destinations: ['mssql://sql.example']}]}\n",
-		"gcp":     "dynamic: {identities: [{name: cs, kind: gcp, service_account: a@p.iam.gserviceaccount.com, scopes: [https://www.googleapis.com/auth/sqlservice.login], destinations: ['postgres://cs']}]}\n",
-		"aws_rds": "aws: {region: eu-west-1}\ndynamic: {identities: [{name: rds, kind: aws_rds, endpoints: ['db:5432'], users: [catalog], destinations: ['postgres://db:5432']}]}\n",
-		"aws_sts": "aws: {region: eu-west-1}\ndynamic: {identities: [{name: lake, kind: aws_sts, role_arn: 'arn:aws:iam::1:role/r', destinations: ['s3://lake']}]}\n",
-		"hosts":   "dynamic: {login_hosts: [crm.example, '*.corp.example']}\n",
+		"azure":     "azure: {identity: managed}\ndynamic: {identities: [{name: sql, kind: azure, scopes: [https://database.windows.net/.default], destinations: ['mssql://sql.example']}]}\n",
+		"gcp":       "dynamic: {identities: [{name: cs, kind: gcp, service_account: a@p.iam.gserviceaccount.com, scopes: [https://www.googleapis.com/auth/sqlservice.login], destinations: ['postgres://cs']}]}\n",
+		"aws_rds":   "aws: {region: eu-west-1}\ndynamic: {identities: [{name: rds, kind: aws_rds, endpoints: ['db:5432'], users: [catalog], destinations: ['postgres://db:5432']}]}\n",
+		"aws_sts":   "aws: {region: eu-west-1}\ndynamic: {identities: [{name: lake, kind: aws_sts, role_arn: 'arn:aws:iam::1:role/r', destinations: ['s3://lake']}]}\n",
+		"hosts":     "dynamic: {login_hosts: [crm.example, '*.corp.example']}\n",
+		"snowflake": "dynamic: {identities: [{name: sf, kind: snowflake, account: myorg-acct, user: TRESOR_SVC, public_key_fp: 'SHA256:3cKufoNoj868or8W/Uc5jnMy+wZOzm83s5rO0sTeQAY=', client: {client_auth: key_file, key_file: /k.p8}, token_urls: ['https://myorg-acct.snowflakecomputing.com/polaris/api/catalog/v1/oauth/tokens']}]}\n",
 	}
 	for name, extra := range ok {
 		if _, err := Parse([]byte(good + extra)); err != nil {
@@ -784,21 +785,26 @@ func TestDynamicIdentities(t *testing.T) {
 		}
 	}
 	bad := map[string]string{
-		"azure, no scopes":        "azure: {identity: managed}\ndynamic: {identities: [{name: sql, kind: azure}]}\n",
-		"azure, no identity":      "dynamic: {identities: [{name: sql, kind: azure, scopes: [x]}]}\n",
-		"a name twice":            "dynamic: {identities: [{name: a, kind: gcp, scopes: [x]}, {name: a, kind: gcp, scopes: [y]}]}\n",
-		"an unknown kind":         "dynamic: {identities: [{name: a, kind: magic}]}\n",
-		"a field of another":      "dynamic: {identities: [{name: a, kind: gcp, scopes: [x], role_arn: r}]}\n",
-		"rds, no users":           "aws: {region: eu-west-1}\ndynamic: {identities: [{name: rds, kind: aws_rds, endpoints: ['db:5432']}]}\n",
-		"sts, no role":            "aws: {region: eu-west-1}\ndynamic: {identities: [{name: s, kind: aws_sts}]}\n",
-		"sts, too long":           "aws: {region: eu-west-1}\ndynamic: {identities: [{name: s, kind: aws_sts, role_arn: r, duration: 24h}]}\n",
-		"jwt, a secret client":    "dynamic: {identities: [{name: j, kind: jwt, client: {client_id: a, client_auth: secret, client_secret_env: X}}]}\n",
-		"a host with a path":      "dynamic: {login_hosts: [crm.example/x]}\n",
-		"a margin over an hour":   "dynamic: {margin: 2h}\n",
-		"no destinations":         "aws: {region: eu-west-1}\ndynamic: {identities: [{name: s, kind: aws_sts, role_arn: r}]}\n",
-		"own identity, KEK":       "azure: {identity: managed}\ndynamic: {identities: [{name: v, kind: azure, scopes: [https://vault.azure.net/.default], destinations: [x://y]}]}\n",
-		"own gcp, cloud-platform": "dynamic: {identities: [{name: g, kind: gcp, scopes: [https://www.googleapis.com/auth/cloud-platform], destinations: [x://y]}]}\n",
-		"jwt, no token_urls":      "dynamic: {identities: [{name: j, kind: jwt, client: {client_id: a, client_auth: key_file, key_file: /k}}]}\n",
+		"azure, no scopes":          "azure: {identity: managed}\ndynamic: {identities: [{name: sql, kind: azure}]}\n",
+		"azure, no identity":        "dynamic: {identities: [{name: sql, kind: azure, scopes: [x]}]}\n",
+		"a name twice":              "dynamic: {identities: [{name: a, kind: gcp, scopes: [x]}, {name: a, kind: gcp, scopes: [y]}]}\n",
+		"an unknown kind":           "dynamic: {identities: [{name: a, kind: magic}]}\n",
+		"a field of another":        "dynamic: {identities: [{name: a, kind: gcp, scopes: [x], role_arn: r}]}\n",
+		"rds, no users":             "aws: {region: eu-west-1}\ndynamic: {identities: [{name: rds, kind: aws_rds, endpoints: ['db:5432']}]}\n",
+		"sts, no role":              "aws: {region: eu-west-1}\ndynamic: {identities: [{name: s, kind: aws_sts}]}\n",
+		"sts, too long":             "aws: {region: eu-west-1}\ndynamic: {identities: [{name: s, kind: aws_sts, role_arn: r, duration: 24h}]}\n",
+		"jwt, a secret client":      "dynamic: {identities: [{name: j, kind: jwt, client: {client_id: a, client_auth: secret, client_secret_env: X}}]}\n",
+		"a host with a path":        "dynamic: {login_hosts: [crm.example/x]}\n",
+		"a margin over an hour":     "dynamic: {margin: 2h}\n",
+		"no destinations":           "aws: {region: eu-west-1}\ndynamic: {identities: [{name: s, kind: aws_sts, role_arn: r}]}\n",
+		"own identity, KEK":         "azure: {identity: managed}\ndynamic: {identities: [{name: v, kind: azure, scopes: [https://vault.azure.net/.default], destinations: [x://y]}]}\n",
+		"own gcp, cloud-platform":   "dynamic: {identities: [{name: g, kind: gcp, scopes: [https://www.googleapis.com/auth/cloud-platform], destinations: [x://y]}]}\n",
+		"snowflake, no fingerprint": strings.Replace("dynamic: {identities: [{name: sf, kind: snowflake, account: myorg-acct, user: TRESOR_SVC, public_key_fp: 'SHA256:3cKufoNoj868or8W/Uc5jnMy+wZOzm83s5rO0sTeQAY=', client: {client_auth: key_file, key_file: /k.p8}, token_urls: ['https://myorg-acct.snowflakecomputing.com/polaris/api/catalog/v1/oauth/tokens']}]}\n", "public_key_fp: 'SHA256:3cKufoNoj868or8W/Uc5jnMy+wZOzm83s5rO0sTeQAY='", "public_key_fp: abc", 1),
+		"snowflake, a client id":    strings.Replace("dynamic: {identities: [{name: sf, kind: snowflake, account: myorg-acct, user: TRESOR_SVC, public_key_fp: 'SHA256:3cKufoNoj868or8W/Uc5jnMy+wZOzm83s5rO0sTeQAY=', client: {client_auth: key_file, key_file: /k.p8}, token_urls: ['https://myorg-acct.snowflakecomputing.com/polaris/api/catalog/v1/oauth/tokens']}]}\n", "client_auth: key_file", "client_id: x, client_auth: key_file", 1),
+		"snowflake, a secret":       strings.Replace("dynamic: {identities: [{name: sf, kind: snowflake, account: myorg-acct, user: TRESOR_SVC, public_key_fp: 'SHA256:3cKufoNoj868or8W/Uc5jnMy+wZOzm83s5rO0sTeQAY=', client: {client_auth: key_file, key_file: /k.p8}, token_urls: ['https://myorg-acct.snowflakecomputing.com/polaris/api/catalog/v1/oauth/tokens']}]}\n", "client_auth: key_file, key_file: /k.p8", "client_auth: secret", 1),
+		"snowflake, no token_urls":  strings.Replace("dynamic: {identities: [{name: sf, kind: snowflake, account: myorg-acct, user: TRESOR_SVC, public_key_fp: 'SHA256:3cKufoNoj868or8W/Uc5jnMy+wZOzm83s5rO0sTeQAY=', client: {client_auth: key_file, key_file: /k.p8}, token_urls: ['https://myorg-acct.snowflakecomputing.com/polaris/api/catalog/v1/oauth/tokens']}]}\n", "token_urls", "audience", 1),
+		"snowflake, no user":        strings.Replace("dynamic: {identities: [{name: sf, kind: snowflake, account: myorg-acct, user: TRESOR_SVC, public_key_fp: 'SHA256:3cKufoNoj868or8W/Uc5jnMy+wZOzm83s5rO0sTeQAY=', client: {client_auth: key_file, key_file: /k.p8}, token_urls: ['https://myorg-acct.snowflakecomputing.com/polaris/api/catalog/v1/oauth/tokens']}]}\n", "user: TRESOR_SVC, ", "", 1),
+		"jwt, no token_urls":        "dynamic: {identities: [{name: j, kind: jwt, client: {client_id: a, client_auth: key_file, key_file: /k}}]}\n",
 	}
 	for name, extra := range bad {
 		if _, err := Parse([]byte(good + extra)); err == nil {
