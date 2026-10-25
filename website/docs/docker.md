@@ -21,7 +21,7 @@ open http://127.0.0.1:8443/ui/                # the console
 ```
 
 - **Nothing is a default**: the first run makes the KEK, every password and the services' secrets, in the
-  volume `tresor_data`; `init passwords` shows them. `docker compose down -v` deletes them with the state.
+  volume `tresor_data`; `init passwords` shows them. `docker compose --profile seed down -v` deletes them with the state.
 - **Who is there**: `anna` (`secrets_admin`: manages secrets and grants), `jonas` (`analysts`: uses what is
   granted); the services `etl` (an administrator) and `node` (role `nodes`, which may act for users -
   [an actor by role](configuration.md)).

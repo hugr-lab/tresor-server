@@ -42,7 +42,7 @@ clientid='{"name":"client_id","protocol":"openid-connect","protocolMapper":"oidc
 user() { printf '{"username":"%s","enabled":true,"email":"%s@example.test","emailVerified":true,"firstName":"%s","lastName":"%s","credentials":[{"type":"password","value":"%s","temporary":false}],"realmRoles":["%s"]}' "$1" "$1" "$2" "$3" "$4" "$5"; }
 service() { printf '{"clientId":"%s","publicClient":false,"secret":"%s","standardFlowEnabled":false,"serviceAccountsEnabled":true,"directAccessGrantsEnabled":false,"protocolMappers":[%s,%s]}' "$1" "$2" "$audience" "$clientid"; }
 account() { printf '{"username":"service-account-%s","enabled":true,"serviceAccountClientId":"%s","realmRoles":["%s"]}' "$1" "$1" "$2"; }
-cat >/realm/realm.json <<JSON
+cat >"$d/realm.json" <<JSON
 {"realm":"tresor","enabled":true,"sslRequired":"none","accessTokenLifespan":300,"oauth2DeviceCodeLifespan":600,
  "roles":{"realm":[{"name":"secrets_admin"},{"name":"analysts"},{"name":"nodes"}]},
  "clients":[
@@ -83,7 +83,7 @@ YAML
 # who reads what: the service (nonroot, 65532) its KEK, configuration and state; Keycloak (1000) the realm and
 # its admin's password; the passwords and the etl secret stay root's
 chown -R 65532:65532 "$d/state" "$d/kek" "$d/server.yaml"
-chown 1000 "$d/keycloak-admin" /realm/realm.json
-chmod 0400 "$d/keycloak-admin" "$d/kek"
-chmod 0755 "$d" /realm
+chown 1000 "$d/keycloak-admin" "$d/realm.json"
+chmod 0400 "$d/keycloak-admin" "$d/kek" "$d/realm.json"
+chmod 0755 "$d"
 echo "init: made - docker compose run --rm init passwords"

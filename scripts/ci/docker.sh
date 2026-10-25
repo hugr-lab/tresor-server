@@ -8,7 +8,7 @@ cd "$root/deploy/docker"
 export TRESOR_IMAGE="${TRESOR_IMAGE:-tresor-server:ci}"
 [ -n "${DOCKER_SKIP_BUILD:-}" ] || docker build -q -t "$TRESOR_IMAGE" "$root" >/dev/null
 cleanup() {
-	docker compose down -v >/dev/null 2>&1 || true
+	docker compose --profile seed down -v >/dev/null 2>&1 || true
 	TRESOR_DOMAIN=localhost docker compose -f compose.host.yaml down -v >/dev/null 2>&1 || true
 	rm -rf host/secrets host/server.yaml
 }
@@ -29,7 +29,7 @@ code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token"
 [ "$code" = 404 ] || { echo "docker: the node read warehouse, granted only to analysts: $code"; exit 1; }
 unset token
 curl -sf -o /dev/null http://127.0.0.1:8443/ui/ || { echo "docker: no console"; exit 1; }
-docker compose down -v >/dev/null 2>&1
+docker compose --profile seed down -v >/dev/null 2>&1
 echo "docker: the try-it stand: ready, seeded, a node reads what it is granted, the console answers"
 
 echo "docker: the one-host recipe (localhost)"
