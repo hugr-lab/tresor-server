@@ -1,0 +1,59 @@
+# tresor-server on one host (spec 033): Caddy terminates TLS with a certificate from Let's Encrypt for your
+# domain and forwards to the service (tls.offload); your identity provider; SQLite in a volume, or PostgreSQL.
+#
+#   cp host/server.example.yaml host/server.yaml       # your issuer, admins, domain
+#   mkdir -m 700 host/secrets && openssl rand -base64 32 > host/secrets/kek && chmod 644 host/secrets/kek
+#   echo TRESOR_DOMAIN=secrets.example.com > .env           # read by every docker compose command here
+#   docker compose -f compose.host.yaml up -d
+#
+# The secrets' directory is the host's to keep closed (0700); its files are read in the containers by their
+# own users (tresor runs as nonroot, PostgreSQL as postgres), hence 0644.
+# PostgreSQL instead of SQLite: `openssl rand -hex 24 > host/secrets/pg-password`, state as in
+# host/server.example.yaml's comment, and `--profile postgres`. Back up host/secrets/kek: the state is sealed
+# under it - without it nothing in the database opens.
+name: tresor-host
+
+services:
+  caddy:
+    image: caddy:2.10
+    command: ["caddy", "reverse-proxy", "--from", "${TRESOR_DOMAIN:?set TRESOR_DOMAIN}", "--to", "tresor:8080"]
+    ports: ["80:80", "443:443"]
+    volumes: ["caddy:/data"]
+    restart: unless-stopped
+
+  # the state volume is the service's (nonroot, 65532): made so before it starts
+  init:
+    image: alpine:3.22
+    command: ["chown", "65532:65532", "/var/lib/tresor"]
+    volumes: ["state:/var/lib/tresor"]
+    restart: "no"
+
+  tresor:
+    image: ${TRESOR_IMAGE:-ghcr.io/hugr-lab/tresor-server:v0.7.5}
+    command: ["-config", "/etc/tresor/server.yaml"]
+    volumes: ["./host/server.yaml:/etc/tresor/server.yaml:ro", "state:/var/lib/tresor"]
+    secrets: [kek]
+    restart: unless-stopped
+    depends_on:
+      init: {condition: service_completed_successfully}
+    # no published port: Caddy is the way in
+
+  postgres:
+    profiles: [postgres]
+    image: postgres:17
+    environment:
+      POSTGRES_USER: tresor
+      POSTGRES_DB: tresor
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg-password
+    volumes: ["pg:/var/lib/postgresql/data"]
+    secrets: [pg-password]
+    restart: unless-stopped
+
+secrets:
+  kek: {file: ./host/secrets/kek}
+  pg-password: {file: ./host/secrets/pg-password}
+
+volumes:
+  caddy:
+  state:
+  pg:
