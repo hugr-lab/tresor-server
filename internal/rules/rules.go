@@ -187,7 +187,11 @@ type JWT struct {
 	ID        string
 	Source    func(ctx context.Context, tokenURL string) (string, error)
 	TokenURLs []string // where its assertions may go (the operator's): one is redeemable there
+	// AsSecret: the assertion is the client's secret, with no client id (Snowflake's key pair, spec 032)
+	AsSecret bool
 }
+
+func (j JWT) AssertionAsSecret() bool { return j.AsSecret }
 
 func (j JWT) For(tokenURL string) bool { return slices.Contains(j.TokenURLs, tokenURL) }
 

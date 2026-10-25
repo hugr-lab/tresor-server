@@ -112,6 +112,31 @@ func JWT(clientID string, h Header, aud Audience, signer Signer) Source {
 	}
 }
 
+// Snowflake is a key-pair JWT as Snowflake takes it (spec 032): iss <ACCOUNT>.<USER>.SHA256:<fp> (the public key's
+// fingerprint, as DESC USER shows it), sub <ACCOUNT>.<USER>, a minute's life; RS256 only. The account is its
+// identifier (org-account, or the locator without its region), the user its login name - both upper-cased, as
+// Snowflake compares.
+func Snowflake(account, user, fingerprint string, signer Signer) (Source, error) {
+	if signer.Alg() != "RS256" {
+		return nil, errors.New("a Snowflake key pair is RSA (RS256)")
+	}
+	qualified := strings.ToUpper(account) + "." + strings.ToUpper(user)
+	return func(ctx context.Context, _ string) (string, error) {
+		header, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT"})
+		now := time.Now()
+		claims, _ := json.Marshal(map[string]any{"iss": qualified + "." + fingerprint, "sub": qualified,
+			"iat": now.Unix(), "exp": now.Add(time.Minute).Unix()})
+		b64 := base64.RawURLEncoding
+		signing := b64.EncodeToString(header) + "." + b64.EncodeToString(claims)
+		digest := sha256.Sum256([]byte(signing))
+		sig, err := signer.Sign(ctx, digest[:])
+		if err != nil {
+			return "", fmt.Errorf("the assertion was not signed: %w", err)
+		}
+		return signing + "." + b64.EncodeToString(sig), nil
+	}, nil
+}
+
 // KeyFile reads a private key for JWT: a ZITADEL key file (JSON: keyId, key, clientId - or userId, a machine
 // user's) - its kid and client id come with it - or a PEM key (RSA or EC P-256), whose kid is the configuration's.
 func KeyFile(path string) (signer Signer, kid, clientID string, err error) {
@@ -174,6 +199,19 @@ func KeyFile(path string) (signer Signer, kid, clientID string, err error) {
 type rsaSigner struct{ key *rsa.PrivateKey }
 
 func (rsaSigner) Alg() string { return "RS256" }
+
+// Public is the key's public half: a Snowflake identity checks its fingerprint at start.
+func (s rsaSigner) Public() crypto.PublicKey { return &s.key.PublicKey }
+
+// Fingerprint is a public key's as Snowflake shows it: SHA256: and the digest of its DER, base64.
+func Fingerprint(pub crypto.PublicKey) (string, error) {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(der)
+	return "SHA256:" + base64.StdEncoding.EncodeToString(sum[:]), nil
+}
 
 func (s rsaSigner) Sign(_ context.Context, digest []byte) ([]byte, error) {
 	return rsa.SignPKCS1v15(rand.Reader, s.key, crypto.SHA256, digest)

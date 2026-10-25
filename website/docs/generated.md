@@ -115,11 +115,11 @@ CREATE PERSISTENT SECRET crm IN corp (TYPE http, SCOPE 'https://crm.corp.example
 | `flow` | Parameters | Fields |
 | --- | --- | --- |
 | `basic` | `username`, `password` | `authorization` (`Basic …`), no call |
-| `oauth2_client_credentials` | `token_url`, `client_id`, `client_secret`, `scope` | the token response's: `access_token`, `token_type`, … |
+| `oauth2_client_credentials` | `token_url`, `client_id`, `client_secret`, `scope` - with no `client_id`, the secret alone in the form (a Snowflake PAT; so in every flow: a secret is sent by HTTP Basic only with its `client_id`) | the token response's: `access_token`, `token_type`, … |
 | `oauth2_password` | `token_url`, `username`, `password`, `client_id` (`client_secret`), `scope` | the same |
 | `custom` | `login_url`, `login_method` (POST), `login_request`, `login_response`, `content_type` (`json`, `form`); `refresh_url`, `refresh_method`, `refresh_request`, `refresh_response` | what `login_response` names |
 | `oauth2_refresh` | `token_url`, `refresh_token` (the first one), `client_id` (`client_secret`), `scope` | the token response's |
-| `jwt_assertion` | `token_url`, `identity` (a `jwt` one), `scope`, `grant` (`client_credentials`, or `jwt_bearer`) | the token response's |
+| `jwt_assertion` | `token_url`, `identity` (a `jwt` or a `snowflake` one), `scope`, `grant` (`client_credentials`, or `jwt_bearer`) | the token response's |
 | `rule` | `identity`, and what its kind asks: `scope` (azure, gcp), `endpoint`, `user`, `region` (aws_rds) | below |
 
 - **The mappings are jq.** A login request's over the variables `$username`, `$password`, `$client_id`,
@@ -188,6 +188,7 @@ dynamic:
 | `aws_rds` | an RDS IAM token (15 minutes), with the service's identity or a role it assumes | `endpoints`, `users`, `destinations`; the region is `aws.region` | `password`, `user` |
 | `aws_sts` | temporary credentials of a role it assumes (the session named `tresor-<login>`) | `role_arn`, `duration` (15m-12h; 1h at most when `aws.role_arn` chains roles), `destinations` | `access_key_id`, `secret_access_key`, `session_token` |
 | `jwt` | a client's signed assertion (as `exchange.client_auth`: `keyvault`, `vault`, `awskms`, `gcpkms`, `key_file`) | `token_urls`: the only endpoints its assertions go to | used by `jwt_assertion` |
+| `snowflake` | Snowflake's key-pair JWT for `account` and `user` (`public_key_fp`: `SHA256:…` as `DESC USER` shows it), an RSA key in `client` (`client_auth` and `key`, or `key_file`; no `client_id`, `kid`) - sent as the client's secret | `token_urls` | used by `jwt_assertion` |
 
 - **`destinations`**: a rule's login scope must be within them - where the credentials may go. A rule calls
   nothing; without this bound an administrator could send a database token anywhere.
@@ -265,6 +266,76 @@ assertion is the grant:
 
 An application's key (private_key_jwt) is `grant: client_credentials`, the default: the assertion authenticates the
 client.
+
+### Snowflake: Iceberg through Horizon
+
+DuckDB's iceberg reads Snowflake-managed Iceberg tables through Snowflake's Horizon catalog (Iceberg REST, at
+`https://<org>-<account>.snowflakecomputing.com/polaris/api/catalog`), and Horizon vends short-lived storage
+credentials for each table. The secret is an `iceberg` one whose `token` is generated (spec 032); three ways,
+all checked live:
+
+- **A PAT, as a service**: Snowflake exchanges a programmatic access token for an hour's token, for one role.
+  The PAT stays in the service (sealed, or a reference); DuckDB gets the hour's token. As for every login, the
+  host is in `dynamic.login_hosts`.
+
+  ```json
+  {"type": "tresor_service_login", "provider": "config",
+   "scope": ["https://myorg-acct.snowflakecomputing.com/polaris/api/catalog"],
+   "params": {"flow": "oauth2_client_credentials", "token_url": "/v1/oauth/tokens",
+              "client_secret": "ref+azkv://corp-vault/snowflake-pat", "scope": "session:role:ANALYST"}}
+  ```
+
+- **A key pair, as a service**: the service signs Snowflake's JWT with a key in Key Vault, Transit, a KMS or a
+  file - no secret to rotate in Snowflake but the public key (`ALTER USER … SET RSA_PUBLIC_KEY`). A key file's
+  fingerprint is checked against `public_key_fp` at start; a KMS key's at Snowflake.
+
+  ```yaml
+  dynamic:
+    login_hosts: [myorg-acct.snowflakecomputing.com]
+    identities:
+      - name: snowflake-etl
+        kind: snowflake
+        account: myorg-acct                     # the org-account identifier, or the locator without its region
+        user: TRESOR_SVC
+        public_key_fp: 'SHA256:3cKufoNoj868or8W/Uc5jnMy+wZOzm83s5rO0sTeQAY='
+        client: {client_auth: awskms, key: arn:aws:kms:eu-central-1:123456789012:key/…}   # RSA_2048, SIGN_VERIFY
+        token_urls: [https://myorg-acct.snowflakecomputing.com/polaris/api/catalog/v1/oauth/tokens]
+  ```
+
+  ```json
+  {"type": "tresor_service_login", "provider": "config",
+   "scope": ["https://myorg-acct.snowflakecomputing.com/polaris/api/catalog"],
+   "params": {"flow": "jwt_assertion", "identity": "snowflake-etl", "token_url": "/v1/oauth/tokens",
+              "scope": "session:role:ANALYST"}}
+  ```
+
+- **Each user, their own**: Snowflake's External OAuth takes the identity provider's token for Snowflake; the
+  service mints it for the caller (`mint+exchange`, Entra by On-Behalf-Of). Snowflake maps the token to a user
+  (`upn` to `login_name`) and takes the role from its scope - Snowflake's grants apply per person.
+
+The secret, granted to the roles that read the tables (and the login granted to them too):
+
+```sql
+CREATE PERSISTENT SECRET snowflake_lake IN corp (TYPE iceberg,
+  URI 'https://myorg-acct.snowflakecomputing.com/polaris/api/catalog',
+  TOKEN 'mint+login://snowflake_pat#access_token');
+--  or, each user's own: TOKEN 'mint+exchange://api://<snowflake app>?scope=api://<snowflake app>/session:role:ANALYST'
+
+ATTACH 'ANALYTICS' AS lake (TYPE iceberg, SECRET snowflake_lake, ACCESS_DELEGATION_MODE 'vended_credentials');
+SELECT * FROM lake.SALES.ORDERS;
+```
+
+- The `ATTACH`'s name is the Snowflake **database**; the role needs `USAGE` on it and the schema, `SELECT` on
+  the tables. Tables on Snowflake's own storage (`EXTERNAL_VOLUME = 'SNOWFLAKE_MANAGED'`) need no bucket.
+- A **PAT** needs a network policy by default (Snowflake's authentication policy can relax it for a service
+  user - name the service's egress addresses instead). Give the PAT `ROLE_RESTRICTION` to the one role, and a
+  service user `TYPE = SERVICE`.
+- **External OAuth with Entra**: an app for Snowflake with v1 tokens and the delegated scope
+  `session:role:<ROLE>`, consented for duckdb-secrets; Snowflake's `EXTERNAL_OAUTH` integration (`AZURE`, the
+  tenant's issuer and keys, the app's URI as the audience, `upn` to `login_name`). The tokens of `ACCOUNTADMIN`
+  and the like are refused by Snowflake.
+- **An hour**: Snowflake's tokens live an hour; iceberg reads the token once at `ATTACH` (see below). A session
+  longer than that attaches again.
 
 ### Per-user logins
 

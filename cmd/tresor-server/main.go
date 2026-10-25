@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -1001,6 +1002,29 @@ func identities(ctx context.Context, cfg *config.Config) (map[string]login.Ident
 				return nil, fmt.Errorf("%s: %w", where, err)
 			}
 			out[id.Name] = rules.JWT{ID: clientID, Source: source, TokenURLs: id.TokenURLs}
+		case "snowflake":
+			// a key-pair login (spec 032): the JWT goes as the client's secret, with no client id
+			var signer clientauth.Signer
+			var err error
+			if id.Client.ClientAuth == "key_file" {
+				signer, _, _, err = clientauth.KeyFile(id.Client.KeyFile)
+			} else {
+				signer, err = kmsSigner(ctx, cfg, id.Client)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", where, err)
+			}
+			// a key whose public half is at hand (a file) is checked against the fingerprint now, not at Snowflake
+			if p, ok := signer.(interface{ Public() crypto.PublicKey }); ok {
+				if fp, err := clientauth.Fingerprint(p.Public()); err != nil || fp != id.PublicKeyFP {
+					return nil, fmt.Errorf("%s: public_key_fp is not the key's", where)
+				}
+			}
+			source, err := clientauth.Snowflake(id.Account, id.User, id.PublicKeyFP, signer)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", where, err)
+			}
+			out[id.Name] = rules.JWT{Source: source, TokenURLs: id.TokenURLs, AsSecret: true}
 		}
 	}
 	return out, nil
@@ -1087,49 +1111,46 @@ func clientAssertion(ctx context.Context, cfg *config.Config, ex *config.Exchang
 			return "", nil, fmt.Errorf("exchange.client_id: the key file names no clientId - set client_id")
 		}
 		source = clientauth.JWT(clientID, clientauth.Header{KID: kid, X5T: ex.X5T}, aud, signer)
-	case "keyvault":
-		cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
-		if err != nil {
-			return "", nil, err
-		}
-		signer, err := azurekeyvault.NewSigner(ctx, ex.Key, cred)
-		if err != nil {
-			return "", nil, err
-		}
-		source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
-	case "vault":
-		v, err := vaultClient(cfg)
-		if err != nil {
-			return "", nil, err
-		}
-		mount, key, _ := strings.Cut(ex.Key, "/")
-		signer, err := vaultkek.NewSigner(ctx, v, mount, key)
-		if err != nil {
-			return "", nil, err
-		}
-		source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
-	case "awskms":
-		ac, err := awsOf(cfg.AWS)
-		if err != nil {
-			return "", nil, err
-		}
-		signer, err := awskms.NewSigner(ctx, kms.NewFromConfig(ac), ex.Key)
-		if err != nil {
-			return "", nil, err
-		}
-		source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
-	case "gcpkms":
-		c, err := gcpKMS(cfg)
-		if err != nil {
-			return "", nil, err
-		}
-		signer, err := gcpkms.NewSigner(ctx, c, ex.Key)
+	case "keyvault", "vault", "awskms", "gcpkms":
+		signer, err := kmsSigner(ctx, cfg, ex)
 		if err != nil {
 			return "", nil, err
 		}
 		source = clientauth.JWT(clientID, clientauth.Header{KID: ex.KID, X5T: ex.X5T}, aud, signer)
 	}
 	return clientID, source, nil
+}
+
+// kmsSigner is a key that signs where it is kept: Key Vault, Transit, AWS KMS or GCP Cloud KMS.
+func kmsSigner(ctx context.Context, cfg *config.Config, ex *config.ExchangeClient) (clientauth.Signer, error) {
+	switch ex.ClientAuth {
+	case "keyvault":
+		cred, err := azure.Credential(azure.Identity{Kind: cfg.Azure.Identity, ClientID: cfg.Azure.ClientID})
+		if err != nil {
+			return nil, err
+		}
+		return azurekeyvault.NewSigner(ctx, ex.Key, cred)
+	case "vault":
+		v, err := vaultClient(cfg)
+		if err != nil {
+			return nil, err
+		}
+		mount, key, _ := strings.Cut(ex.Key, "/")
+		return vaultkek.NewSigner(ctx, v, mount, key)
+	case "awskms":
+		ac, err := awsOf(cfg.AWS)
+		if err != nil {
+			return nil, err
+		}
+		return awskms.NewSigner(ctx, kms.NewFromConfig(ac), ex.Key)
+	case "gcpkms":
+		c, err := gcpKMS(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return gcpkms.NewSigner(ctx, c, ex.Key)
+	}
+	return nil, fmt.Errorf("client_auth %s signs nothing", ex.ClientAuth)
 }
 
 // awsConfigs are the SDK configurations made, one per identity (the top-level aws:, a named source's own): one
