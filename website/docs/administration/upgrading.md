@@ -169,6 +169,17 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
 - **A delegation grant is presented by a service token of its own client**: a grant used with another kind of
   token of the same identity stops working.
 
+### Upgrading to 0.8.0 (specs 032-034)
+
+- **Nothing to migrate**; nothing new changes until set.
+- **A client secret without a client id is sent in the form**: an `oauth2_password` or `oauth2_refresh` login
+  with a `client_secret` and no `client_id` sent HTTP Basic with an empty user before - check such a login
+  still logs in, or give it its `client_id`.
+- **New**: Snowflake through Horizon ([Generated parameters](../generated.md#snowflake-iceberg-through-horizon):
+  a PAT with no `client_id`, the `snowflake` identity kind, per user by `mint+exchange`); the Docker recipe
+  ([Docker](../docker.md)).
+- **The recipes' defaults** (Terraform, Compose) are v0.8.0: `terraform apply` with no `image` moves to it.
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.

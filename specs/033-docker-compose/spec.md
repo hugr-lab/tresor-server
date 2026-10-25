@@ -1,6 +1,6 @@
 # Spec 033: a Docker recipe
 
-- **Status**: accepted (the owner, 2026-10-25: "compose: tresor + Keycloak")
+- **Status**: implemented (#93; the owner, 2026-10-25: "compose: tresor + Keycloak")
 - **Date**: 2026-10-25
 - **Author**: hugr lab
 

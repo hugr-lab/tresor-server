@@ -45,6 +45,6 @@ Research lives in the local, gitignored `design/` folder.
 | [029](029-tls-reload/spec.md) | the TLS certificate read again when it changes | implemented |
 | [030](030-whoami-name/spec.md) | whoami names the person; an IdP's own roles left out | implemented |
 | [031](031-actor-role/spec.md) | a delegation actor by role | implemented |
-| [032](032-snowflake/spec.md) | Snowflake: Iceberg through Horizon with generated tokens | accepted |
-| [033](033-docker-compose/spec.md) | a Docker recipe: to try it (with Keycloak), on one host (behind Caddy) | accepted |
-| [034](034-docs-pre-release/spec.md) | the docs before a release: what was stale, missing settings and checks | accepted |
+| [032](032-snowflake/spec.md) | Snowflake: Iceberg through Horizon with generated tokens | implemented |
+| [033](033-docker-compose/spec.md) | a Docker recipe: to try it (with Keycloak), on one host (behind Caddy) | implemented |
+| [034](034-docs-pre-release/spec.md) | the docs before a release: what was stale, missing settings and checks | implemented |
