@@ -59,7 +59,8 @@ Kubernetes 1.30 or later.
 
 - **The CRDs** are in `crds/`. Helm installs them on every first install, whatever the store, and never
   upgrades or deletes them. On another store, or without cluster rights, install with `--skip-crds`. An
-  upgrade that changes them says so: run `kubectl apply --server-side -f crds/` first. Variables (spec 004)
+  upgrade that changes them says so: apply the new chart's first -
+  `helm pull oci://ghcr.io/hugr-lab/charts/tresor-server --version <version> --untar && kubectl apply --server-side -f tresor-server/crds/`. Variables (spec 004)
   brought `TresorVariable`: an install from before needs it applied, or the service does not start.
 - **The admission policy** is cluster-scoped, so installing it needs cluster rights. It lets only the
   service's ServiceAccount write the resources. The garbage collector may delete minted tokens (the one

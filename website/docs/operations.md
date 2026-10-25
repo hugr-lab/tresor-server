@@ -19,8 +19,11 @@ provider itself:
 - **issuer ...**: one per issuer, its discovery and signing keys. An issuer that answered once and is down
   now is `degraded`, not `unavailable`: its keys are cached, and one IdP's outage must not take every
   replica out.
-- **exchange ...**: one per issuer with `exchange`, the service's client assertion. A failure is `degraded`:
-  only `token_exchange` secrets depend on it.
+- **exchange ...**: one per issuer with `exchange` and a `client_auth` other than `secret`, the service's client
+  assertion. A failure is `degraded`: only what mints at that issuer depends on it - every `mint+exchange://` and
+  `${exchange://…}` in a secret or a variable (since 0.5), and `token_exchange` secrets.
+- **tls**: with `tls.cert`, the certificate in service. `degraded` only: a new pair that failed to load (the old
+  one still serves), or the certificate in service expired.
 
 What each check's failure means: [Incidents](administration/incidents.md#the-service-unready).
 

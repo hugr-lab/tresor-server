@@ -6,7 +6,8 @@ tresor-server {{ .Chart.AppVersion }} on the {{ include "tresor.stateKind" . }} 
 {{- if eq (include "tresor.stateKind" .) "kubernetes" }}
 
 The CRDs come from the chart's crds/ at the first install only: an upgrade that changes them needs
-  kubectl apply --server-side -f crds/
+  helm pull oci://ghcr.io/hugr-lab/charts/tresor-server --version <the new version> --untar
+  kubectl apply --server-side -f tresor-server/crds/
 {{- if not .Values.admissionPolicy.enabled }}
 
 WARNING: the admission policy is off. Whoever can write this namespace's tresor resources can put an older
@@ -26,7 +27,7 @@ the service scaled to 0 first. Use PostgreSQL or SQL Server.
 
 Whoever can create pods or Jobs in {{ include "tresor.namespace" . }}, create a token for the service's ServiceAccount or
 impersonate it can act as the service: keep these rights to the platform's operators.
-{{- if and ((include "tresor.cfg" . | fromYaml).tls | default dict).offload (not .Values.networkPolicy.enabled) }}
+{{- if and ((include "tresor.config" . | fromYaml).tls | default dict).offload (not .Values.networkPolicy.enabled) }}
 
 The pod serves plain HTTP (tls.offload): networkPolicy.from can let only the ingress controller reach it.
 {{- end }}

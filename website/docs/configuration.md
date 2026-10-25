@@ -76,7 +76,7 @@ These are the reference server's, unchanged. tresor documents them:
   their use) and `actors` (the servers allowed to act for users, and with which verbs).
 
 An actor is a service: `client:<id>`, optionally pinned to its `issuer`; or, in this service (spec 031), a role,
-`role:<name>`, with its `issuer` required - every service whose token from that issuer carries the role acts
+`role:<name>`, with its `issuer` required and one of `issuers` - every service whose token from that issuer carries the role acts
 for users with the rule's verbs: one rule for every node group of a platform, not one per client.
 
 ```yaml
@@ -114,8 +114,9 @@ Where the service keeps secrets, grants and delegation grants. See [State stores
 | `state.kind` | `memory`, `sqlite`, `postgres`, `sqlserver` or `kubernetes`. Required. |
 | `state.path` | SQLite: the database's file. |
 | `state.dsn` | PostgreSQL, SQL Server: the server, the database, the user. Never a password. |
-| `state.auth` | `entra` (the service's Azure token), `aws` (an RDS IAM token; [AWS](aws.md#the-database-rds-iam-authentication)), `gcp` (Cloud SQL IAM; [GCP](gcp.md#the-database-cloud-sql-iam-database-authentication)) - PostgreSQL - or `password`. |
+| `state.auth` | `entra` (the service's Azure token), `aws` (an RDS IAM token; [AWS](aws.md#the-database-rds-iam-authentication)) and `gcp` (Cloud SQL IAM; [GCP](gcp.md#the-database-cloud-sql-iam-database-authentication)) - PostgreSQL only -, `vault` (a database secrets engine's lease; [OpenBao and Vault](vault.md#the-databases-credentials)) or `password`. |
 | `state.password_env`, `state.password_file`, `state.password_ref` | `auth: password`: where the password is - one of them. `password_ref` is `ref+k8s://…`, `ref+azkv://…`, `ref+vault://…`, `ref+aws://…`, `ref+gcp://…` or a named source's, outside every `material` allowlist (every source of its kind). |
+| `state.vault` | `auth: vault`: `{mount, role, source, set_role}` - the engine's mount and role (`<mount>/creds/<role>`), a named vault source's connection (empty: `vault:`), and `set_role`, the group role every lease's user is granted: required on PostgreSQL, refused on SQL Server. |
 | `state.max_open_conns` | The connection pool; default 10. |
 | `state.mac` | SQL stores: check every row's MAC - who may use what cannot change without the KEK (spec 014). On by default since 0.4 (spec 022); `false` turns the checks off. See [State](state.md#the-sql-stores-mac-statemac). |
 | `state.namespace` | Kubernetes: where the resources are. The pod's own by default; required outside a pod. |
@@ -149,9 +150,9 @@ Where references may read. See [References](references.md).
 | `material.k8s.allow` | `[{namespace: data-team, prefixes: [duckdb-]}]`: the namespaces, and the Secret-name prefixes (none: all). |
 | `material.vault.allow` | `[{mount: secret, prefixes: [duckdb/]}]`: the KV v2 mounts, and the path prefixes (none: all). Needs `vault:`. |
 | `material.vault.cache_ttl` | Keep a value read for this long; default `0`, at most `5m`. |
-| `material.aws.allow` | `[{prefixes: [duckdb/]}]`: Secrets Manager names' prefixes (an entry with none: all). Needs `aws:`. |
+| `material.aws.allow` | `[{prefixes: [duckdb/]}]`: Secrets Manager names' prefixes (an entry with none: all). Needs `aws.region`. |
 | `material.aws.cache_ttl` | Keep a value read for this long; default `0`, at most `5m`. |
-| `material.gcp.allow` | `[{project: corp-data, prefixes: [duckdb-]}]`: the projects (id or number), and the secret-name prefixes (none: all). |
+| `material.gcp.allow` | `[{project: corp-data, prefixes: [duckdb-]}]`: the projects (their ids, never numbers), and the secret-name prefixes (none: all). |
 | `material.gcp.cache_ttl` | Keep a value read for this long; default `0`, at most `5m`. |
 | `material.sources` | Named sources (spec 008): `[{name, kind: vault \| azkv \| aws \| gcp, vault: {…}, azure: {identity, client_id, tenant_id}, aws: {region, role_arn}, allow, cache_ttl, dns_suffix}]`. `ref+<name>://`. See [Named sources](references.md#named-sources). |
 
@@ -251,7 +252,7 @@ Web pages that run tresor in DuckDB-wasm call the service from the browser, acro
 | `cors.allowed_origins` | The pages' origins (`https://notebook.example`): CORS on discovery (`/.well-known/duckdb-secrets`) and `/v1`, for them only. |
 
 - The preflight allows the protocol's methods and the headers `Authorization`, `Content-Type`, `Accept`,
-  `Delegation`, `If-Match`, `If-None-Match`, `traceparent`; answers expose `ETag`. No credentials: no cookie is
+  `Delegation`, `If-Match`, `If-None-Match`, `traceparent`; answers expose `ETag` and `X-Request-Id`. No credentials: no cookie is
   sent or honoured, the bearer token is the only one.
 - Separate from `ui.allowed_origins` (the console's hosts): neither list implies the other.
 - An origin as a browser sends it: `https://host[:port]` (http only to this machine), no path, no wildcard.
@@ -264,7 +265,7 @@ Web pages that run tresor in DuckDB-wasm call the service from the browser, acro
 | Setting | |
 | --- | --- |
 | `dynamic.login_hosts` | The hosts a [service login](generated.md#service-logins) may call: a name, or `*.domain`. Empty: no login calls out. |
-| `dynamic.identities` | The workload identities and client keys a [rule or a `jwt_assertion`](generated.md#a-key-a-workload-identity-jwt_assertion-and-rules) may use: `name`, `kind` (`azure`, `gcp`, `aws_rds`, `aws_sts`, `jwt`) and their bounds - `scopes`, `endpoints`, `users`, `destinations`, `token_urls`. |
+| `dynamic.identities` | The workload identities and client keys a [rule or a `jwt_assertion`](generated.md#a-key-a-workload-identity-jwt_assertion-and-rules) may use: `name` (once each) and `kind`, and per kind: `azure` - `client_id`, `scopes`, `destinations`; `gcp` - `service_account`, `scopes`, `destinations`; `aws_rds` - `role_arn`, `endpoints`, `users`, `destinations`; `aws_sts` - `role_arn` (required), `duration` (15m-12h, default 1h), `destinations`; `jwt` - `client` (as `exchange`: `client_auth` `keyvault`, `vault`, `awskms`, `gcpkms` or `key_file`), `audience`, `token_urls`. Another kind's field is refused; every kind but `jwt` lists its `destinations`. |
 | `dynamic.margin` | `expires_at` is this long before what was generated expires, at most half of what is left: up to `1h`; unset (or `0`), `10m`. |
 
 ### `audit`, `telemetry`

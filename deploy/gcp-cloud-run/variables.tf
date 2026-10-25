@@ -34,7 +34,7 @@ variable "subnetwork" {
 variable "image_tag" {
   description = "tresor-server's version (its image's tag on ghcr.io), never edge."
   type        = string
-  default     = "v0.4.0"
+  default     = "v0.7.5"
 }
 
 variable "image" {

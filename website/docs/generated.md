@@ -31,8 +31,9 @@ CREATE PERSISTENT SECRET lake_api IN corp (TYPE http, SCOPE 'https://lake.corp.e
 | `mint+exchange://<audience>[?scope=<scope>]` | a token for the caller at their identity provider (RFC 8693, or Entra On-Behalf-Of), for `<audience>`. The audience is everything up to the first `?`, percent-decoded; the query is `scope=` only. |
 | `mint+claim://<claim>` | a top-level claim of the caller's verified token, as text: a string as it is, a number or a boolean as its JSON text. Never the token. |
 | `mint+login://<login>#<field>` | a field of what a [service login](#service-logins) got: an access token, a session id. |
+| `mint+rule://<login>#<field>` | the same as `mint+login://`, for a login of [flow `rule`](#a-key-a-workload-identity-jwt_assertion-and-rules). |
 | `mint+login:scope#<field>` | the same, from the login bound to the caller, picked by the secret's scope ([per user](#per-user-logins)). |
-| `${exchange://…}`, `${claim://…}`, `${login://…}`, `${login:scope#…}` inside a string | the same, as a part of the string: `'Bearer ${exchange://crm-api}'`. |
+| `${exchange://…}`, `${claim://…}`, `${login://…}`, `${rule://…}`, `${login:scope#…}` inside a string | the same, as a part of the string: `'Bearer ${exchange://crm-api}'`. |
 | `mint++…` | a literal: one `+` dropped (`mint++x` is served as `mint+x`), and the rest of that string is not read (no `${…}` in it). Only lowercase `mint+` is read. |
 | `$${` | a literal `${`. |
 
@@ -76,7 +77,7 @@ A claim interpolated into a header, a connection string or a URL is text the use
 - **At the write** (`422`), naming the parameter, never its value: a malformed generator, an unknown kind, an
   exchange for this service's own audience, a claim that names the session or binds a token (`sid`,
   `session_state`, `jti`, `nonce`, `at_hash`, `c_hash`, `s_hash`), `${` of a known kind with no closing `}`.
-  A login field that renews it (`refresh_token`) is never served. `mint+rule://` is reserved (to come).
+  A login field that renews it (`refresh_token`) is never served.
 - **At the read**: `403 mint_refused` - the identity provider refused, the caller's token has no such claim
   (empty, a list or an object counts as none), or the claim is shaped like a token; `503` - the identity
   provider did not answer. Never an empty value.
@@ -91,7 +92,7 @@ A claim interpolated into a header, a connection string or a URL is text the use
 A service that is no identity provider - its own login with a user and a password, an OAuth2 token endpoint, a
 session id to send with every request - is logged in to by the service, which keeps the inputs and serves one
 field of what it gets. A login is a secret of type `tresor_service_login`, written by an administrator, **never
-served** (not listed on `/v1`, `404` on a read; the console lists them, `GET /admin/v1/logins`). Here, `crm_login`:
+served** (not listed on `/v1`, `404` on a read; `GET /admin/v1/logins` lists them). Here, `crm_login`:
 
 ```json
 {"type": "tresor_service_login", "provider": "config", "scope": ["https://crm.corp.example/api"],

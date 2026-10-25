@@ -11,6 +11,12 @@ imagePullSecrets: []
 # Replicas: kubernetes, postgres and sqlserver serve with several; sqlite and memory with one (always).
 replicas: 2
 
+# The objects' names (<fullname>): fullnameOverride; else the release's name, followed by the chart's name
+# (tresor-server, or nameOverride) unless the release's name contains it. At most 63 characters; a command's
+# CronJob is <fullname>-<command>, 52 at most.
+nameOverride: ""
+fullnameOverride: ""
+
 # The service's configuration (server.yaml). The chart sets listen (:8080) and derives, when they are unset:
 # tls (offload; tlsSecret's files when set), keys (local, from localKEK), state.path (sqlite: the volume's).
 # Settings belong here, not in env: the RBAC, the policy and the volumes are derived from this.
@@ -169,7 +175,7 @@ terminationGracePeriodSeconds: 30
 
 # The commands as jobs (spec 019: docs, Administration): a suspended CronJob per command, the service's own
 # ServiceAccount, configuration and volumes - a job acts as the service. Run one:
-#   kubectl -n <ns> create job --from=cronjob/<release>-reseal reseal-$(date +%Y%m%d%H%M)
+#   kubectl -n <ns> create job --from=cronjob/<fullname>-reseal reseal-$(date +%Y%m%d%H%M)
 # Whoever may create Jobs here holds the KEK's power: grant it to the platform's operators only.
 maintenance:
   enabled: true

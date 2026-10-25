@@ -34,7 +34,7 @@ A backup holds its own data keys. A data key retired since, or a leaked one, sti
 1. **Stop the service** (Kubernetes: `kubectl -n tresor scale deploy/<fullname> --replicas=0`).
 2. **Restore the store**:
    - **a database**: as any database, with its `installation` table;
-   - **the Kubernetes store**: the CRDs first. A restore (Velero) writes as another account than the service's:
+   - **the Kubernetes store**: the CRDs first (`helm pull oci://ghcr.io/hugr-lab/charts/tresor-server --version <version> --untar && kubectl apply --server-side -f tresor-server/crds/`, the release's chart version). A restore (Velero) writes as another account than the service's:
      remove the admission policy's binding for its duration (step 4 puts it back).
 
      ```sh
@@ -45,12 +45,13 @@ A backup holds its own data keys. A data key retired since, or a leaked one, sti
 3. **The same KEK and configuration** as when the backup was taken - any previous KEK its data keys are under in
    `keys.previous`. The same version of the service, or a newer one: an older one refuses a database a newer one
    migrated.
-4. **Start the service**: on Kubernetes, `helm upgrade` with the release's values - it puts the admission
+4. **Start the service**: on Kubernetes, `helm upgrade` with the release's values and chart version - it puts the admission
    policy's binding back and scales the Deployment to its replicas (not before step 3: Helm restores the
    replicas a manual scale set to 0).
 
    ```sh
-   helm upgrade <release> oci://ghcr.io/hugr-lab/charts/tresor-server -n tresor -f values.yaml
+   helm upgrade <release> oci://ghcr.io/hugr-lab/charts/tresor-server --version <the release's chart version> \
+     -n tresor -f values.yaml
    ```
 
 ## Check

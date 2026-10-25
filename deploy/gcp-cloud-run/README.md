@@ -29,6 +29,8 @@ terraform apply -var-file my.tfvars
 terraform output url
 ```
 
+- **`prefix`** (`tresor`): every resource's name - lower-case letters, digits and dashes, a letter first, no dash
+  last or doubled, 15 characters at most.
 - **`issuers`, `admins`, `actors`**: as the Configuration page, YAML in a string - the same values the Bicep recipe
   takes.
 - **`material_allow`**: where `ref+gcp` may read (projects and secret name prefixes); by default this project's
@@ -62,7 +64,8 @@ Administration pages.
   protection stays on.
 - **Keep the KMS keys**: without them the database's material never opens. A destroy schedules the key versions'
   destruction (30 days by default); restore them within it if a destroy was a mistake.
-- **The image**: a version (`image`), never `edge`.
+- **The image**: a version (`image_tag`, `v0.7.5` by default), never `edge`; `image` only for an image in a registry
+  of your own (Artifact Registry or Docker Hub).
 - Nothing here gives the database a public address: keep it so. Never add authorized networks.
 
 ## Destroy (a trial)

@@ -78,3 +78,9 @@ By hand, with the owner's tenant and subscription; nothing secret is printed:
 
 One lightweight spec per change under `specs/`, a branch, a PR, an independent review, then a merge on green
 CI. A protocol change lands in tresor's `protocol.md` first.
+
+## A release
+
+A tag `v<version>` builds, signs and pushes the image and the chart (version `<version>`). With each release the
+recipes' image defaults move to it: `image` in `deploy/aws-ecs/variables.tf`, `image_tag` in
+`deploy/gcp-cloud-run/variables.tf`.

@@ -10,7 +10,7 @@ A secret's material is sealed before it reaches the state store: envelope encryp
 flowchart LR
   params["a secret's params"] -- "AES-256-GCM" --> sealed["sealed params (in the store)"]
   dek["data key"] -. "seals" .-> sealed
-  kek["KEK (Key Vault, or local)"] -- "wraps" --> wrapped["wrapped data key (in the store)"]
+  kek["KEK (Key Vault, AWS KMS, Cloud KMS, Transit, or local)"] -- "wraps" --> wrapped["wrapped data key (in the store)"]
   dek -.-> wrapped
 ```
 
@@ -38,6 +38,8 @@ material of their choice under it. So a data key that unwraps proves nothing. Th
 | Managed HSM AES | a deterministic wrap (A256KW) of a fixed label |
 | local | HMAC-SHA256 of a fixed label under the key |
 | OpenBao / Vault Transit | a Transit HMAC of a fixed label, at the KEK's version |
+| AWS KMS | a KMS MAC (`GenerateMac`) of a fixed label under the HMAC key, `mac_key` ([AWS](aws.md#the-kek-two-keys)) |
+| GCP Cloud KMS | a Cloud KMS MAC (`MacSign`) of a fixed label under the MAC key's version, `mac_key` ([GCP](gcp.md#the-kek-a-key-and-a-mac-version)) |
 
 - The root is never stored; it stays in memory for `keys.cache_ttl`, as the data keys do.
 - A data key's tag is an HMAC under the root over its id, its KEK id, its creation time and its wrapped
