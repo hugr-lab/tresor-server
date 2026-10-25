@@ -125,6 +125,17 @@ jobs:
           path: web/console/test-results/
           retention-days: 7
 
+  # the Docker recipes (spec 033): the try-it stand from this commit's image, seeded and read through; the one-host
+  # recipe on localhost behind Caddy's TLS
+  docker:
+    name: Docker recipes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: the recipes
+        run: scripts/ci/docker.sh
+
   # AWS against moto (spec 012): the awskms KEK, ref+aws, a move from a local KEK, signing with a KMS key, through
   # the service's own wiring (cmd/tresor-server TestAWS). Pinned by digest: moto 5.1's GenerateMac fails.
   aws:

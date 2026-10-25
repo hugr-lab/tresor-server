@@ -1,0 +1,21 @@
+# tresor-server on one host (spec 033) - copy to server.yaml and set your domain, issuer and admins.
+# Every setting: https://hugr-lab.github.io/tresor-server/configuration/
+listen: 0.0.0.0:8080
+public_url: https://secrets.example.com          # your TRESOR_DOMAIN
+tls: {offload: true}                             # Caddy terminates TLS
+state: {kind: sqlite, path: /var/lib/tresor/tresor.db}
+# PostgreSQL (--profile postgres):
+# state: {kind: postgres, dsn: 'postgres://tresor@postgres:5432/tresor?sslmode=disable', auth: password,
+#         password_file: /run/secrets/pg-password}
+keys: {kind: local, key_file: /run/secrets/kek}
+issuers:
+  - issuer: https://login.example.com/realms/corp
+    audience: duckdb-secrets
+    client_id: duckdb                            # a public client: DuckDB's sign-in and the console's
+    scopes: [openid]
+    human_flows: [authorization_code, device_code]
+    service_flows: [client_credentials]
+    roles_claim: realm_access.roles
+    service: {claim: client_id}
+policy:
+  admins: [role:secrets_admin]

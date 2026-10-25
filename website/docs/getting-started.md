@@ -5,6 +5,7 @@ title: Getting started
 # Getting started
 
 This page runs the service on a laptop, with SQLite and a local key, and attaches DuckDB to it.
+[Docker](docker.md) does the same in one command - the service, Keycloak with a realm, and sample secrets.
 
 ## 1. An identity provider
 

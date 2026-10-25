@@ -1,0 +1,65 @@
+# tresor-server to try (spec 033): the service and Keycloak on this machine, with a realm, users and sample
+# secrets made for this stand. Not for production: Keycloak runs start-dev, the KEK is a file in a volume.
+#
+#   docker compose up -d                          # the first run makes the KEK, passwords, realm and config
+#   docker compose run --rm init passwords        # the users' passwords and the services' secrets
+#   docker compose --profile seed up seed         # optional: sample secrets, grants and a variable
+#   open http://127.0.0.1:8443/ui/                # the console
+#   docker compose --profile seed down -v         # deletes the state, the KEK and the passwords too
+#
+# The service allows plain http on a loopback address only. It listens on 127.0.0.1 in the network namespace
+# of `bridge`, which publishes it on this machine's loopback and forwards 127.0.0.1:18480 to Keycloak - so the
+# issuer is http://127.0.0.1:18480/realms/tresor for the browser, DuckDB and the service alike.
+name: tresor
+
+services:
+  init:
+    image: alpine:3.22
+    volumes: ["data:/data", "./init.sh:/init.sh:ro"]
+    entrypoint: ["/bin/sh", "/init.sh"]
+    restart: "no"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_HOSTNAME: http://127.0.0.1:18480
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+    # the bootstrap admin's password and the realm from the volume, where init made them with the rest - one
+    # volume, so the realm and the passwords never part (Keycloak reads no _FILE variables: the entrypoint does)
+    entrypoint: ["/bin/sh", "-c", "mkdir -p /opt/keycloak/data/import && cp /data/realm.json /opt/keycloak/data/import/ && export KC_BOOTSTRAP_ADMIN_PASSWORD=\"$$(cat /data/keycloak-admin)\"; exec /opt/keycloak/bin/kc.sh \"$$@\"", "--"]
+    volumes: ["data:/data:ro"]
+    ports: ["127.0.0.1:18480:8080"]
+    depends_on:
+      init: {condition: service_completed_successfully}
+
+  bridge:
+    image: alpine/socat:1.8.0.3
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - socat TCP-LISTEN:18480,bind=127.0.0.1,fork,reuseaddr TCP:keycloak:8080 &
+        exec socat TCP-LISTEN:8444,fork,reuseaddr TCP:127.0.0.1:8443
+    ports: ["127.0.0.1:8443:8444"]
+
+  tresor:
+    image: ${TRESOR_IMAGE:-ghcr.io/hugr-lab/tresor-server:v0.7.5}
+    command: ["-config", "/data/server.yaml"]
+    network_mode: service:bridge
+    volumes: ["data:/data"]
+    restart: unless-stopped
+    depends_on:
+      init: {condition: service_completed_successfully}
+      bridge: {condition: service_started}
+      keycloak: {condition: service_started}
+
+  seed:
+    profiles: [seed]
+    image: alpine/curl:8.14.1
+    user: "0"
+    volumes: ["data:/data:ro", "./seed.sh:/seed.sh:ro"]
+    entrypoint: ["/bin/sh", "/seed.sh"]
+    depends_on:
+      tresor: {condition: service_started}
+
+volumes:
+  data:

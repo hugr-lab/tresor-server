@@ -4,6 +4,7 @@ const sidebars: SidebarsConfig = {
   docsSidebar: [
     'index',
     'getting-started',
+    'docker',
     'configuration',
     'state',
     'encryption',
