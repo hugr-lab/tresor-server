@@ -51,6 +51,10 @@ func service(t *testing.T) (*httptest.Server, *int) {
 		case r.Form.Get("grant_type") == "client_credentials" && id == "app" && secret == "s3cret" &&
 			r.Form.Get("client_secret") == "":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at-cc", "expires_in": 300, "token_type": "Bearer"})
+		// a secret with no client id: in the form, never Basic with an empty user (spec 032)
+		case r.Form.Get("grant_type") == "password" && r.Form.Get("username") == "u" && id == "" &&
+			r.Form.Get("client_secret") == "pw-secret":
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at-pw-form", "expires_in": 300})
 		case r.Form.Get("grant_type") == "password" && r.Form.Get("username") == "u" && r.Form.Get("password") == "p":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at-pw", "refresh_token": "rt", "expires_in": 300})
 		case r.Form.Get("grant_type") == "refresh_token" && r.Form.Get("refresh_token") == "rt":
@@ -135,6 +139,11 @@ func TestOAuth2Flows(t *testing.T) {
 	if _, err := Parse(map[string]string{"flow": FlowClientCredentials, "token_url": "/oauth/token", "client_id": "app"},
 		[]string{srv.URL}); err == nil {
 		t.Fatal("client credentials without a secret")
+	}
+	pwForm, _ := Parse(map[string]string{"flow": FlowPassword, "token_url": "/oauth/token", "username": "u",
+		"password": "p", "client_secret": "pw-secret"}, []string{srv.URL})
+	if res, _, err := c.Login(context.Background(), pwForm); err != nil || res.Fields["access_token"] != "at-pw-form" {
+		t.Fatalf("a password login's secret with no client id: %+v %v", res, err)
 	}
 	pw, _ := Parse(map[string]string{"flow": FlowPassword, "token_url": "/oauth/token", "username": "u",
 		"password": "p", "client_id": "app"}, []string{srv.URL})

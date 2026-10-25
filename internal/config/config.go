@@ -1595,6 +1595,9 @@ func (c *Config) validateIdentities() error {
 				return fmt.Errorf("%s: aws_sts needs aws.region", where)
 			}
 		case "snowflake":
+			if strings.Contains(id.Account, ".") {
+				return fmt.Errorf("%s.account is the org-account identifier, or the locator without its region", where)
+			}
 			if id.Account == "" || id.User == "" || !snowflakeFP.MatchString(id.PublicKeyFP) {
 				return fmt.Errorf("%s: a snowflake identity has an account, a user and the public key's public_key_fp "+
 					"(SHA256:..., as DESC USER shows it)", where)

@@ -114,7 +114,7 @@ CREATE PERSISTENT SECRET crm IN corp (TYPE http, SCOPE 'https://crm.corp.example
 | `flow` | Parameters | Fields |
 | --- | --- | --- |
 | `basic` | `username`, `password` | `authorization` (`Basic …`), no call |
-| `oauth2_client_credentials` | `token_url`, `client_id`, `client_secret`, `scope` - with no `client_id`, the secret alone in the form (a Snowflake PAT) | the token response's: `access_token`, `token_type`, … |
+| `oauth2_client_credentials` | `token_url`, `client_id`, `client_secret`, `scope` - with no `client_id`, the secret alone in the form (a Snowflake PAT; so in every flow: a secret is sent by HTTP Basic only with its `client_id`) | the token response's: `access_token`, `token_type`, … |
 | `oauth2_password` | `token_url`, `username`, `password`, `client_id` (`client_secret`), `scope` | the same |
 | `custom` | `login_url`, `login_method` (POST), `login_request`, `login_response`, `content_type` (`json`, `form`); `refresh_url`, `refresh_method`, `refresh_request`, `refresh_response` | what `login_response` names |
 | `oauth2_refresh` | `token_url`, `refresh_token` (the first one), `client_id` (`client_secret`), `scope` | the token response's |
@@ -274,7 +274,8 @@ credentials for each table. The secret is an `iceberg` one whose `token` is gene
 all checked live:
 
 - **A PAT, as a service**: Snowflake exchanges a programmatic access token for an hour's token, for one role.
-  The PAT stays in the service (sealed, or a reference); DuckDB gets the hour's token.
+  The PAT stays in the service (sealed, or a reference); DuckDB gets the hour's token. As for every login, the
+  host is in `dynamic.login_hosts`.
 
   ```json
   {"type": "tresor_service_login", "provider": "config",
@@ -284,7 +285,8 @@ all checked live:
   ```
 
 - **A key pair, as a service**: the service signs Snowflake's JWT with a key in Key Vault, Transit, a KMS or a
-  file - no secret to rotate in Snowflake but the public key (`ALTER USER … SET RSA_PUBLIC_KEY`).
+  file - no secret to rotate in Snowflake but the public key (`ALTER USER … SET RSA_PUBLIC_KEY`). A key file's
+  fingerprint is checked against `public_key_fp` at start; a KMS key's at Snowflake.
 
   ```yaml
   dynamic:
@@ -292,7 +294,7 @@ all checked live:
     identities:
       - name: snowflake-etl
         kind: snowflake
-        account: myorg-acct                     # the account identifier (org-account), or its locator
+        account: myorg-acct                     # the org-account identifier, or the locator without its region
         user: TRESOR_SVC
         public_key_fp: 'SHA256:3cKufoNoj868or8W/Uc5jnMy+wZOzm83s5rO0sTeQAY='
         client: {client_auth: awskms, key: arn:aws:kms:eu-central-1:123456789012:key/…}   # RSA_2048, SIGN_VERIFY

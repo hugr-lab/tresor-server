@@ -110,21 +110,22 @@ check() {
 	echo "$device" | python3 -c 'import json,sys; print("snowflake_live:", json.load(sys.stdin)["message"])'
 	code="$(echo "$device" | python3 -c 'import json,sys; print(json.load(sys.stdin)["device_code"])')"
 	person=""
+	# tokens and codes go to curl on stdin, never on its command line (ps)
 	for _ in $(seq 90); do
 		sleep 5
-		person="$(curl -s -X POST "$login/oauth2/v2.0/token" -d "client_id=$ENTRA_PEOPLE_CLIENT_ID" \
-			-d grant_type=urn:ietf:params:oauth:grant-type:device_code --data-urlencode "device_code=$code" | token_of)"
+		person="$(printf '%s' "$code" | curl -s -X POST "$login/oauth2/v2.0/token" -d "client_id=$ENTRA_PEOPLE_CLIENT_ID" \
+			-d grant_type=urn:ietf:params:oauth:grant-type:device_code --data-urlencode "device_code@-" | token_of)"
 		[ -n "$person" ] && break
 	done
 	unset code device
 	[ -n "$person" ] || { echo "snowflake_live: no sign-in within 7 minutes" >&2; exit 1; }
 
 	echo "snowflake_live: the person reads sf_ice_user from the service: their Snowflake token, minted by OBO"
-	minted="$(curl -s -H "Authorization: Bearer $person" "$tresor/v1/secrets/sf_ice_user" | python3 -c '
+	minted="$(printf 'Authorization: Bearer %s' "$person" | curl -s -H @- "$tresor/v1/secrets/sf_ice_user" | python3 -c '
 import json,sys
 b = json.load(sys.stdin)
 t = b.get("params", {}).get("token", "")
-if not t: print("refused: " + str(b.get("detail", b)), file=sys.stderr)
+if not t: print("refused: " + str(b.get("detail", "no token, no detail")), file=sys.stderr)
 print(t)')"
 	unset person
 	[ -n "$minted" ] || exit 1
@@ -132,8 +133,9 @@ print(t)')"
 print("snowflake_live: minted: scp %s, aud is the resource %s, upn %s" % (c.get("scp"), str(c.get("aud","")).startswith("api://"), "upn" in c))'
 
 	echo "snowflake_live: Horizon with the person's token"
-	curl -s -o /dev/null -w 'snowflake_live: namespaces %{http_code}\n' -H "Authorization: Bearer $minted" "$cat/v1/TRESOR_LAB/namespaces"
-	curl -s -H "Authorization: Bearer $minted" -H "X-Iceberg-Access-Delegation: vended-credentials" \
+	printf 'Authorization: Bearer %s' "$minted" | curl -s -o /dev/null -w 'snowflake_live: namespaces %{http_code}\n' -H @- \
+		"$cat/v1/TRESOR_LAB/namespaces"
+	printf 'Authorization: Bearer %s' "$minted" | curl -s -H @- -H "X-Iceberg-Access-Delegation: vended-credentials" \
 		"$cat/v1/TRESOR_LAB/namespaces/SALES/tables/ORDERS" | python3 -c '
 import json,sys
 d = json.load(sys.stdin)
@@ -147,13 +149,14 @@ down() {
 	echo "snowflake_live: Entra back as it was"
 	if [ -f "$dir/obo.crt" ]; then
 		key="$(az ad app credential list --id "$ENTRA_API_CLIENT_ID" --cert --query "[?displayName=='CN=$cert_name'].keyId | [0]" -o tsv)"
-		[ -n "$key" ] && az ad app credential delete --id "$ENTRA_API_CLIENT_ID" --key-id "$key" --cert -o none
-		rm -f "$dir/obo.key" "$dir/obo.crt" "$dir/obo.pem"
+		[ -n "$key" ] || { echo "snowflake_live: the certificate CN=$cert_name is not on duckdb-secrets - remove it by hand; the local files are kept" >&2; exit 1; }
+		az ad app credential delete --id "$ENTRA_API_CLIENT_ID" --key-id "$key" --cert -o none
+		rm -f "$dir/obo.key" "$dir/obo.crt" "$dir/obo.pem" "$dir/entra-issuer.yaml" "$dir/entra-secret.json"
 	fi
 	app="$(resource)"
 	if [ -n "$app" ]; then
 		az ad app permission delete --id "$ENTRA_API_CLIENT_ID" --api "$app" -o none 2>/dev/null || true
-		az ad app delete --id "$app" -o none
+		az ad app delete --id "$app" -o none     # soft-deleted for 30 days; its delegated grant goes with its principal
 	fi
 	echo "snowflake_live: down (run design/snowflake/teardown.sql in Snowflake)"
 }

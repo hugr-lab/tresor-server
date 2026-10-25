@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -1012,6 +1013,12 @@ func identities(ctx context.Context, cfg *config.Config) (map[string]login.Ident
 			}
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", where, err)
+			}
+			// a key whose public half is at hand (a file) is checked against the fingerprint now, not at Snowflake
+			if p, ok := signer.(interface{ Public() crypto.PublicKey }); ok {
+				if fp, err := clientauth.Fingerprint(p.Public()); err != nil || fp != id.PublicKeyFP {
+					return nil, fmt.Errorf("%s: public_key_fp is not the key's", where)
+				}
 			}
 			source, err := clientauth.Snowflake(id.Account, id.User, id.PublicKeyFP, signer)
 			if err != nil {

@@ -6,7 +6,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"os"
@@ -141,7 +143,7 @@ func TestCertificateFirstAndX5T(t *testing.T) {
 // upper-cased, a minute's life, RS256; an EC key refused
 func TestSnowflake(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	src, err := Snowflake("myorg.acct", "tresor_svc", "SHA256:abc=", rsaSigner{key})
+	src, err := Snowflake("myorg-acct", "tresor_svc", "SHA256:abc=", rsaSigner{key})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +155,12 @@ func TestSnowflake(t *testing.T) {
 	if c.Issuer != "MYORG-ACCT.TRESOR_SVC.SHA256:abc=" || c.Subject != "MYORG-ACCT.TRESOR_SVC" ||
 		c.Expiry.Time().Sub(c.IssuedAt.Time()) != time.Minute || len(c.Audience) != 0 {
 		t.Fatalf("claims: %+v", c)
+	}
+	// the fingerprint as Snowflake shows it: SHA256 over the public key's DER (SubjectPublicKeyInfo), base64
+	der, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	sum := sha256.Sum256(der)
+	if fp, err := Fingerprint(rsaSigner{key}.Public()); err != nil || fp != "SHA256:"+base64.StdEncoding.EncodeToString(sum[:]) {
+		t.Fatalf("fingerprint: %s %v", fp, err)
 	}
 	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if _, err := Snowflake("a", "u", "SHA256:abc=", ecSigner{ec}); err == nil {

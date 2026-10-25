@@ -26,9 +26,12 @@ signs, and a user's own token from the identity provider (External OAuth).
 ## Design
 
 - **PAT**: `oauth2_client_credentials` with no `client_id`: the `client_secret` goes in the form
-  (client_secret_post without an id). With a `client_id`, as now (HTTP Basic).
-- **Key pair**: a new identity kind `snowflake` in `dynamic.identities`: `account`, `user`, `public_key_fp`
-  (`SHA256:...`, as `DESC USER` shows it - a wrong one fails at Snowflake, never silently), `client`
+  (client_secret_post without an id). With a `client_id`, as now (HTTP Basic). So in every flow: an
+  `oauth2_password` or `oauth2_refresh` login with a secret but no id sent Basic with an empty user before; it
+  sends the secret in the form now (the release notes say so).
+- **Key pair**: a new identity kind `snowflake` in `dynamic.identities`: `account` (the org-account identifier,
+  or the locator without its region - a `.` is refused), `user`, `public_key_fp` (`SHA256:...`, as `DESC USER`
+  shows it; a key file's is checked at start, a KMS key's fails at Snowflake, never silently), `client`
   (`client_auth`: `key_file`, `keyvault`, `vault`, `awskms`, `gcpkms` - an RSA key), `token_urls`. A
   `jwt_assertion` login naming it sends its JWT (a minute's life) as `client_secret`, `grant_type`
   `client_credentials`, the login's `scope`.
