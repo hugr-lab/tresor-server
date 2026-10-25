@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -224,6 +225,16 @@ func TestRevocation(t *testing.T) {
 	// an admin cuts a node off; a filter is required
 	if r := f.do("DELETE", "/v1/delegations", f.admin, ""); r.status != 422 {
 		t.Fatalf("an unfiltered admin revoke: %d", r.status)
+	}
+	// ... the console's "revoke my sessions": an admin names their own subject (subject:<issuer>|<sub>, whoami's)
+	mine, _ := f.grantFor(node, f.admin)
+	w := f.do("GET", "/v1/whoami", f.admin, "").json(t)
+	own := url.QueryEscape("subject:" + w["issuer"].(string) + "|" + w["subject"].(string))
+	if r := f.do("DELETE", "/v1/delegations?subject="+own, f.admin, ""); r.status != 200 || r.json(t)["revoked"] != float64(1) {
+		t.Fatalf("an admin's own sessions: %d %s", r.status, r.body)
+	}
+	if r := f.do("GET", "/v1/whoami", node, "", "Delegation", mine); r.status != 401 {
+		t.Fatalf("the admin's own grant after the revoke: %d", r.status)
 	}
 	if r := f.do("DELETE", "/v1/delegations?actor=client:node", f.admin, ""); r.status != 200 || r.json(t)["revoked"] != float64(1) {
 		t.Fatalf("admin by actor: %d %s", r.status, r.body)

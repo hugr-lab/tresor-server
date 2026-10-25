@@ -136,7 +136,9 @@ function UserMenu() {
           <span className="text-[12px] text-muted">The session ends {new Date(me.expires_at).toLocaleTimeString()}.</span>
           <button type="button" role="menuitem" className="btn-ghost justify-start px-2" onClick={async () => {
             try {
-              const r = await api.call<{ revoked: number }>('DELETE', '/v1/delegations')
+              // the caller's own subject: an administrator's unfiltered revoke is refused (it would be everyone's)
+              const own = encodeURIComponent(`subject:${me.issuer}|${me.subject}`)
+              const r = await api.call<{ revoked: number }>('DELETE', `/v1/delegations?subject=${own}`)
               toast(`${r.data.revoked} session(s) on servers revoked`)
             } catch (e) {
               toast(`Not revoked: ${(e as Error).message}`)
