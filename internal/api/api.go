@@ -401,9 +401,9 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 		issuers = append(issuers, entry)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"protocol": Protocol,
-		"api":      strings.TrimRight(s.cfg.PublicURL, "/"),
-		"issuers":  issuers,
+		"protocol":     Protocol,
+		"api":          strings.TrimRight(s.cfg.PublicURL, "/"),
+		"issuers":      issuers,
 		"capabilities": capabilities,
 	})
 }
