@@ -4,7 +4,7 @@ title: Supported versions
 
 # Supported versions
 
-**Releases**: the latest minor gets fixes (0.4.x); before 1.0 nothing is backported, and an upgrade may ask for a
+**Releases**: the latest minor gets fixes (0.7.x); before 1.0 nothing is backported, and an upgrade may ask for a
 step of its own ([Upgrading](administration/upgrading.md)). Security reports:
 [SECURITY.md](https://github.com/hugr-lab/tresor-server/blob/main/SECURITY.md).
 
@@ -29,8 +29,9 @@ version of the same product is expected to work; it has not been run.
 
 ## On the clouds (by hand)
 
-Run live with the scripts in `scripts/dev/`, on the provider's default Kubernetes version of the day. These ran
-0.1-0.3 images, before the MAC's default and `cors`; what 0.4 changed is covered by CI above.
+Run live with the scripts in `scripts/dev/`, on the provider's default Kubernetes version of the day. The dates are
+the last runs recorded, all before the 0.4.0 release (2026-10-15): what 0.4 to 0.7 changed is checked by CI above,
+not on a cloud.
 
 | Platform | What ran | When |
 | --- | --- | --- |

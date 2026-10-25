@@ -24,25 +24,31 @@ tresor's conformance suite runs against it in CI, on every state store.
 tresor's reference server proves the protocol. It is one process with one encrypted file. tresor-server is
 what an organization runs:
 
-- **State in its database.** SQLite for one replica; PostgreSQL or SQL Server (Azure SQL) for several.
-- **Material sealed under a KMS key.** The key-encryption key (KEK) stays in Azure Key Vault or Managed HSM;
-  the service keeps only wrapped data keys.
+- **State in its database.** SQLite for one replica; PostgreSQL, SQL Server (Azure SQL) or the Kubernetes API
+  (custom resources, no database) for several.
+- **Material sealed under a KMS key.** The key-encryption key (KEK) stays in Azure Key Vault or Managed HSM, AWS
+  KMS, GCP Cloud KMS or OpenBao/Vault Transit; the service keeps only wrapped data keys.
 - **Material left where it is.** A secret's parameter can be a reference, `ref+azkv://corp-vault/lake-s3`:
-  the value stays in Azure Key Vault, and is read at each fetch. A rotation there reaches DuckDB at once.
-- **No password of its own.** On Azure the service is a managed identity or a workload identity: Key Vault, Azure SQL and Azure
-  Database for PostgreSQL log it in by Entra token.
-- **One container.** A distroless image, and a recipe for Azure Container Apps.
+  the value stays in Azure Key Vault, AWS Secrets Manager, GCP Secret Manager, OpenBao/Vault or a Kubernetes
+  Secret, and is read at each fetch. A rotation there reaches DuckDB at once.
+- **Values made per caller.** A parameter can be a token minted for the caller, a claim of their token, or what a
+  service login got ([Generated parameters](generated.md)); variables beside secrets ([Variables](variables.md)).
+- **No password of its own.** The service logs in with its platform's identity - a managed or workload identity
+  on Azure, IAM roles on AWS, a service account on GCP, a ServiceAccount token for Vault - to its KEK, its
+  references and its database.
+- **One container.** A distroless image; a Helm chart, and recipes for Azure Container Apps, ECS and Cloud Run.
+- **A console** for administrators, at `/ui/` ([Console](console.md)).
 
 ## How it fits together
 
 ```mermaid
 flowchart LR
   duckdb["DuckDB + tresor"] -- "duckdb-secrets/1, bearer token" --> svc["tresor-server"]
-  duckdb -- "OIDC login" --> idp["Entra ID / Keycloak / Okta"]
+  duckdb -- "OIDC login" --> idp["Entra ID / Keycloak / ZITADEL / Okta"]
   svc -- "JWKS" --> idp
-  svc -- "state: secrets, grants, grants for servers" --> db[("SQLite / PostgreSQL / SQL Server")]
-  svc -- "wrap / unwrap data keys" --> kek["Key Vault key (KEK)"]
-  svc -- "ref+azkv:// at each fetch" --> kv["Key Vault secrets"]
+  svc -- "state: secrets, variables, grants" --> db[("SQLite / PostgreSQL / SQL Server / Kubernetes")]
+  svc -- "wrap / unwrap data keys" --> kek["KEK: Key Vault / KMS / Cloud KMS / Transit"]
+  svc -- "ref+… at each fetch" --> kv["Key Vault / Secrets Manager / Secret Manager / Vault / Secrets"]
 ```
 
 ## Where to go next
@@ -51,6 +57,8 @@ flowchart LR
 - [Configuration](configuration.md): every setting, in a file or in the environment.
 - [Azure Container Apps](azure-container-apps.md): a deployment with a database, Key Vault and a managed
   identity.
+- [Kubernetes](kubernetes.md), [AWS](aws.md), [GCP](gcp.md), [OpenBao and Vault](vault.md): the chart and the
+  other platforms.
 - [Security](security.md): what the service guarantees, and what it trusts.
 
 ## License

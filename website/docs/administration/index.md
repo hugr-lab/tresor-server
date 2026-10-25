@@ -83,8 +83,8 @@ else.
 ### AWS, GCP
 
 The KMS keys' MAC operation (`kms:GenerateMac`, a MAC key's `useToSign`) is the service's alone: see
-[AWS](../aws.md#the-kek-two-keys) and [GCP](../gcp.md#the-kek-a-key-and-a-mac-version). Jobs on ECS and Cloud
-Run are not written yet (spec 012).
+[AWS](../aws.md#the-kek-two-keys) and [GCP](../gcp.md#the-kek-a-key-and-a-mac-version). The commands run as
+jobs on [ECS](commands.md#ecs-the-aws-recipe) and [Cloud Run](commands.md#cloud-run-the-gcp-recipe).
 
 ## The runbooks
 

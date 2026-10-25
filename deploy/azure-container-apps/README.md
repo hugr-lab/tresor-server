@@ -19,7 +19,8 @@ What it creates in a resource group:
   - built-in ingress with TLS (`tls.offload`: TLS ends at the ingress). The container's port is reachable
     only through the ingress: `tls.offload` must never be set where the port is exposed directly;
   - two replicas or more;
-  - liveness `/healthz` and readiness `/readyz`.
+  - liveness `/healthz` and readiness `/readyz` (probed every 10 s, unready after 3 failures; the service runs its
+    checks every 30 s).
 
 The configuration is all environment variables (`TRESOR_*`). Nothing is mounted.
 
@@ -37,8 +38,8 @@ az deployment group create -g tresor -f main.bicep \
   -p admins="[role:secrets_admin]"
 ```
 
-The outputs are the service's URL (`https://…azurecontainerapps.io`), the vault's name, and the identity's client
-id. DuckDB then attaches it:
+The outputs are the service's URL (`https://…azurecontainerapps.io`), the vault's name, the identity's client
+id, and the database's DSN (`dsn`, no password in it). DuckDB then attaches it:
 
 ```sql
 ATTACH 'tresor:<url without https://>' AS corp;

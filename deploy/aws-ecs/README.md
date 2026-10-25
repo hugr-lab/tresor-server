@@ -9,7 +9,7 @@ too.
 
 | | |
 | --- | --- |
-| **The task role** `<prefix>-task` | no key: `kms:Encrypt`/`Decrypt`/`DescribeKey` on the KEK, `kms:GenerateMac` on the MAC key (the service's alone), `secretsmanager:GetSecretValue` on `material_prefixes`, `rds-db:connect` on its database user |
+| **The task role** `<prefix>-task-<region>` | no key: `kms:Encrypt`/`Decrypt`/`DescribeKey` on the KEK, `kms:GenerateMac` on the MAC key (the service's alone), `secretsmanager:GetSecretValue` on `material_prefixes`, `rds-db:connect` on its database user |
 | **KMS** | `<prefix>-kek` (symmetric, rotated yearly by KMS - its id stays, no `rewrap`), `<prefix>-root` (HMAC_256: the KEK's root, not rotated; its key policy lets the task role alone MAC); a 30-day deletion window |
 | **RDS** `<prefix>-pg` | PostgreSQL 16, IAM authentication, `rds.force_ssl`, private subnets, **not publicly accessible**, encrypted, backups; the master password kept and rotated by RDS in Secrets Manager - never in Terraform's state |
 | **The database's user** | `<prefix>_svc`, granted `rds_iam`, owning the database `tresor` - made once by the `db-init` task `apply` runs, with an execution role of its own (the only one reading the master password); `state.mac: true` - every row authenticated |
@@ -34,9 +34,12 @@ terraform output url
   points the name at the load balancer. A domain elsewhere (Cloudflare, say): delegate a subdomain to a Route 53
   zone by NS records once - or give `certificate_arn` (an issued certificate) and point the name at `lb_dns_name`
   by hand.
+- **`prefix`** (`tresor`): every resource's name - lower-case letters, digits and dashes, a letter first, no dash
+  last or doubled, 15 characters at most.
 - **`issuers`, `admins`, `actors`**: as the Configuration page, YAML in a string - the same values the other
   recipes take.
-- **`material_prefixes`**: the Secrets Manager names `ref+aws` may read in this account and region.
+- **`material_prefixes`** (`duckdb/`): the Secrets Manager names `ref+aws` may read in this account and region -
+  at least one, none empty.
 
 ## Run a command
 
@@ -69,7 +72,7 @@ platform's operators only (the Administration pages).
 - `apply` waits for the service to be healthy, and rolls a failed deployment back.
 - **Keep the KMS keys**: without them the database's material never opens. A destroy schedules their deletion
   (30 days); cancel it (`aws kms cancel-key-deletion`) if it was a mistake.
-- The image: a version (`image`), never `edge`.
+- The image: a version (`image`, `ghcr.io/hugr-lab/tresor-server:v0.7.5` by default), never `edge`.
 - Nothing here makes the database public: keep it so.
 
 ## Destroy (a trial)
