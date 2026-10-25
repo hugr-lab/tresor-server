@@ -25,7 +25,8 @@ title: Upgrading
    upgrade that changes them says so: apply them first.
 
    ```sh
-   kubectl apply --server-side -f crds/
+   helm pull oci://ghcr.io/hugr-lab/charts/tresor-server --version <chart version> --untar
+   kubectl apply --server-side -f tresor-server/crds/
    ```
 
    Variables (spec 004) brought `TresorVariable`: an install from before needs it, or the service does not start.
@@ -34,6 +35,8 @@ title: Upgrading
      `refsBeforeUpgrade` hook does not run when the image changes.
    - **Container Apps**: the recipe again with `-p image=ghcr.io/hugr-lab/tresor-server:<version>`. A version
      tag, not `edge`.
+   - **ECS**: `terraform apply -var image=ghcr.io/hugr-lab/tresor-server:v<version>` (the recipe's `image`).
+   - **Cloud Run**: `terraform apply -var image_tag=v<version>` (`image` only for an image of your own registry).
    - **Docker, a VM**: the new image or binary, one replica at a time.
 5. **The version's own steps**, once every replica runs it (below).
 
@@ -87,7 +90,7 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
 
 ### Upgrading to 0.5 (spec 023)
 
-- **Kubernetes store: apply the CRDs first** (`kubectl apply --server-side -f crds/`): `TresorSecret` and
+- **Kubernetes store: apply the CRDs first** (step 3: the 0.5 chart's `crds/`): `TresorSecret` and
   `TresorVariable` have a new field, `dynamic`. With the old CRDs the API server drops it, and a secret with
   generated parameters is refused (its MAC no longer verifies).
 - **The SQL stores** migrate at start (a column, `dynamic`): nothing to do.
@@ -103,6 +106,10 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
   ([Generated parameters](../generated.md#service-logins)). A secret of type `tresor_service_login` is never served.
 - **ZITADEL key files**: a machine user's key (`userId`, no `clientId`) is now read as that user's client - an
   `exchange.key_file` of such a key names its client by it.
+
+### Upgrading to 0.5.1
+
+- **Nothing to do**: tresor's extension at a newer commit (the docs); no migration, no setting.
 
 ### Upgrading to 0.6 (spec 024)
 
@@ -125,6 +132,10 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
   `ca_file`.
 - **The chart's objects now name their namespace** (`metadata.namespace`): the same one as before unless
   `namespaceOverride` is set.
+
+### Upgrading to 0.7.1
+
+- **Nothing to do**: Go 1.27.3, a security release, in the binary and the image.
 
 ### Upgrading to 0.7.2 (specs 027, 028)
 

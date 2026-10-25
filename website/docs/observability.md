@@ -39,7 +39,7 @@ Container Apps, AKS and Log Analytics collect stdout with no set-up.
   `denied`. Whoever reads the audit sees every name, and who used it.
 - **`audit.level`**:
   - `all` (default): everything;
-  - `changes`: everything but successful reads;
+  - `changes`: everything but successful reads and inspections (a reveal is kept);
   - `off`: nothing.
 - **To OpenTelemetry**: with an OTLP endpoint, each event is also a log record. Its body is the kind, its
   attributes `tresor.*`, and it carries the trace context.

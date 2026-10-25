@@ -15,7 +15,7 @@ issuers:
     audience: duckdb-secrets
     exchange:
       client_id: duckdb-secrets
-      client_auth: secret          # secret | azure | file | keyvault | key_file | vault
+      client_auth: secret          # secret | azure | file | keyvault | key_file | vault | awskms | gcpkms
       client_secret_env: TRESOR_EXCHANGE_SECRET
 ```
 
@@ -29,6 +29,8 @@ Every way but `secret` needs no secret of the service's own (spec 006).
 | `keyvault` | a JWT it signs with `key` in Key Vault (RS256 or ES256), as `kid` | any IdP with `private_key_jwt`, on Azure |
 | `key_file` | a JWT it signs with `key_file`: ZITADEL's key file, or a PEM key with `kid` | ZITADEL; any IdP with `private_key_jwt`, with no KMS |
 | `vault` | a JWT it signs with `key` (`<mount>/<key>`) in Transit, OpenBao's or Vault's (RS256 or ES256), as `kid` or `x5t` | ZITADEL's key imported; any IdP with `private_key_jwt`, with OpenBao or Vault |
+| `awskms` | a JWT it signs with `key`, an asymmetric KMS key's ARN (RS256 or ES256), as `kid` or `x5t` | any IdP with `private_key_jwt`, on AWS ([AWS](aws.md#token-exchange-the-assertion-signed-in-kms)) |
+| `gcpkms` | a JWT it signs with `key`, an asymmetric Cloud KMS key's version (RS256 or ES256), as `kid` or `x5t` | any IdP with `private_key_jwt`, on GCP ([GCP](gcp.md#token-exchange-the-assertion-signed-in-cloud-kms)) |
 
 - **Signed JWTs**: `iss` and `sub` are the client id, plus a fresh `jti`, valid for one minute. The header
   names the key by `kid`, and by `x5t` (a certificate's thumbprint) when it is set.
@@ -44,8 +46,9 @@ Every way but `secret` needs no secret of the service's own (spec 006).
   for a grant made meanwhile, while its user's token lives (spec 017). A refusal for one audience
   (Keycloak's `access_denied` "Client not allowed to exchange", `invalid_request` "Requested audience not
   available") is a refusal of that secret: `403`.
-- **Readiness** has a check `exchange <issuer>` per issuer: it makes an assertion. A failure there is
-  *degraded*, not unready: only `token_exchange` secrets depend on it.
+- **Readiness** has a check `exchange <issuer>` per issuer with a `client_auth` other than `secret`: it makes an
+  assertion. A failure there is *degraded*, not unready: only what mints at that issuer depends on it - every
+  `mint+exchange://` in a secret or a variable (since 0.5), and `token_exchange` secrets.
 
 ## Entra: On-Behalf-Of, a federated credential
 
@@ -53,7 +56,10 @@ Entra does not take RFC 8693's token exchange; its equivalent is On-Behalf-Of (s
 registration trusts the service's own Azure identity, with no client secret.
 
 ```yaml
-exchange: {client_id: <the app registration's client id>, client_auth: azure, grant: on_behalf_of}
+issuers:
+  - issuer: https://login.microsoftonline.com/<tenant>/v2.0
+    audience: <the service's API client id>
+    exchange: {client_id: <the app registration's client id>, client_auth: azure, grant: on_behalf_of}
 azure: {identity: managed}         # Container Apps; workload on AKS
 ```
 
@@ -86,12 +92,14 @@ azure: {identity: managed}         # Container Apps; workload on AKS
 ### Entra with a certificate (`keyvault`)
 
 ```yaml
-exchange:
-  client_id: <the app registration's client id>
-  client_auth: keyvault
-  key: https://corp-kv.vault.azure.net/keys/tresor-exchange
-  x5t: <the certificate's SHA-1 thumbprint, base64url>
-  assertion_audience: token_endpoint
+issuers:
+  - issuer: https://login.microsoftonline.com/<tenant>/v2.0
+    exchange:
+      client_id: <the app registration's client id>
+      client_auth: keyvault
+      key: https://corp-kv.vault.azure.net/keys/tresor-exchange
+      x5t: <the certificate's SHA-1 thumbprint, base64url>
+      assertion_audience: token_endpoint
 ```
 
 - Entra's app certificates are RSA.

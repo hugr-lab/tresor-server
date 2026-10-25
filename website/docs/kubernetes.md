@@ -11,7 +11,7 @@ cluster: no database, and with workload identity on AKS, no secret of its own.
 helm install tresor oci://ghcr.io/hugr-lab/charts/tresor-server -n tresor --create-namespace -f values.yaml
 ```
 
-Kubernetes 1.30 or later. The chart's own README lists every value.
+Kubernetes 1.30 or later. The chart's `values.yaml` documents every value; its README, the main ones.
 
 ## The Kubernetes store, the KEK in Key Vault (AKS)
 
@@ -87,7 +87,8 @@ stores](state.md#kubernetes)):
 - **On another store**, install with `--skip-crds`.
 - **On the Kubernetes store without cluster rights**: a cluster admin applies `crds/` first. Install with
   `--skip-crds` and `admissionPolicy.enabled: false` (the policy is cluster-scoped too).
-- **An upgrade** that changes the CRDs says so: run `kubectl apply --server-side -f crds/` first. Variables
+- **An upgrade** that changes the CRDs says so: apply the new chart's first -
+  `helm pull oci://ghcr.io/hugr-lab/charts/tresor-server --version <version> --untar && kubectl apply --server-side -f tresor-server/crds/`. Variables
   (spec 004) brought `TresorVariable`: an install from before needs it, or the service does not start.
 - **One installation per namespace**: a second release's admission policy would lock the first out.
 
@@ -115,8 +116,8 @@ The KEK in Transit, `ref+vault` and the exchange's key in Vault, with the chart'
 ## Other stores
 
 - **PostgreSQL or SQL Server**: `config.state` as on any host.
-  - The password can come from a Secret: `state.password_ref: ref+k8s://db/tresor-pg/password`. The chart
-    grants `get` on that one Secret.
+  - The password can come from a Secret: `auth: password` with `state.password_ref: ref+k8s://db/tresor-pg/password`.
+    The chart grants `get` on that one Secret.
   - Or from workload identity, with `auth: entra`.
 - **SQLite**: not recommended on a cluster - one replica on a ReadWriteOnce claim, and every command needs the
   service scaled to 0 first (`kubectl scale deploy/<fullname> --replicas=0`; its volume is the serving pod's,

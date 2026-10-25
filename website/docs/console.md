@@ -17,7 +17,9 @@ corp`); the console is for looking at what the service holds and changing it wit
   check `tresor-server refs` runs, optionally reading each one.
 - **Service**: the version, the state store, the KEK's kind and current version, the data keys (how many, how
   old, and whether `reseal` or `reseal -retire` is due - see [Data keys](administration/data-keys.md)), the
-  issuers, the sources and where they may read, the policy, readiness.
+  issuers, the sources and where they may read, the policy (an actor by role with its issuer), readiness.
+- **The account menu**: who is signed in - the name `whoami` gives (`name`, else the subject), the issuer, the
+  roles.
 
 ## What an administrator sees
 
@@ -25,9 +27,11 @@ corp`); the console is for looking at what the service holds and changing it wit
   "secret" switch does too) is **never shown**: it is kept or set anew.
 - A parameter not marked is shown on request (**Show values**), and each such request is audited as `reveal`.
 - A reference is shown as written, never what it resolves to.
-- Views through the console's own API (`/admin/v1`) are audited as `inspect`, and Show values as `reveal`,
-  subject to `audit.level` (see [Observability](observability.md)); the lists and grants come from the protocol's
-  routes, audited as theirs. Using a secret still needs a grant: an administrator holds no `use` by being one.
+- Views through the console's own API (`/admin/v1`) - the service, an entry's shape, the grants, a references
+  check - are audited as `inspect`, and Show values as `reveal`, subject to `audit.level` (see
+  [Observability](observability.md)); the data keys (`/admin/v1/data-keys`) and the logins (`/admin/v1/logins`)
+  are not audited. The lists come from the protocol's routes, not audited either; a grant or a revoke is audited
+  as the protocol's. Using a secret still needs a grant: an administrator holds no `use` by being one.
 
 ## Signing in
 

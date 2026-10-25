@@ -18,7 +18,8 @@ shows the same.
 | `keys` | the KEK does not wrap and unwrap a throwaway key | [a KEK unreachable](#a-kek-unreachable) |
 | `keys.previous[i]` | a previous KEK, or the operation its root needs (Transit's `hmac`, Key Vault's `sign`) | its rights; or finish the [move](kek.md#moving-to-another-kek) |
 | `issuer <url>` | its discovery or signing keys never answered. Down after answering once: `degraded` | the IdP, the network, a private CA (`SSL_CERT_DIR`) |
-| `exchange <url>` | `degraded` only: the service cannot make its client assertion | [the IdP's client](credentials.md#the-client-at-the-identity-provider-exchange) |
+| `exchange <url>` | `degraded` only: the service cannot make its client assertion (none with `client_auth: secret`) | [the IdP's client](credentials.md#the-client-at-the-identity-provider-exchange) |
+| `tls` | `degraded` only: a new certificate and key failed to load - the old pair still serves - or the certificate in service expired | the files `tls.cert` and `tls.key` name: a pair, in date ([Configuration](../configuration.md#listen-public_url-tls)) |
 
 A replica that does not start at all names the setting or the right in its log: a configuration error, a KEK or a
 Transit key that does not answer at start, the CRDs not served, no identity injected.
@@ -63,7 +64,7 @@ unready (`state`), and takes over when the first stops.
 
 ## The IdP refuses the service's client
 
-Reads of `token_exchange` secrets answer `503`; the log has an error, "the identity provider refused the
+Reads that mint at the IdP (`mint+exchange://`, `token_exchange` secrets) answer `503`; the log has an error, "the identity provider refused the
 service's own client", with the issuer and the IdP's code (`invalid_client`, `unauthorized_client`) and
 description. The audit's outcome is `error`. Nothing is stored in a delegation grant: fix the client (a secret
 expired, a federated credential, the exchange permission) and the next read mints

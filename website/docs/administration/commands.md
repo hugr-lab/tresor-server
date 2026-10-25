@@ -171,7 +171,3 @@ sudo -u <the service's user> env $(cat /etc/tresor/env) tresor-server reseal -re
 ```
 
 On SQLite, stop the service first for `rewrap`, `mac` and `reseal`, and start it after.
-
-## AWS, GCP
-
-ECS run-task and Cloud Run jobs are not written yet (spec 012): they come with their live checks.

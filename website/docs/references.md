@@ -105,9 +105,9 @@ vault: {address: https://bao.example.eu:8200, auth: {method: kubernetes, role: t
 
 ## Named sources
 
-The name after `ref+` is a **source**. Each kind's section (`material.azkv`, `material.k8s`, `material.vault`)
-is a source named after its kind. `material.sources` adds more, each with its own name, connection and
-allowlist (spec 008):
+The name after `ref+` is a **source**. Each kind's section (`material.azkv`, `material.k8s`, `material.vault`,
+`material.aws`, `material.gcp`) is a source named after its kind. `material.sources` adds more, each with its own
+name, connection and allowlist (spec 008):
 
 ```yaml
 material:
@@ -129,18 +129,21 @@ material:
   between, 16 at most.
   - The kinds' names are reserved: `azkv`, `k8s`, `vault`, `aws`, `gcp`. So every reference written before
     keeps its meaning.
-- **The kinds**: `vault` and `azkv`. `k8s` reads this cluster only: another would need a kubeconfig's
-  credentials.
+- **The kinds**: `vault`, `azkv`, `aws` and `gcp`. `k8s` reads this cluster only: another would need a
+  kubeconfig's credentials.
 - **The connection**:
   - a `vault:` block, as the top-level one, or the top-level one when unset;
   - an `azure:` block: `identity`, `client_id` (required, but for `default`), and `tenant_id` (with
     `workload`: an app registration in another tenant, federated to the same ServiceAccount). The top-level
     `azure:` when unset.
-  - Neither needs a static secret. A second Azure identity is another user-assigned managed identity
+  - an `aws:` block: `region` (required), `role_arn` (a role in another account), `endpoint_url`. The top-level
+    `aws:` when unset.
+  - `gcp` has no block of its own: it reads with the service's GCP identity.
+  - None needs a static secret. A second Azure identity is another user-assigned managed identity
     (Container Apps), or another app registration under workload identity.
 - **Each allowlist is the source's own.** A place one source admits is not admitted for another of the kind.
-  Its syntax is the kind's: `{mount, prefixes}` for `vault`, `{vault, prefixes}` for `azkv`. `cache_ttl` and,
-  for `azkv`, `dns_suffix` are the source's too.
+  Its syntax is the kind's: `{mount, prefixes}` for `vault`, `{vault, prefixes}` for `azkv`, `{prefixes}` for
+  `aws`, `{project, prefixes}` for `gcp`. `cache_ttl` and, for `azkv`, `dns_suffix` are the source's too.
 - **Renaming or removing a source strands its references.** They are refused at a write, and fail at a fetch
   as a reference outside the allowlist does. They are never read by another source of the kind. Rename a
   source only with its references rewritten: `tresor-server refs` lists them (see
@@ -167,8 +170,9 @@ At a fetch with `use`:
   `503 service_unavailable`. Never an empty or a stale value;
 - each resolution is logged: the secret, the reference, the version. Never the value.
 
-`material.azkv.cache_ttl` (at most 5 minutes) keeps a value read for that long, for the vault's request
-limits. It is the longest a value may be read stale.
+`cache_ttl` (`material.azkv`, `.vault`, `.aws`, `.gcp`, a named source's; `0` by default, at most 5 minutes)
+keeps a value read for that long, for the source's request limits. It is the longest a value may be read stale.
+`ref+k8s` has none.
 
 ## The database's password
 
