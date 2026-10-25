@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -213,6 +214,16 @@ func TestRefsCheckAndService(t *testing.T) {
 	if r.status != 200 || svc["version"] != "test" || svc["kek"].(map[string]any)["current"] != "local:v1" ||
 		svc["ready"].(map[string]any)["ready"] != true || len(svc["issuers"].([]any)) != 1 {
 		t.Fatalf("%d %s", r.status, r.body)
+	}
+	// the protocol's capabilities as discovery names them; token_exchange where an issuer exchanges
+	if caps := fmt.Sprint(svc["capabilities"]); caps != "[annotate delegation dynamic variables write token_exchange]" {
+		t.Fatalf("capabilities: %s", caps)
+	}
+	plain := newFixtureWith(t, "", false)
+	withConsole(plain)
+	pr := plain.do("GET", "/admin/v1/service", plain.admin, "")
+	if caps := fmt.Sprint(pr.json(t)["capabilities"]); caps != "[annotate delegation dynamic variables write]" {
+		t.Fatalf("with no exchange client: %d %s", pr.status, pr.body)
 	}
 	if strings.Contains(string(r.body), "TRESOR_TEST_EXCHANGE") {
 		t.Fatal("a secret's variable name in the service page")

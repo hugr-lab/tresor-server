@@ -311,9 +311,9 @@ export function Service() {
         <section className="card flex flex-col gap-3">
           <span className="eyebrow">Capabilities and policy</span>
           <div className="flex flex-wrap gap-1.5">{s.capabilities.map((c) => <span key={c} className="chip bg-soft font-mono font-normal">{c}</span>)}</div>
-          <dl className="m-0 grid grid-cols-[160px_1fr] gap-x-4 gap-y-2 text-[13px]">
+          <dl className="m-0 grid grid-cols-[160px_minmax(0,1fr)] gap-x-4 gap-y-2 text-[13px]">
             <dt className="text-muted">Administrators</dt><dd className="m-0 font-mono">{s.policy.admins.join(', ')}</dd>
-            <dt className="text-muted">Actors</dt><dd className="m-0 font-mono">{s.policy.actors.map((a) => `${a.principal}${a.issuer ? ` from ${a.issuer}` : ''} (${a.verbs.join(', ')})`).join('; ') || '—'}</dd>
+            <dt className="text-muted">Actors</dt><dd className="m-0 min-w-0 break-all font-mono">{s.policy.actors.map((a) => `${a.principal}${a.issuer ? ` from ${a.issuer}` : ''} (${a.verbs.join(', ')})`).join('; ') || '—'}</dd>
             <dt className="text-muted">Audit</dt><dd className="m-0">{s.audit}</dd>
           </dl>
         </section>
