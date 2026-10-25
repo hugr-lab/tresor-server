@@ -401,14 +401,15 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 		issuers = append(issuers, entry)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"protocol": Protocol,
-		"api":      strings.TrimRight(s.cfg.PublicURL, "/"),
-		"issuers":  issuers,
-		"capabilities": map[string]bool{
-			"write": true, "annotate": true, "dynamic": true, "delegation": true, "variables": true,
-		},
+		"protocol":     Protocol,
+		"api":          strings.TrimRight(s.cfg.PublicURL, "/"),
+		"issuers":      issuers,
+		"capabilities": capabilities,
 	})
 }
+
+// capabilities are the protocol's, as discovery names them; the console's service view shows the same.
+var capabilities = map[string]bool{"write": true, "annotate": true, "dynamic": true, "delegation": true, "variables": true}
 
 func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
 	c := callerOf(r)

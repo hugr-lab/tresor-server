@@ -43,26 +43,26 @@ its GitHub OIDC identity - no key exists to steal. Check the exact identity - th
 cosign v3 or later:
 
 ```sh
-cosign verify ghcr.io/hugr-lab/tresor-server:v0.4.0 \
-  --certificate-identity https://github.com/hugr-lab/tresor-server/.github/workflows/image.yml@refs/tags/v0.4.0 \
+cosign verify ghcr.io/hugr-lab/tresor-server:v0.7.5 \
+  --certificate-identity https://github.com/hugr-lab/tresor-server/.github/workflows/image.yml@refs/tags/v0.7.5 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
-cosign verify ghcr.io/hugr-lab/charts/tresor-server:0.4.0 \
-  --certificate-identity https://github.com/hugr-lab/tresor-server/.github/workflows/chart.yml@refs/tags/v0.4.0 \
+cosign verify ghcr.io/hugr-lab/charts/tresor-server:0.7.5 \
+  --certificate-identity https://github.com/hugr-lab/tresor-server/.github/workflows/chart.yml@refs/tags/v0.7.5 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 `:edge` is signed from main: `image.yml@refs/heads/main`. A looser check (any workflow of the repository) would
 also accept a signature made from a branch.
 
-- **Verify a digest, deploy that digest**: a tag can move; `image.tag: v0.4.0@sha256:…` on the chart (the same
+- **Verify a digest, deploy that digest**: a tag can move; `image.tag: v0.7.5@sha256:…` on the chart (the same
   reference in a recipe's image) pins what was verified. A policy controller (Kyverno, Sigstore's policy-controller) can require the
   signature at admission.
 - **The SBOM and the provenance** (BuildKit's attestations, beside the image in the registry):
 
   ```sh
-  docker buildx imagetools inspect ghcr.io/hugr-lab/tresor-server:v0.4.0 --format '{{ json .SBOM }}'
-  docker buildx imagetools inspect ghcr.io/hugr-lab/tresor-server:v0.4.0 --format '{{ json .Provenance }}'
+  docker buildx imagetools inspect ghcr.io/hugr-lab/tresor-server:v0.7.5 --format '{{ json .SBOM }}'
+  docker buildx imagetools inspect ghcr.io/hugr-lab/tresor-server:v0.7.5 --format '{{ json .Provenance }}'
   ```
 
 - **The scan**: the linux/amd64 image is scanned (Trivy) before anything is pushed; a HIGH or CRITICAL finding
