@@ -1,6 +1,6 @@
 # Spec 034: the docs before a release
 
-- **Status**: accepted (the owner, 2026-10-25: "пройтись по документации")
+- **Status**: implemented (#95; the owner, 2026-10-25: "пройтись по документации")
 - **Date**: 2026-10-25
 - **Author**: hugr lab
 

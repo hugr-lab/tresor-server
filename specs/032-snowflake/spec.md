@@ -1,6 +1,6 @@
 # Spec 032: Snowflake - Iceberg through Horizon with generated tokens
 
-- **Status**: accepted (the owner, 2026-10-25: "вживую, trial"; PAT, key pair and per-user)
+- **Status**: implemented (#92; the owner, 2026-10-25: "вживую, trial"; PAT, key pair and per-user)
 - **Date**: 2026-10-25
 - **Author**: hugr lab
 
