@@ -2,6 +2,8 @@
 # pull requests' gate; this one never runs on a pull request, so it never cancels a deploy in flight.
 # A second build of the same docs goes to hugr-lab.com/docs/tresor-server/ (IONOS) when the organisation's
 # DOCS_IONOS is true - until then those steps are skipped.
+# Versions (spec 035): each release tag's docs are snapshotted at build time (scripts/ci/docs_versions.sh) - the
+# latest release at the root, main's docs as "Next" under /next/; a main push changes /next/, a tag the root.
 name: Docs site
 
 on:
@@ -10,6 +12,9 @@ on:
     paths:
       - "website/**"
       - ".github/workflows/pages.yml"
+      - "scripts/ci/docs_versions.sh"
+    # a release tag is a new docs version (the tag's push runs this: a release made with GITHUB_TOKEN would not)
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -25,6 +30,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the tags are the docs' released versions
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -37,6 +44,8 @@ jobs:
           DOCS_CANONICAL: ${{ vars.DOCS_IONOS == 'true' && 'https://hugr-lab.com/docs/tresor-server/' || '' }}
         run: |
           npm ci
+          git fetch --tags --force
+          ../scripts/ci/docs_versions.sh
           npx docusaurus build
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

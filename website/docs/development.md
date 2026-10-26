@@ -83,4 +83,11 @@ CI. A protocol change lands in tresor's `protocol.md` first.
 
 A tag `v<version>` builds, signs and pushes the image and the chart (version `<version>`). With each release the
 recipes' image defaults move to it: `image` in `deploy/aws-ecs/variables.tf`, `image_tag` in
-`deploy/gcp-cloud-run/variables.tf`.
+`deploy/gcp-cloud-run/variables.tf`, and the Compose recipe's (`deploy/docker`).
+
+**The docs' versions** (spec 035): the tag also publishes its docs as a version - the site's root shows the latest
+release, `/next/` the docs on main (with an "unreleased" banner). Nothing is committed for it: the Pages workflow
+snapshots every release tag from 0.8.0 on (`scripts/ci/docs_versions.sh`). Only the latest release is indexed:
+`/next/` and older releases are `noindex` and out of the sitemap. To see the versioned site locally:
+`scripts/ci/docs_versions.sh && (cd website && npm run build && npm run serve)`, then
+`rm -rf website/versioned_* website/versions.json`.
