@@ -15,7 +15,7 @@ version of the same product is expected to work; it has not been run.
 
 | Part | Checked with |
 | --- | --- |
-| The protocol | tresor's conformance suite, tresor at `594fcca` (v0.1.0 and specs 040-041: protocol version 1; DuckDB v2.0.0), on every state store, with its `generators.test` |
+| The protocol | tresor's conformance suite, tresor at `b2937ac` (v0.1.1, as DuckDB's community extensions serve it: protocol version 1; DuckDB v2.0.0), on every state store, with its `generators.test` |
 | SQLite | `modernc.org/sqlite` (built in), one replica |
 | PostgreSQL | 17, two replicas behind a round-robin proxy |
 | SQL Server | 2022, two replicas |
