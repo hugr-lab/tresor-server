@@ -1,6 +1,8 @@
 import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // Docs for tresor-server - the production duckdb-secrets/1 service behind tresor. The same look as tresor's
 // site (hugr-lab.github.io/tresor/); published by this repo's Pages workflow to
@@ -15,6 +17,16 @@ const canonicalBase = ionos ? '' : process.env.DOCS_CANONICAL ?? '';
 const site = ionos
   ? {url: 'https://hugr-lab.com', baseUrl: '/docs/tresor-server/', home: 'https://hugr-lab.com/', impressum: 'https://hugr-lab.com/impressum/', datenschutz: 'https://hugr-lab.com/datenschutz/'}
   : {url: 'https://hugr-lab.github.io', baseUrl: '/tresor-server/', home: 'https://hugr-lab.github.io/', impressum: 'https://hugr-lab.github.io/impressum/', datenschutz: 'https://hugr-lab.github.io/datenschutz/'};
+
+// Versions (spec 035): pages.yml snapshots each release tag's docs at deploy time (versions.json, versioned_docs/:
+// generated, gitignored). The latest release serves at the root; main's docs as "Next" under /next/. Only the
+// latest release is indexed (the owner's decision, 2026-10-26): next and older releases get noindex and leave
+// the sitemap. Without versions.json (a pull request's build) the current docs are the only version.
+const versionsFile = path.join(__dirname, 'versions.json');
+const released: string[] = fs.existsSync(versionsFile) ? JSON.parse(fs.readFileSync(versionsFile, 'utf8')) : [];
+const noIndexVersions = Object.fromEntries(
+  released.length ? ['current', ...released.slice(1)].map((v) => [v, {noIndex: true}]) : [],
+);
 
 const config: Config = {
   title: 'tresor-server',
@@ -48,6 +60,7 @@ const config: Config = {
           routeBasePath: '/',
           editUrl: 'https://github.com/hugr-lab/tresor-server/tree/main/website/',
           showLastUpdateTime: true,
+          versions: noIndexVersions,
         },
         blog: false,
         theme: {
@@ -83,6 +96,7 @@ const config: Config = {
       items: [
         {type: 'docSidebar', sidebarId: 'docsSidebar', position: 'left', label: 'Docs'},
         {to: '/configuration/', label: 'Configuration', position: 'left'},
+        ...(released.length ? [{type: 'docsVersionDropdown' as const, position: 'right' as const}] : []),
         {href: 'https://hugr-lab.github.io/tresor/', label: 'tresor', position: 'right'},
         {href: 'https://github.com/hugr-lab/tresor-server', label: 'GitHub', position: 'right'},
       ],

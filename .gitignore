@@ -6,3 +6,7 @@ design/
 .env
 .claude/worktrees/
 scripts/ci/zitadel/state/
+# the docs' versions, made from the release tags at deploy time (spec 035)
+website/versioned_docs/
+website/versioned_sidebars/
+website/versions.json
