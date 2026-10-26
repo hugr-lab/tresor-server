@@ -29,7 +29,7 @@ services:
     restart: "no"
 
   tresor:
-    image: ${TRESOR_IMAGE:-ghcr.io/hugr-lab/tresor-server:v0.8.0}
+    image: ${TRESOR_IMAGE:-ghcr.io/hugr-lab/tresor-server:v0.8.1}
     command: ["-config", "/etc/tresor/server.yaml"]
     volumes: ["./host/server.yaml:/etc/tresor/server.yaml:ro", "state:/var/lib/tresor"]
     secrets: [kek]
