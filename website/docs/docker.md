@@ -37,7 +37,7 @@ open http://127.0.0.1:8443/ui/                # the console
 From DuckDB:
 
 ```sql
-INSTALL tresor; LOAD tresor;
+INSTALL tresor FROM community; LOAD tresor;
 ATTACH 'tresor:127.0.0.1:8443' AS corp (INSECURE_HTTP true);   -- a browser or a device-code sign-in
 SELECT * FROM corp.secrets();
 ```

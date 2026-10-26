@@ -97,7 +97,8 @@ const config: Config = {
         {type: 'docSidebar', sidebarId: 'docsSidebar', position: 'left', label: 'Docs'},
         {to: '/configuration/', label: 'Configuration', position: 'left'},
         ...(released.length ? [{type: 'docsVersionDropdown' as const, position: 'right' as const}] : []),
-        {href: 'https://hugr-lab.github.io/tresor/', label: 'tresor', position: 'right'},
+        {href: 'https://hugr-lab.com/tresor/', label: 'tresor', position: 'right'},
+        {href: 'https://hugr-lab.com/', label: 'hugr-lab.com', position: 'right'},
         {href: 'https://github.com/hugr-lab/tresor-server', label: 'GitHub', position: 'right'},
       ],
     },
@@ -121,15 +122,16 @@ const config: Config = {
         {
           title: 'tresor',
           items: [
-            {label: 'tresor', href: 'https://hugr-lab.github.io/tresor/'},
-            {label: 'The protocol', href: 'https://hugr-lab.github.io/tresor/protocol/'},
-            {label: 'Microsoft Entra ID', href: 'https://hugr-lab.github.io/tresor/entra/'},
+            {label: 'tresor', href: 'https://hugr-lab.com/tresor/'},
+            {label: 'tresor docs', href: 'https://hugr-lab.com/docs/tresor/'},
+            {label: 'The protocol', href: 'https://hugr-lab.com/docs/tresor/protocol/'},
+            {label: 'Microsoft Entra ID', href: 'https://hugr-lab.com/docs/tresor/entra/'},
           ],
         },
         {
           title: 'Hugr Lab',
           items: [
-            {label: 'Main site', href: site.home},
+            {label: 'Main site', href: 'https://hugr-lab.com/'},
             {label: 'GitHub', href: 'https://github.com/hugr-lab/tresor-server'},
           ],
         },

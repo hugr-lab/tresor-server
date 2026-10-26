@@ -62,7 +62,7 @@ The service answers:
 ## 3. DuckDB
 
 ```sql
-INSTALL tresor;   -- from your organisation's extension repository, or community once published
+INSTALL tresor FROM community;   -- DuckDB 2.0.0's community extensions
 LOAD tresor;
 
 ATTACH 'tresor:127.0.0.1:8443' AS corp (INSECURE_HTTP true);   -- a browser login
