@@ -33,7 +33,7 @@ Services (client_credentials at http://127.0.0.1:18480/realms/tresor/protocol/op
   node  / $node   (role nodes: may act for users - policy.actors)
 
 DuckDB:
-  INSTALL tresor; LOAD tresor;
+  INSTALL tresor FROM community; LOAD tresor;
   ATTACH 'tresor:127.0.0.1:8443' AS corp (INSECURE_HTTP true);   -- a browser or device-code sign-in
 TXT
 
