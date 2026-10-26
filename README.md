@@ -21,7 +21,7 @@ chart is `oci://ghcr.io/hugr-lab/charts/tresor-server`; recipes deploy it on
 [Azure Container Apps](deploy/azure-container-apps/README.md), [ECS](deploy/aws-ecs/README.md) and
 [Cloud Run](deploy/gcp-cloud-run/README.md); [Docker Compose](deploy/docker) runs it to try, or on one host.
 
-Status: 0.8.0. Releases are signed ([verifying](https://hugr-lab.github.io/tresor-server/security#verifying-the-artifacts));
+Status: 0.8.1. Releases are signed ([verifying](https://hugr-lab.github.io/tresor-server/security#verifying-the-artifacts));
 what is checked: [supported versions](https://hugr-lab.github.io/tresor-server/support); vulnerabilities:
 [SECURITY.md](SECURITY.md).
 

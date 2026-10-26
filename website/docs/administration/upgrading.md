@@ -180,6 +180,11 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
   ([Docker](../docker.md)).
 - **The recipes' defaults** (Terraform, Compose) are v0.8.0: `terraform apply` with no `image` moves to it.
 
+### Upgrading to 0.8.1
+
+- **Nothing to migrate**, no change in the service: the docs install tresor from DuckDB's community extensions;
+  tresor's conformance suite runs at tresor v0.1.1; the recipes' defaults are v0.8.1.
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.

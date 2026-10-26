@@ -72,7 +72,7 @@ platform's operators only (the Administration pages).
 - `apply` waits for the service to be healthy, and rolls a failed deployment back.
 - **Keep the KMS keys**: without them the database's material never opens. A destroy schedules their deletion
   (30 days); cancel it (`aws kms cancel-key-deletion`) if it was a mistake.
-- The image: a version (`image`, `ghcr.io/hugr-lab/tresor-server:v0.8.0` by default), never `edge`.
+- The image: a version (`image`, `ghcr.io/hugr-lab/tresor-server:v0.8.1` by default), never `edge`.
 - Nothing here makes the database public: keep it so.
 
 ## Destroy (a trial)
