@@ -82,7 +82,7 @@ export function Secrets() {
                         <div className="flex flex-col gap-1">
                           <Link to={`/secrets/${route(s.name)}`} className="font-mono font-medium no-underline">{s.name}</Link>
                           {s.dynamic && (
-                            <span className="chip w-fit bg-soft text-muted"><Zap size={12} aria-hidden /> dynamic · token per caller</span>
+                            <span className="chip w-fit bg-soft text-muted"><Zap size={12} aria-hidden /> dynamic · made per caller</span>
                           )}
                         </div>
                       </td>

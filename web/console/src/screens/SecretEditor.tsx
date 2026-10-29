@@ -140,7 +140,8 @@ function Form({ existing, shape, initial, commentKnown, onReload }: {
           </span>
         </Banner>
       )}
-      <div className="flex items-start gap-6">
+      {/* the preview beside the form when both fit; below it on a narrower window - never squeezing the parameters */}
+      <div className="flex flex-wrap items-start gap-6">
         <div className="flex min-w-0 flex-[999_1_640px] flex-col gap-5">
           <section className="grid grid-cols-3 gap-4 rounded-lg bg-soft p-6">
             <label className="flex flex-col gap-1.5 text-[13px] font-semibold">Name
@@ -214,7 +215,7 @@ function Form({ existing, shape, initial, commentKnown, onReload }: {
             </button>
           </section>
         </div>
-        <aside aria-label="SQL preview" className="sticky top-4 flex w-[380px] flex-none flex-col gap-2.5">
+        <aside aria-label="SQL preview" className="sticky top-4 flex min-w-0 flex-[1_1_340px] flex-col gap-2.5">
           <div className="flex items-center gap-2"><Terminal size={16} className="text-brand" aria-hidden /><h2 className="m-0 text-[14px] font-bold">What this amounts to</h2></div>
           <pre className="m-0 whitespace-pre-wrap rounded-md bg-soft p-4 font-mono text-[12px] leading-5">{sqlPreview(name, type, provider, scope, rows)}</pre>
           {existing && <span className="text-[12px] text-muted">Saved with <span className="font-mono">If-Match: "{shape!.version}"</span>: a change made meanwhile is never overwritten.</span>}
