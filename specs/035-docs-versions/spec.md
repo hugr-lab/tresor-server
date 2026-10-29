@@ -1,6 +1,6 @@
 # Spec 035: versioned docs
 
-- **Status**: accepted (the owner, 2026-10-26: "давай сделаем документацию версионированной")
+- **Status**: implemented (#98; the owner, 2026-10-26: "давай сделаем документацию версионированной")
 - **Date**: 2026-10-26
 - **Author**: hugr lab
 

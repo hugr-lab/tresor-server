@@ -122,7 +122,7 @@ docker run -d --name tresor-server --restart unless-stopped -p 443:8443 \
       human_flows: [authorization_code, device_code], service_flows: [client_credentials],
       roles_claim: roles, service: {claim: idtyp, equals: app, client_claim: azp}}]" \
   -e TRESOR_POLICY__ADMINS='[role:secrets_admin]' \
-  ghcr.io/hugr-lab/tresor-server:v0.8.1
+  ghcr.io/hugr-lab/tresor-server:v0.8.2
 ```
 
 For Keycloak, the issuer is the realm's URL and:

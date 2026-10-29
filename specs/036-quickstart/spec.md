@@ -1,6 +1,6 @@
 # Spec 036: a quickstart and a README that says what it is
 
-- **Status**: accepted (the owner, 2026-10-29: "подтверждаю" - the tasks after the public release)
+- **Status**: implemented (#102; the owner, 2026-10-29: "подтверждаю" - the tasks after the public release)
 - **Date**: 2026-10-29
 - **Author**: hugr lab
 
