@@ -61,7 +61,7 @@ variable "certificate_arn" {
 variable "image" {
   description = "tresor-server's image: a version, never edge. Pulled through the NAT."
   type        = string
-  default     = "ghcr.io/hugr-lab/tresor-server:v0.8.1"
+  default     = "ghcr.io/hugr-lab/tresor-server:v0.8.2"
 }
 
 variable "issuers" {

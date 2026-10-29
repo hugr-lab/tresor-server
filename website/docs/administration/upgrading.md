@@ -185,6 +185,15 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
 - **Nothing to migrate**, no change in the service: the docs install tresor from DuckDB's community extensions;
   tresor's conformance suite runs at tresor v0.1.1; the recipes' defaults are v0.8.1.
 
+### Upgrading to 0.8.2 (specs 035-037)
+
+- **Nothing to migrate**; no setting changes.
+- **A security fix**: go-jose v4.1.6 (CVE-2026-116587, a DoS when parsing JWKs with RSA keys - the service parses
+  its issuers' keys). Upgrade.
+- **The console**: the secret editor on a narrow window; a variable made per caller is no longer called a reference.
+- **The docs**: versioned (the latest release at the root, `/next/` for main), a [Quickstart](../quickstart.md), and
+  [Using the console](../console-guide.md) with screenshots. The recipes' defaults are v0.8.2.
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.

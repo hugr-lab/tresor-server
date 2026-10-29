@@ -64,7 +64,7 @@ Administration pages.
   protection stays on.
 - **Keep the KMS keys**: without them the database's material never opens. A destroy schedules the key versions'
   destruction (30 days by default); restore them within it if a destroy was a mistake.
-- **The image**: a version (`image_tag`, `v0.8.1` by default), never `edge`; `image` only for an image in a registry
+- **The image**: a version (`image_tag`, `v0.8.2` by default), never `edge`; `image` only for an image in a registry
   of your own (Artifact Registry or Docker Hub).
 - Nothing here gives the database a public address: keep it so. Never add authorized networks.
 

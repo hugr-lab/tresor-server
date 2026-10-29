@@ -1,6 +1,6 @@
 # Spec 037: the console in the docs, with screenshots
 
-- **Status**: accepted (the owner, 2026-10-29: "подтверждаю" - the tasks after the public release)
+- **Status**: implemented (#103; the owner, 2026-10-29: "подтверждаю" - the tasks after the public release)
 - **Date**: 2026-10-29
 - **Author**: hugr lab
 
