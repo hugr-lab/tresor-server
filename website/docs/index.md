@@ -19,6 +19,8 @@ caller's roles may use take part in DuckDB's own secret lookup.
 The service speaks tresor's open protocol, [`duckdb-secrets/1`](https://hugr-lab.github.io/tresor/protocol/).
 tresor's conformance suite runs against it in CI, on every state store.
 
+**New here?** The [Quickstart](quickstart.md) runs it in five minutes - with a demo identity provider, or yours.
+
 ## What it adds to tresor's reference server
 
 tresor's reference server proves the protocol. It is one process with one encrypted file. tresor-server is

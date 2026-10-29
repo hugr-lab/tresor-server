@@ -49,3 +49,4 @@ Research lives in the local, gitignored `design/` folder.
 | [033](033-docker-compose/spec.md) | a Docker recipe: to try it (with Keycloak), on one host (behind Caddy) | implemented |
 | [034](034-docs-pre-release/spec.md) | the docs before a release: what was stale, missing settings and checks | implemented |
 | [035](035-docs-versions/spec.md) | versioned docs: the latest release at the root, Next under /next/, only the latest indexed | accepted |
+| [036](036-quickstart/spec.md) | a quickstart (the demo, your own IdP) and a README that says what it is | accepted |
