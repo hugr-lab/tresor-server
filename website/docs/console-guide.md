@@ -4,7 +4,7 @@ title: Using the console
 
 # Using the console
 
-A walk through the console at `<public_url>/ui/`, on the [Docker demo](docker.md) with an OpenBao beside
+A walk through the console at `<public_url>/ui/`, on the [Quickstart's demo](quickstart.md#the-demo-five-minutes-with-keycloak) with an OpenBao beside
 it for references. What the console is and how to configure it: [Console](console.md).
 
 ## Signing in
