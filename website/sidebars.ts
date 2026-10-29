@@ -14,6 +14,7 @@ const sidebars: SidebarsConfig = {
     'generated',
     'token-exchange',
     'console',
+    'console-guide',
     'vault',
     'aws',
     'gcp',

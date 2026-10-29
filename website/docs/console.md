@@ -8,6 +8,8 @@ The service serves a management console at `<public_url>/ui/`: a web page for **
 configuration's `policy.admins`). Day to day, secrets are managed from DuckDB (`CREATE PERSISTENT SECRET … IN
 corp`); the console is for looking at what the service holds and changing it without a DuckDB at hand.
 
+A walk through it with screenshots: [Using the console](console-guide.md).
+
 - **Secrets**: the list (search, filters, type), a secret's parameters, its grants and the statement it
   amounts to; create from a type's template (DuckDB's core extensions, DuckLake, SQL Server), replace keeping
   the stored values, delete.
