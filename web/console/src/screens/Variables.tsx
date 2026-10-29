@@ -1,8 +1,8 @@
-// Variables: named strings DuckDB reads by name. One is sensitive when its value is a reference - the service's
+// Variables: named strings DuckDB reads by name. One is sensitive when its value is a reference or made per caller - the service's
 // verdict, not a choice: the value behind it is never shown here.
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Eye, Link2, Plus, Variable } from 'lucide-react'
+import { ArrowLeft, Eye, Lock, Plus, Variable } from 'lucide-react'
 import { useApp, useLoad } from '../context'
 import { useLists } from '../lists'
 import { ApiError, nameOf, route, seg } from '../lib/api'
@@ -63,7 +63,7 @@ export function Variables() {
                       <td className="td whitespace-nowrap">{ago(v.updated_at)}</td>
                       <td className="td">
                         {v.sensitive ? (
-                          <span className="chip bg-warning-soft text-warning" title="A reference: resolved at each read, handled as secret material"><Link2 size={12} aria-hidden /> sensitive · reference</span>
+                          <span className="chip bg-warning-soft text-warning" title="A reference, or a value made for each caller: handled as secret material"><Lock size={12} aria-hidden /> sensitive</span>
                         ) : <span className="text-[12px] text-muted">plain</span>}
                       </td>
                       <td className="td text-right">
@@ -110,7 +110,7 @@ function VariableDetail({ name, onDelete }: { name: string; onDelete: () => void
       <h2 className="m-0 font-mono text-[20px] font-medium">{name}</h2>
       <span className="text-muted">{v.comment}</span>
       <span className="text-[12px] text-muted">
-        {v.sensitive ? 'Sensitive: its value is a reference. The service sets this; it is not a choice.'
+        {v.sensitive ? 'Sensitive: its value is a reference, or made for each caller (mint+…). The service sets this; it is not a choice.'
           : 'Plain: its value is stored here. Make it a reference to keep it in a vault (it then becomes sensitive).'}
       </span>
       {shape.error != null && <ErrorState error={shape.error} />}
@@ -122,7 +122,12 @@ function VariableDetail({ name, onDelete }: { name: string; onDelete: () => void
             <span className="text-[12px] text-muted">Resolved at each read. The value behind it is never shown here; DuckDB receives it as secret material.</span>
           </div>
         ) : p?.value !== undefined ? (
-          <div className="break-all rounded-md border border-line bg-surface px-3.5 py-3 font-mono text-[13px]">{String(p.value)}</div>
+          <div className="flex flex-col gap-1.5 rounded-md border border-line bg-surface px-3.5 py-3">
+            <span className="break-all font-mono text-[13px]">{String(p.value)}</span>
+            {/^mint\+|\$\{(exchange|claim|login|rule):/.test(String(p.value)) && (
+              <span className="text-[12px] text-muted">Made for each caller at each read (generated values): DuckDB receives what was made, as secret material.</span>
+            )}
+          </div>
         ) : (
           <button type="button" className="btn-secondary self-start py-1 text-[13px]" onClick={() => setShown(true)}><Eye size={15} aria-hidden /> Show value</button>
         )}
