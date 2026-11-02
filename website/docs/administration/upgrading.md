@@ -194,6 +194,13 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
 - **The docs**: versioned (the latest release at the root, `/next/` for main), a [Quickstart](../quickstart.md), and
   [Using the console](../console-guide.md) with screenshots. The recipes' defaults are v0.8.2.
 
+### Upgrading to 0.8.3
+
+- **Nothing to migrate**; no setting changes. **Upgrade**: go-jose v4.1.7 fixes five advisories that affect
+  v4.1.6 - denials of service on JWS/JWE JSON serialization and on verifying certificates, unprotected JWE headers
+  overriding empty protected ones, panics on an RSA key's thumbprint and on claim matching. The recipes' defaults are
+  v0.8.3.
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.
