@@ -124,6 +124,36 @@ func TestClaimShapes(t *testing.T) {
 	}
 }
 
+// spec 038: a key the issuer no longer publishes (a revoked SPIRE key) stops verifying at the next readiness check,
+// not at the next restart: go-oidc's cache alone would keep it while every new token names a known kid
+func TestRevokedKeyDropped(t *testing.T) {
+	ctx := context.Background()
+	idp := testidp.New(t)
+	v := verifierFor(idp)
+	old := idp.Person(t, "duckdb-secrets", "analysts")
+	if _, err := v.Verify(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.CheckIssuer(ctx, idp.Issuer); err != nil {
+		t.Fatal(err)
+	}
+	key := idp.Rotate(t)
+	if _, err := v.Verify(ctx, old); err != nil {
+		t.Fatalf("before the check, the cached key still verifies: %v", err)
+	}
+	if err := v.CheckIssuer(ctx, idp.Issuer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Verify(ctx, old); err == nil {
+		t.Fatal("a token of the key no longer published still verifies after the check")
+	}
+	fresh := testidp.Sign(t, key, "k2", jose.RS256, testidp.Claims{"iss": idp.Issuer, "sub": "alice-id",
+		"aud": "duckdb-secrets", "iat": time.Now().Unix(), "exp": time.Now().Add(time.Minute).Unix()})
+	if _, err := v.Verify(ctx, fresh); err != nil {
+		t.Fatalf("the new key: %v", err)
+	}
+}
+
 // spec 038: roles by the subject - a SPIRE JWT-SVID carries none; the operator's rules give them, per path segment
 func TestRoleRules(t *testing.T) {
 	cfg := config.Issuer{RolesClaim: "roles", RoleRules: []config.RoleRule{

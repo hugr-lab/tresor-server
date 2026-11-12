@@ -8,9 +8,11 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -97,6 +99,7 @@ type issuer struct {
 	tokenURL   string    // the issuer's token endpoint, from the same discovery (specs/010: exchanges)
 	jwksURL    string    // its signing keys, fetched for readiness (CheckIssuer)
 	answered   bool      // its keys were fetched once
+	keys       string    // the published keys as last fetched (a digest): a change drops the verifier
 	failedAt   time.Time // the last failed discovery: retried after retryAfter, not on every request
 	lastFailed error
 }
@@ -285,8 +288,21 @@ func (v *Verifier) CheckIssuer(ctx context.Context, iss string) error {
 		len(keys.Keys) == 0 {
 		return fmt.Errorf("issuer %s: its signing keys did not answer (%d)", is.cfg.Issuer, resp.StatusCode)
 	}
+	// the keys changed (a rotation, a revoked key gone): the verifier is made again at the next token, so a key the
+	// issuer no longer publishes stops verifying here within a check - go-oidc's own cache reads the keys again
+	// only for a kid it does not know (spec 038)
+	sum := sha256.New()
+	for _, k := range keys.Keys {
+		sum.Write(k)
+		sum.Write([]byte{0})
+	}
+	digest := hex.EncodeToString(sum.Sum(nil))
 	is.mu.Lock()
 	is.answered = true
+	if is.keys != "" && is.keys != digest {
+		is.verifier = nil
+	}
+	is.keys = digest
 	is.mu.Unlock()
 	return nil
 }

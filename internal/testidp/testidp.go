@@ -47,6 +47,22 @@ type IdP struct {
 	// token-exchange permission missing; spec 017)
 	UnauthorizedClient bool
 	seenJTI            map[string]bool
+	// rotated: the key the JWKS publishes instead of Key after Rotate (kid k2) - Key's tokens then fail
+	rotated *rsa.PrivateKey
+}
+
+// Rotate replaces the published key (spec 038): the JWKS serves a new one only (kid k2), as an issuer that
+// revoked its key; tokens signed with Key (k1) no longer verify once the service reads the keys again.
+func (idp *IdP) Rotate(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idp.mu.Lock()
+	idp.rotated = key
+	idp.mu.Unlock()
+	return key
 }
 
 // The service's exchange client at this IdP (specs/010).
@@ -79,9 +95,13 @@ func start(t *testing.T, suffix string) *IdP {
 		})
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{
-			{Key: &key.PublicKey, KeyID: "k1", Algorithm: "RS256", Use: "sig"},
-		}})
+		published := jose.JSONWebKey{Key: &key.PublicKey, KeyID: "k1", Algorithm: "RS256", Use: "sig"}
+		idp.mu.Lock()
+		if idp.rotated != nil {
+			published = jose.JSONWebKey{Key: &idp.rotated.PublicKey, KeyID: "k2", Algorithm: "RS256", Use: "sig"}
+		}
+		idp.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{published}})
 	})
 	mux.HandleFunc("/token", idp.token)
 	idp.server = httptest.NewServer(mux)

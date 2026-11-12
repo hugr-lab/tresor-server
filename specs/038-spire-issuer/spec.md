@@ -19,6 +19,11 @@ the same model in duckdb-acl (`CLIENT … REQUIRE sub LIKE … ROLES CONSTANT`) 
   segment) holds `role:<r>` for each role. Checked at load (a pattern, roles named as a roles claim has them, no
   prefix); applied after the roles claim, without duplicates; any issuer, but meant for SPIRE. Config only: roles are
   the operator's, never a caller's.
+- **A revoked key stops verifying within a readiness check** (review finding, every issuer): go-oidc's key cache
+  reads an issuer's keys again only for a kid it does not know, so a key the issuer stopped publishing (SPIRE's after
+  `localauthority … revoke`, any IdP's) verified until a restart while new tokens named known kids. The readiness check
+  already fetches each issuer's keys every 30 s; when their digest changes the verifier is dropped and made again at
+  the next token, with the current keys.
 - **SPIRE as an issuer** needs nothing new: its discovery and keys are an OIDC issuer's; `service: {claim: sub,
   client_claim: sub}` makes every SVID a service's, `client:spiffe://…`.
 - **Docs**: a SPIFFE page (the three ways; SPIRE settings: `jwt_issuer`, RS256 for Entra, `set_key_use`; the issuer;
@@ -31,6 +36,8 @@ the same model in duckdb-acl (`CLIENT … REQUIRE sub LIKE … ROLES CONSTANT`) 
 
 ## Testing
 
+- Go: a key the issuer no longer publishes - still verifying from the cache before a check, refused after it, the new
+  key accepted (the test IdP's `Rotate`).
 - Go: `role_rules` - a segment glob, two rules, no duplicate, no match deeper or in another trust domain; config
   refusals (a bad pattern, no roles, a prefixed role).
 - **Live, 2026-11-12** (SPIRE 1.13.0, a quick tunnel, the owner's Entra tenant, Keycloak 26.8.1):

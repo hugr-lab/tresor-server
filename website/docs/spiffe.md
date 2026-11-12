@@ -55,19 +55,26 @@ policy:
 - **Roles** come only from `role_rules` - the operator's, never the workload's. `*` stays within one path segment:
   `…/hugr/node/*` matches `…/hugr/node/group-a`, not `…/hugr/node/a/b` nor another trust domain. A workload SPIRE
   attests but no rule names holds no role, and sees nothing.
-- **Grants** go to those roles, as for people ([Grants](https://hugr-lab.com/docs/tresor/protocol/)).
+- **Grants** go to those roles, as for people ([Grants](https://hugr-lab.com/docs/tresor/protocol/)). A role is the
+  same principal whichever issuer gave it: `role:nodes` from SPIRE is `role:nodes` from your people's IdP. Pick names
+  no other issuer uses for workloads - and mind that a role in `policy.admins` makes the workload an administrator, and
+  a role an actor rule names (`policy.actors`, with this issuer) lets it act for users.
 - **Roles in the SVID instead**: a SPIRE CredentialComposer plugin can put a `roles` claim into the SVIDs; then
   `roles_claim: roles` and no rules. The registration of a workload in SPIRE then decides its roles.
 
 ## Rotation and revocation
 
 - **By time**: an SVID lives minutes (`default_jwt_svid_ttl`); SPIRE renews it before it expires, the workload reads
-  the new one. SPIRE's signing keys rotate with an overlap in the published keys, which this service reads again.
-- **A workload compromised**: delete its registration entry in SPIRE - no new SVID; an SVID already issued lives until
-  its `exp`. Revoke what the service holds for it at once: its delegation grants
-  (`DELETE /v1/delegations?actor=client:spiffe://…`), its rule in `role_rules`.
+  the new one. SPIRE's signing keys rotate with an overlap in the published keys.
+- **The keys are read again** by the readiness check (every 30 s): when an issuer's published keys change, the
+  service verifies the next token with the new set - a key the issuer no longer publishes stops verifying within a
+  check, for every issuer, not only SPIRE.
+- **A workload compromised**: delete its registration entry in SPIRE - no new SVID; an SVID already issued lives at
+  most `default_jwt_svid_ttl`. Revoke its delegation grants at once (`DELETE /v1/delegations?actor=client:spiffe://…`);
+  if needed, narrow `role_rules` (a configuration change, then a restart - a glob covers many workloads, so exclude
+  one by rewriting the patterns).
 - **A node compromised**: evict or ban its SPIRE agent - no SVID for any workload on it.
 - **SPIRE's key compromised**: rotate and revoke the key in SPIRE; once it leaves the published keys, tokens it signed
-  are refused.
+  are refused here within a readiness check (30 s).
 
 An SVID is a bearer token for its audience: keep its file to the workload, and its audience to one service.

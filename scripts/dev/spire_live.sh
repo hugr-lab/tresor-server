@@ -147,6 +147,7 @@ entra_up() {
 	az ad app federated-credential create --id "$ENTRA_NODE_CLIENT_ID" -o none --parameters "{\"name\":\"$fic\",
 		\"issuer\":\"$issuer\",\"subject\":\"$td/hugr/node/group-a\",\"audiences\":[\"api://AzureADTokenExchange\"],
 		\"description\":\"tresor-server spec 038 live check (scripts/dev/spire_live.sh)\"}"
+	touch "$run/entra-credential" # down removes it, should entra-down be forgotten
 	echo "spire_live: Entra trusts $td/hugr/node/group-a from the tunnel's issuer (on the node app)"
 }
 
@@ -174,8 +175,11 @@ print("spire_live: Entra issued a token: roles", c.get("roles"), "idtyp", c.get(
 }
 
 entra_down() {
+	# the node app must not keep trusting a tunnel hostname that can be handed out again
+	[ -f "$run/entra-credential" ] && entra_down
 	entra
 	az ad app federated-credential delete --id "$ENTRA_NODE_CLIENT_ID" --federated-credential-id "$fic" -o none 2>/dev/null || true
+	rm -f "$run/entra-credential"
 	echo "spire_live: the federated credential removed"
 }
 

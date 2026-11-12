@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/hugr-lab/tresor-server/internal/material"
 )
@@ -1033,7 +1034,7 @@ func (c *Config) validate() error {
 				return fmt.Errorf("issuers[%d].role_rules[%d] gives no roles", i, j)
 			}
 			for k, role := range r.Roles {
-				if role == "" || strings.ContainsAny(role, ":| \t") {
+				if role == "" || strings.ContainsAny(role, ":|") || strings.IndexFunc(role, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
 					return fmt.Errorf("issuers[%d].role_rules[%d].roles[%d] is a role's name, as the roles claim has it (no prefix)", i, j, k)
 				}
 			}
