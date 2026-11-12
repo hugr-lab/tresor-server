@@ -430,6 +430,17 @@ func callerFrom(cfg config.Issuer, iss, sub string, exp time.Time, claims map[st
 		}
 		c.Principals = append(c.Principals, "role:"+r)
 	}
+	// roles by the subject (spec 038): the operator's rules, for an issuer whose tokens carry none (SPIRE)
+	for _, rule := range cfg.RoleRules {
+		if ok, _ := path.Match(rule.Subject, sub); !ok {
+			continue
+		}
+		for _, r := range rule.Roles {
+			if p := "role:" + r; !slices.Contains(c.Principals, p) {
+				c.Principals = append(c.Principals, p)
+			}
+		}
+	}
 	for _, g := range stringsAt(claims, cfg.GroupsClaim) {
 		c.Principals = append(c.Principals, "group:"+strings.TrimPrefix(g, "/")) // Keycloak's groups are paths
 	}

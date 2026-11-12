@@ -700,8 +700,11 @@ type Issuer struct {
 	// IgnoreRoles: roles of the roles claim never taken as principals - glob patterns (spec 030): an IdP's own,
 	// Keycloak's offline_access, uma_authorization, default-roles-*.
 	IgnoreRoles []string `yaml:"ignore_roles"`
-	GroupsClaim string   `yaml:"groups_claim"`
-	Algorithms  []string `yaml:"algorithms"`
+	// RoleRules give roles by the token's subject (spec 038): a workload whose IdP carries no roles - SPIRE's
+	// JWT-SVIDs, spiffe://corp/hugr/node/* - gets them from the operator's configuration, never a caller's.
+	RoleRules   []RoleRule `yaml:"role_rules"`
+	GroupsClaim string     `yaml:"groups_claim"`
+	Algorithms  []string   `yaml:"algorithms"`
 	// Service says how this issuer's client-credentials tokens are told apart from people's. Without
 	// it every caller of the issuer is a person: no claim is a service marker by convention (RFC 9068
 	// puts client_id into every access token, a person's included).
@@ -745,6 +748,12 @@ type ExchangeClient struct {
 
 // ClientAuthKinds are the ways the service logs in at a token endpoint.
 var ClientAuthKinds = []string{"secret", "azure", "file", "keyvault", "key_file", "vault", "awskms", "gcpkms"}
+
+// RoleRule: a subject matching Subject (path.Match: * within one segment of a spiffe:// path) holds Roles.
+type RoleRule struct {
+	Subject string   `yaml:"subject"`
+	Roles   []string `yaml:"roles"`
+}
 
 // ServiceRule marks a token as a service's: Claim is present (and equals Equals, when set); the
 // client's name is ClientClaim (default azp).
@@ -1014,6 +1023,19 @@ func (c *Config) validate() error {
 		for j, p := range is.IgnoreRoles {
 			if _, err := path.Match(p, ""); err != nil || strings.TrimSpace(p) == "" {
 				return fmt.Errorf("issuers[%d].ignore_roles[%d] is not a pattern", i, j)
+			}
+		}
+		for j, r := range is.RoleRules {
+			if _, err := path.Match(r.Subject, ""); err != nil || strings.TrimSpace(r.Subject) == "" {
+				return fmt.Errorf("issuers[%d].role_rules[%d].subject is not a pattern", i, j)
+			}
+			if len(r.Roles) == 0 {
+				return fmt.Errorf("issuers[%d].role_rules[%d] gives no roles", i, j)
+			}
+			for k, role := range r.Roles {
+				if role == "" || strings.ContainsAny(role, ":| \t") {
+					return fmt.Errorf("issuers[%d].role_rules[%d].roles[%d] is a role's name, as the roles claim has it (no prefix)", i, j, k)
+				}
 			}
 		}
 		for name, path := range map[string]string{"ca_file": is.CAFile, "discovery_token_file": is.DiscoveryTokenFile} {

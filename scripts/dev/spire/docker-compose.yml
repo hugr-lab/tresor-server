@@ -1,0 +1,30 @@
+# SPIRE for spec 038's live check: a trust domain whose JWT-SVIDs carry iss (the tunnel's https URL) and are RS256
+# (Entra takes no ES256); its OIDC discovery on 127.0.0.1, published by a Cloudflare quick tunnel. Test only.
+services:
+  spire-server:
+    image: ghcr.io/spiffe/spire-server:${SPIRE_VERSION:-1.13.0}
+    user: "0"
+    command: ["-config", "/etc/spire/server.conf"]
+    volumes:
+      - ${SPIRE_RUN}/server.conf:/etc/spire/server.conf:ro
+      - spire-server-socket:/run/spire/sockets/server
+  spire-agent:
+    image: ghcr.io/spiffe/spire-agent:${SPIRE_VERSION:-1.13.0}
+    user: "0"
+    command: ["-config", "/etc/spire/agent.conf", "-joinToken", "${SPIRE_JOIN_TOKEN:-unset}"]
+    depends_on: [spire-server]
+    volumes:
+      - ./agent.conf:/etc/spire/agent.conf:ro
+      - spire-agent-socket:/run/spire/sockets/agent
+  spire-oidc:
+    image: ghcr.io/spiffe/oidc-discovery-provider:${SPIRE_VERSION:-1.13.0}
+    user: "0"
+    command: ["-config", "/etc/spire/oidc.conf"]
+    depends_on: [spire-server]
+    ports: ["127.0.0.1:${SPIRE_OIDC_PORT:-18456}:8008"]
+    volumes:
+      - ${SPIRE_RUN}/oidc.conf:/etc/spire/oidc.conf:ro
+      - spire-server-socket:/run/spire/sockets/server
+volumes:
+  spire-server-socket:
+  spire-agent-socket:
