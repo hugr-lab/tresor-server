@@ -201,6 +201,12 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
   overriding empty protected ones, panics on an RSA key's thumbprint and on claim matching. The recipes' defaults are
   v0.8.3.
 
+### Upgrading to 0.8.4
+
+- **Nothing to migrate**; no setting changes. **Upgrade**: Go 1.27.4 (GO-2026-6859 / CVE-2026-97054, an HTTP/1
+  server crash in `net/http`) and golang.org/x/net v0.62.0 (CVE-2026-78661, a denial of service in `x/net/html`), in
+  the binary and the image. The recipes' defaults are v0.8.4.
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.
