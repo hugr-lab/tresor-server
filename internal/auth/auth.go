@@ -291,9 +291,15 @@ func (v *Verifier) CheckIssuer(ctx context.Context, iss string) error {
 	// the keys changed (a rotation, a revoked key gone): the verifier is made again at the next token, so a key the
 	// issuer no longer publishes stops verifying here within a check - go-oidc's own cache reads the keys again
 	// only for a kid it does not know (spec 038)
+	// in any order: an IdP that lists its keys differently from one answer to the next has not changed them
+	raw := make([]string, len(keys.Keys))
+	for i, k := range keys.Keys {
+		raw[i] = string(k)
+	}
+	slices.Sort(raw)
 	sum := sha256.New()
-	for _, k := range keys.Keys {
-		sum.Write(k)
+	for _, k := range raw {
+		sum.Write([]byte(k))
 		sum.Write([]byte{0})
 	}
 	digest := hex.EncodeToString(sum.Sum(nil))
