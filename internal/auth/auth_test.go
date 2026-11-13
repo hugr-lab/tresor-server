@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -120,6 +121,62 @@ func TestClaimShapes(t *testing.T) {
 	})
 	if len(c.Principals) != 1 {
 		t.Fatalf("wrong shape: %v", c.Principals)
+	}
+}
+
+// spec 038: a key the issuer no longer publishes (a revoked SPIRE key) stops verifying at the next readiness check,
+// not at the next restart: go-oidc's cache alone would keep it while every new token names a known kid
+func TestRevokedKeyDropped(t *testing.T) {
+	ctx := context.Background()
+	idp := testidp.New(t)
+	v := verifierFor(idp)
+	old := idp.Person(t, "duckdb-secrets", "analysts")
+	if _, err := v.Verify(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.CheckIssuer(ctx, idp.Issuer); err != nil {
+		t.Fatal(err)
+	}
+	key := idp.Rotate(t)
+	if _, err := v.Verify(ctx, old); err != nil {
+		t.Fatalf("before the check, the cached key still verifies: %v", err)
+	}
+	if err := v.CheckIssuer(ctx, idp.Issuer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Verify(ctx, old); err == nil {
+		t.Fatal("a token of the key no longer published still verifies after the check")
+	}
+	fresh := testidp.Sign(t, key, "k2", jose.RS256, testidp.Claims{"iss": idp.Issuer, "sub": "alice-id",
+		"aud": "duckdb-secrets", "iat": time.Now().Unix(), "exp": time.Now().Add(time.Minute).Unix()})
+	if _, err := v.Verify(ctx, fresh); err != nil {
+		t.Fatalf("the new key: %v", err)
+	}
+}
+
+// spec 038: roles by the subject - a SPIRE JWT-SVID carries none; the operator's rules give them, per path segment
+func TestRoleRules(t *testing.T) {
+	cfg := config.Issuer{RolesClaim: "roles", RoleRules: []config.RoleRule{
+		{Subject: "spiffe://corp/hugr/node/*", Roles: []string{"nodes"}},
+		{Subject: "spiffe://corp/hugr/node/group-a", Roles: []string{"nodes", "lake_writers"}},
+	}, Service: &config.ServiceRule{Claim: "sub", ClientClaim: "sub"}}
+	svid := func(sub string) *Caller {
+		return callerFrom(cfg, "https://spire.example", sub, time.Time{}, map[string]any{"sub": sub, "roles": []any{"nodes"}})
+	}
+	a := svid("spiffe://corp/hugr/node/group-a")
+	if !a.Service || !a.Has("client:spiffe://corp/hugr/node/group-a") || !a.Has("role:lake_writers") ||
+		len(slices.DeleteFunc(slices.Clone(a.Principals), func(p string) bool { return p != "role:nodes" })) != 1 {
+		t.Fatalf("group-a: %v", a.Principals)
+	}
+	if b := svid("spiffe://corp/hugr/node/group-b"); !b.Has("role:nodes") || b.Has("role:lake_writers") {
+		t.Fatalf("group-b: %v", b.Principals)
+	}
+	// * stays within one segment: a deeper path, or another trust domain, matches no rule
+	for _, sub := range []string{"spiffe://corp/hugr/node/a/b", "spiffe://other/hugr/node/a", "spiffe://corp/hugr/nodex"} {
+		c := callerFrom(cfg, "https://spire.example", sub, time.Time{}, map[string]any{"sub": sub})
+		if c.Has("role:nodes") {
+			t.Errorf("%s: %v", sub, c.Principals)
+		}
 	}
 }
 

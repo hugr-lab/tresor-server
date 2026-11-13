@@ -8,9 +8,11 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -97,6 +99,7 @@ type issuer struct {
 	tokenURL   string    // the issuer's token endpoint, from the same discovery (specs/010: exchanges)
 	jwksURL    string    // its signing keys, fetched for readiness (CheckIssuer)
 	answered   bool      // its keys were fetched once
+	keys       string    // the published keys as last fetched (a digest): a change drops the verifier
 	failedAt   time.Time // the last failed discovery: retried after retryAfter, not on every request
 	lastFailed error
 }
@@ -285,8 +288,27 @@ func (v *Verifier) CheckIssuer(ctx context.Context, iss string) error {
 		len(keys.Keys) == 0 {
 		return fmt.Errorf("issuer %s: its signing keys did not answer (%d)", is.cfg.Issuer, resp.StatusCode)
 	}
+	// the keys changed (a rotation, a revoked key gone): the verifier is made again at the next token, so a key the
+	// issuer no longer publishes stops verifying here within a check - go-oidc's own cache reads the keys again
+	// only for a kid it does not know (spec 038)
+	// in any order: an IdP that lists its keys differently from one answer to the next has not changed them
+	raw := make([]string, len(keys.Keys))
+	for i, k := range keys.Keys {
+		raw[i] = string(k)
+	}
+	slices.Sort(raw)
+	sum := sha256.New()
+	for _, k := range raw {
+		sum.Write([]byte(k))
+		sum.Write([]byte{0})
+	}
+	digest := hex.EncodeToString(sum.Sum(nil))
 	is.mu.Lock()
 	is.answered = true
+	if is.keys != "" && is.keys != digest {
+		is.verifier = nil
+	}
+	is.keys = digest
 	is.mu.Unlock()
 	return nil
 }
@@ -429,6 +451,17 @@ func callerFrom(cfg config.Issuer, iss, sub string, exp time.Time, claims map[st
 			continue // an IdP's own roles (Keycloak's offline_access, default-roles-*): never a principal here
 		}
 		c.Principals = append(c.Principals, "role:"+r)
+	}
+	// roles by the subject (spec 038): the operator's rules, for an issuer whose tokens carry none (SPIRE)
+	for _, rule := range cfg.RoleRules {
+		if ok, _ := path.Match(rule.Subject, sub); !ok {
+			continue
+		}
+		for _, r := range rule.Roles {
+			if p := "role:" + r; !slices.Contains(c.Principals, p) {
+				c.Principals = append(c.Principals, p)
+			}
+		}
 	}
 	for _, g := range stringsAt(claims, cfg.GroupsClaim) {
 		c.Principals = append(c.Principals, "group:"+strings.TrimPrefix(g, "/")) // Keycloak's groups are paths

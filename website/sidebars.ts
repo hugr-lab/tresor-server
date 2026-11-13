@@ -13,6 +13,7 @@ const sidebars: SidebarsConfig = {
     'variables',
     'generated',
     'token-exchange',
+    'spiffe',
     'console',
     'console-guide',
     'vault',

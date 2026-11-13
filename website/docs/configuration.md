@@ -95,11 +95,12 @@ longer carries the role; revoking by actor is per client.
 
 For Microsoft Entra ID, see tresor's [Entra guide](https://hugr-lab.github.io/tresor/entra/).
 
-Three settings of an issuer are this service's own (specs 026, 030):
+Four settings of an issuer are this service's own (specs 026, 030, 038):
 
 | Setting | |
 | --- | --- |
 | `ignore_roles` | Roles of the roles claim never taken as principals - glob patterns: an identity provider's own, Keycloak's `offline_access`, `uma_authorization`, `default-roles-*`. They grant nothing anyway unless a grant or `policy.admins` names them; this keeps them out of `whoami` and the console. |
+| `role_rules` | Roles by the token's subject, from this configuration: `[{subject: 'spiffe://corp/hugr/node/*', roles: [nodes]}]` - `subject` a glob (`path.Match`: `*` stops only at `/`), `roles` names as a roles claim has them. For an issuer whose tokens carry no roles - SPIRE's JWT-SVIDs ([SPIFFE](spiffe.md)). Match only subjects the issuer controls and keeps unique: outside `spiffe://` paths use exact subjects - on a Kubernetes issuer `system:serviceaccount:*:hugr` matches a `hugr` account in any namespace. |
 | `ca_file` | PEM certificates trusted for the issuer's discovery and keys, besides the system's - a cluster's own CA. |
 | `discovery_token_file` | A bearer token sent (to the issuer's host, and its keys' host) to read its discovery and keys, read at each request - a Kubernetes API server serves them to authenticated accounts only. https issuers only. |
 

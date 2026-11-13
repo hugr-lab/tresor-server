@@ -59,7 +59,10 @@ func TestRefused(t *testing.T) {
 		"an actor by role, no issuer":  strings.Replace(good, "client:node", "role:hugr_node", 1),
 		"an actor by role, an unknown issuer": strings.Replace(good, "{principal: client:node, verbs: [use]}",
 			"{principal: role:hugr_node, issuer: https://elsewhere.example, verbs: [use]}", 1),
-		"no issuers": "listen: 127.0.0.1:1\npublic_url: http://127.0.0.1:1\nstate: {kind: memory}\n",
+		"a role rule with a bad pattern": strings.Replace(good, "audience: duckdb-secrets", "audience: duckdb-secrets\n    role_rules: [{subject: '[', roles: [nodes]}]", 1),
+		"a role rule with no roles":      strings.Replace(good, "audience: duckdb-secrets", "audience: duckdb-secrets\n    role_rules: [{subject: 'spiffe://corp/*', roles: []}]", 1),
+		"a role rule's prefixed role":    strings.Replace(good, "audience: duckdb-secrets", "audience: duckdb-secrets\n    role_rules: [{subject: 'spiffe://corp/*', roles: ['role:nodes']}]", 1),
+		"no issuers":                     "listen: 127.0.0.1:1\npublic_url: http://127.0.0.1:1\nstate: {kind: memory}\n",
 	}
 	for name, doc := range cases {
 		if _, err := Parse([]byte(doc)); err == nil {
