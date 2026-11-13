@@ -1,6 +1,6 @@
 # Spec 038: SPIFFE workloads - SPIRE as an issuer, roles by the SPIFFE ID
 
-- **Status**: accepted (the owner, 2026-11-12: "давай пойдём таким путем" - SPIFFE, path B, a live check with a
+- **Status**: implemented (#111; the owner, 2026-11-12: "давай пойдём таким путем" - SPIFFE, path B, a live check with a
   Cloudflare tunnel)
 - **Date**: 2026-11-12
 - **Author**: hugr lab
