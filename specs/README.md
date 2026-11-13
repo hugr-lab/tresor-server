@@ -51,4 +51,4 @@ Research lives in the local, gitignored `design/` folder.
 | [035](035-docs-versions/spec.md) | versioned docs: the latest release at the root, Next under /next/, only the latest indexed | implemented |
 | [036](036-quickstart/spec.md) | a quickstart (the demo, your own IdP) and a README that says what it is | implemented |
 | [037](037-console-guide/spec.md) | the console in the docs, with screenshots | implemented |
-| [038](038-spire-issuer/spec.md) | SPIFFE workloads: SPIRE as an issuer, roles by the SPIFFE ID (role_rules) | accepted |
+| [038](038-spire-issuer/spec.md) | SPIFFE workloads: SPIRE as an issuer, roles by the SPIFFE ID (role_rules) | implemented |

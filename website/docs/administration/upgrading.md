@@ -207,6 +207,13 @@ Nothing else: no migration of the Kubernetes store, no CRD changed, no setting r
   server crash in `net/http`) and golang.org/x/net v0.62.0 (CVE-2026-78661, a denial of service in `x/net/html`), in
   the binary and the image. The recipes' defaults are v0.8.4.
 
+### Upgrading to 0.8.5 (spec 038)
+
+- **Nothing to migrate**; nothing changes until set. **New**: an issuer's `role_rules` (roles by the token's
+  subject) - SPIFFE workloads, SPIRE as an issuer ([SPIFFE workloads](../spiffe.md)).
+- **An issuer's keys are read again when they change**: a key an issuer stops publishing stops verifying within a
+  readiness check (30 s), not at the next restart. The recipes' defaults are v0.8.5.
+
 ## Check
 
 - Every replica ready, on the new version: the console's Service screen names it.
